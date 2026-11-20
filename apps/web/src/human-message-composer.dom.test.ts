@@ -24,7 +24,8 @@ test("a reply saved after leaving and returning to a task cannot close its new d
   const createMessage = mock.method(api, "createCanvasMessage", () => saved);
   let loadRequest!: (value: Awaited<ReturnType<typeof api.job>>) => void;
   const requestLoaded = new Promise<Awaited<ReturnType<typeof api.job>>>(resolve => { loadRequest = resolve; });
-  const readJob = mock.method(api, "job", () => requestLoaded);
+  let requestResult = requestLoaded;
+  const readJob = mock.method(api, "job", () => requestResult);
   const target = { id: "node-a", job_id: "job-a", node_type: "job", status: "running", title: "运行 A", body_json: {} } as CanvasNode;
   let oldCallback = 0;
   let newCallback = 0;
@@ -49,6 +50,8 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     type("第一条已授权发送的回复");
     send();
     assert.equal(createMessage.mock.callCount(), 1);
+    assert.equal(readJob.mock.callCount(), 0, "ordinary running messages do not read or answer a human request");
+    assert.deepEqual(createMessage.mock.calls[0]!.arguments[1].target, { kind: "job", node_id: "node-a" });
     act(() => root.render(null)); // Leave A, then return with a fresh composer instance.
     render(() => { newCallback++; });
     type("返回 A 后尚未发送的新草稿");
@@ -98,12 +101,13 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     renderWaiting(currentItem());
     assert.match(container.textContent ?? "", /完整问题 human-0/);
     assert.equal(sendDisabled(), true, "canvas detail alone cannot authorize a durable request reply");
+    const currentDetail = {
+      job: { id: "job-0", canvas_id: "canvas-a", status: "waiting_human" },
+      human_request: { event_id: "request-a", current: true, payload: { reason: "当前持久请求的完整问题" } },
+      human_continuation: { id: "request-a", revision: 3, status: "open" },
+    } as Awaited<ReturnType<typeof api.job>>;
     await act(async () => {
-      loadRequest({
-        job: { id: "job-0", canvas_id: "canvas-a", status: "waiting_human" },
-        human_request: { event_id: "request-a", current: true, payload: { reason: "当前持久请求的完整问题" } },
-        human_continuation: { id: "request-a", revision: 3, status: "open" },
-      } as Awaited<ReturnType<typeof api.job>>);
+      loadRequest(currentDetail);
       await requestLoaded;
     });
     assert.match(container.textContent ?? "", /当前持久请求的完整问题/);
@@ -113,10 +117,47 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     assert.equal(createMessage.mock.callCount(), 2, "guarded drafts never reach the message API");
     renderWaiting(currentItem());
     await act(async () => { send(); await saved; });
-    assert.deepEqual(createMessage.mock.calls[2].arguments[1].target, {
+    assert.deepEqual(createMessage.mock.calls[2]!.arguments[1].target, {
       kind: "request", request_id: "request-a", expected_revision: 3,
     }, "waiting_human replies must carry the durable request identity, not a generic Job target");
-    assert.equal(createMessage.mock.calls[2].arguments[1].body, "第十三条请求的草稿");
+    assert.equal(createMessage.mock.calls[2]!.arguments[1].body, "第十三条请求的草稿");
+
+    // Missing canvas preview must not hide a valid durable request or make the user guess its ID.
+    act(() => root.render(null));
+    requestResult = Promise.resolve(currentDetail);
+    await act(async () => { renderWaiting(null); await requestResult; });
+    type("无需画布摘要也能回复");
+    assert.equal(sendDisabled(), false);
+    assert.match(container.textContent ?? "", /当前持久请求的完整问题/);
+
+    for (const detail of [
+      { ...currentDetail, human_continuation: null },
+      { ...currentDetail, human_continuation: { ...currentDetail.human_continuation!, status: "answered" as const } },
+      { ...currentDetail, human_request: { ...currentDetail.human_request!, current: false } },
+      { ...currentDetail, human_request: { ...currentDetail.human_request!, event_id: "different-request" } },
+      { ...currentDetail, job: { ...currentDetail.job, canvas_id: "different-canvas" } },
+    ]) {
+      act(() => root.render(null));
+      requestResult = Promise.resolve(detail);
+      await act(async () => { renderWaiting(null); await requestResult; });
+      type("不可发送的草稿");
+      assert.equal(sendDisabled(), true, "missing, processed, historical or unrelated requests cannot be answered");
+    }
+
+    act(() => root.render(null));
+    requestResult = Promise.resolve(currentDetail).then(() => { throw new Error("请求读取失败"); });
+    await act(async () => { renderWaiting(null); await requestResult.catch(() => {}); });
+    type("读取失败仍保留草稿");
+    assert.equal(sendDisabled(), true);
+    assert.match(container.textContent ?? "", /请求读取失败/);
+    requestResult = Promise.resolve(currentDetail);
+    await act(async () => {
+      [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "重试读取")!.click();
+      await requestResult;
+    });
+    assert.equal(sendDisabled(), false);
+    assert.equal(container.querySelector("textarea")!.value, "读取失败仍保留草稿");
+    assert.equal(createMessage.mock.callCount(), 3, "loading, blocked and retry actions never send a message");
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();
