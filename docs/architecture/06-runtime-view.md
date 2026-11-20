@@ -1,9 +1,13 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 
 #1133 的自动 Hub worker intent 与人工 Finding 补证入口，在冻结网络策略后、运行配置前统一调用设备要求冻结。显式 adb/hdc 要求重核项目 opt-in、已配置 rig、已启用 transport、独占及出网授权，进入 Job snapshot 后由既有设备租约入口再次授权并发放短期 grant。无显式设备要求的目标继续远端路径，镜像缺 SDK 或固件不用于推断设备能力。人工无定论事务、CAS 和审计见[接口边界](09-interface-specs.md#人工结束技术验证1133)。
+
+## Verify 补证无进展开关（#1133）
+
+`closeVerifyRound` 复用 `rulesForProject` 的项目 → 全局 → env 有效规则。`maxNoProgressRounds=0` 关闭本入口的缺项重复刹车，正值继续采用独立阈值 `VERIFY_NO_PROGRESS_LIMIT=2`，第二次连续相同 `decision_missing` 回弹时收口 `needs_human`。每轮决策缺项仍写入 round 快照，业务轮数上限、证据门与基础设施失败处理继续分别执行。现有 PostgreSQL 生命周期夹具通过真实 `closeVerifyRound` 事务与轮次读写，覆盖 0 下连续三轮保持 `rework` 且无人工 blocker，以及 1、5 下第二轮收口并记录 `verify_no_progress`。回归接 `pnpm ci:integration:verify-eligibility`，本地未执行，最终 SHA Actions 待验。规则分类见[用量说明](../USAGE_LIMITS.md)。
 
 ## 行锁竞争后的认领唤醒
 

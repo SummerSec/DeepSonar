@@ -1,7 +1,7 @@
 # 用量额度的默认语义
 
 > 状态：as-built；离线行为验收见对应 PR，不代表生产或真实模型效果验收。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-20
 
 用量预算默认不限，只有显式配置才限制。env 未设置或空白是未配置，0 是不限，正整数是有限额度；非法显式值拒绝启动，离线升级预检返回阻塞字段错误，不静默回落无限。已有数据库规则、Job 快照、回执与使用账本不迁移、不清零。新建数据库的 global_settings seed 同步采用无限 Hub/Verify 轮数；不修改表结构或 schema 版本，不覆盖已有库规则。
 
@@ -12,7 +12,7 @@
 | 修正 token | `DEEPSONAR_REPAIR_MAX_TOKENS` 默认 0，正数上限 2000000；首次拒绝冻结 0 为无限，正数为有限；历史 null/缺失保持关闭 | `domains/event-ingestion/repair-token-budget.ts` |
 | Hub 总轮数 | `DEEPSONAR_HUB_MAX_ROUNDS` 默认 0；支持 `unlimited`，正数上限 10000 | `config.ts` |
 | Finding 验证轮数 | `maxVerificationRounds` 默认 0；显式 1–20 限制，非法值拒绝；无进展检测单独保留 | `core.ts`、`verify.ts` |
-| Verify 补证无进展 | 补证回弹连续 `VERIFY_NO_PROGRESS_LIMIT`（2）次缺失集合完全相同即收口 `needs_human`（稳定码 `verify_no_progress`）；不依赖配置，轮次不重置 | `verify-no-progress.ts` |
+| Verify 补证无进展 | 有效项目规则 `maxNoProgressRounds=0` 关闭；正值继续使用独立阈值 `VERIFY_NO_PROGRESS_LIMIT`（2），连续相同决策缺项回弹时收口 `needs_human`（稳定码 `verify_no_progress`）；轮次不重置，真实 SQL 回归最终 SHA Actions 待验 | `verify.ts`、`verify-no-progress.ts` |
 | 图查询累计调用/字节 | `DEEPSONAR_GRAPH_QUERY_MAX_CALLS` / `DEEPSONAR_GRAPH_QUERY_MAX_BYTES` 默认 0；返回剩余值 null 表示不限，继续记录使用量；已 blocked 的会话不解封；独立单响应 512000 UTF-8 bytes 硬上限包含引用与元数据，超限不写授权状态 | `graph-query.ts` |
 | LSP / CLI 能力调用 | 缺失或 0 不限，正数上限 10000；内置目录不再默认有限；LSP adapter 执行显式调用上限，CLI 字段目前为声明，不冒充已执行计数 | `language-server-adapter.mjs`、能力目录与共享 schema |
 | 内置 Capability Pack token | 不填 `max_tokens`，保留显式声明能力；不是新增的消费计量器 | `domains/capability-pack/catalog.ts` |

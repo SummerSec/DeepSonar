@@ -1,9 +1,9 @@
 # DeepSonar Design
 
-#1133 补齐人工技术收口与设备冻结。Finding 详情允许有 findings:write 权限的操作者对 needs_human 显式记录无定论决定，按对象修订、状态、最后轮次做 CAS，新增终结轮次并同事务写审计。补证两个入口复用画布设备要求冻结与授权，远端测试按明确目标执行。工程验收以最终 SHA Actions 为准，详见[接口边界](docs/architecture/09-interface-specs.md#人工结束技术验证1133)。
+#1133 补齐人工技术收口与设备冻结。Finding 详情允许有 findings:write 权限的操作者对 needs_human 显式记录无定论决定，按对象修订、状态、最后轮次做 CAS，新增终结轮次并同事务写审计。补证两个入口复用画布设备要求冻结与授权，远端测试按明确目标执行。补证无进展刹车尊重既有关闭开关，见[运行时规则](docs/architecture/06-runtime-view.md#verify-补证无进展开关1133)。工程验收以最终 SHA Actions 为准，详见[接口边界](docs/architecture/09-interface-specs.md#人工结束技术验证1133)。
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
