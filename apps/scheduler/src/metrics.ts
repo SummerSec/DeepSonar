@@ -131,6 +131,7 @@ const HELP: Record<string, string> = {
   deepsonar_job_duration_seconds_sum: "Sum of finished job durations (succeeded/failed)",
   deepsonar_job_duration_seconds_count: "Count of finished jobs with duration",
   deepsonar_model_requests_total: "Model gateway forwarded requests",
+  deepsonar_gateway_credential_leak_total: "Model gateway requests denied because a Job credential appeared in business data",
   deepsonar_model_tokens_total: "Model gateway usage tokens (best-effort from usage fields)",
   deepsonar_provider_errors_total: "Model gateway upstream/provider errors",
   deepsonar_gateway_upstream_attempts_total: "Model gateway upstream attempts",

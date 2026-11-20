@@ -23,7 +23,7 @@ Sandbox → managed proxy → Scheduler 是不同 HTTP 连接。代理双向消�
 
 2026-11-09 源码候选：Pi 主请求在已有 provider `streamSimple` 中，OM 在受审 registry 的 SDK 调用前，共用 [精确替换函数](../packages/runtime-sandbox/src/pi-main-request-budget.ts)。它只投影本次 SDK context 内的字符串值，把当前 main Gateway、Control、OM Gateway token 替换为 `[REDACTED]`；main/Control 取实际运行 env，OM 不在 env 中，主请求与 OM worker 均经现有模型注册表解析其认证值。主请求无法读取已配置 OM 的认证时明确拒绝，不为方便脱敏新增可继承的 secret env。工具 stdout、认证文件内容、工具错误、历史消息和 OM 来源文本因此走同一出口。原 Session 对象、认证选项、工具 ID、错误状态、额度、回执及冻结快照不改写；同次恢复调用重用同一个安全投影，而不是要求该投影与原 Session 对象引用相同。Gateway 的原字节 `credential_in_business_data` 守卫保留，不在代理、`onPayload` 或已序列化 body 上静默修复。
 
-这是模型输入防泄漏，不是操作系统身份隔离：凭据仍用于 CLI 认证，工具进程仍能读取同身份的 env / `auth.json`；搬到同 UID 的 0600 文件不能冒充隔离。任意编码、二进制/图像携密、字段名携密，以及扩展绕过已登记 SDK 出口不在本片替换保证内；现有 Gateway 拒绝边界仍独立生效（拒绝留痕见下节）。#1032 的 A1/A2 认证隔离、稳定终态诊断与 deny 指标、Skill 提示仍未由此片交付，Issue 不据此关闭。
+这是模型输入防泄漏，不是操作系统身份隔离。任意编码、二进制/图像携密、字段名携密，以及扩展绕过已登记 SDK 出口不在本片替换保证内。现行 A1 私有文件通道见本文后续章节，拒绝审计、诊断与计数见下节；各片最终 SHA 的工程验收分别记录。
 
 OM 直接加载镜像内现有 request-budget 源码的共享函数，启动 guard 同时核验 wrapper 与该源码的完整 SHA-256；旧/缺损/被替换内容拒绝，不能只核 wrapper 或沿用旧镜像声明。没有新增依赖、配置、状态机、数据库或授权通道，不增加用户操作。Pi 专属替换函数位于 DSH installer 复用的 SDK 政策前缀之外，避免不同 TypeScript 加载器的函数序列化改变 DSH helper 内容身份；不修改 DSH 的固定 vendor/artifact pin。
 
@@ -33,7 +33,11 @@ OM 直接加载镜像内现有 request-budget 源码的共享函数，启动 gua
 
 Gateway 原有的原字节 `credential_in_business_data` 拒绝保留，行为不变；新增的是每次拒绝都写一条审计。审计走 `recordSystemAudit`（request_id / IP / User-Agent 一律为空），而不是会持久化请求元数据的 `audit()`：最多 300 字符的原始 User-Agent 和 IP 都可能正好携带被拒绝的凭据。`action=gateway.credential_denied`、`result=denied`、`error_code=credential_in_business_data`，`resource_type=job_token`、`resource_id` 为该 token 行 ID，`after_json` 只含固定键 `surface`（`request_target` / `body` / `upstream_target` / `upstream_data` / `trailers`）、`job_id`、`attempt_id`。不写请求体、错误原文、header 原文或任何凭据片段。
 
-回归接 `pnpm ci:integration:platform-api` 的 [透明 Gateway 集成测试](../apps/scheduler/src/gateway-transparent.integration.test.ts)：同一 mock 内制造 body、请求目标与业务 header 三处凭据命中，要求三次拒绝各留一条审计、`actor_type=system`、三项请求元数据为 null、`after_json` 键集合精确匹配且整表不出现 token 明文。本片只交付拒绝留痕；稳定终态诊断（把 `credential_in_business_data` 保留为不可重试的固定终态码）、deny 指标与 Skill 提示仍未交付，A1/A2 认证隔离同样未交付，#1032 不据此关闭。
+五处拒绝共用入口同步递增 `deepsonar_gateway_credential_leak_total`，复用进程内 counter 与 Prometheus 导出，无标签。该指标统计 Gateway 因业务数据含 Job 凭据而拒绝的请求，每次拒绝递增一次，进程重启归零。它与异步尽力写入的审计各自记录事实。Claude 本地准入在请求到达 Gateway 前拒绝时，不计入此 Gateway 指标。
+
+`pnpm ci:integration:platform-api` 的 [透明 Gateway PG 回归](../apps/scheduler/src/gateway-transparent.integration.test.ts)经真实 HTTP 覆盖五处拒绝、编码与压缩输入，共 12 次命中，核对计数准确增量、HELP/TYPE/样本导出和每次拒绝恰好一条 system 审计。请求元数据保持 null，`after_json` 固定键及指标、审计均不得含凭据明文。
+
+P1-3 的 [分类器](../apps/scheduler/src/credential-refusal.ts)同时处理 Pi 折叠文案与 Claude HTTP 400 JSON 外壳，后者必须具备精确的 `error.type=credential_in_business_data`。单测接 `pnpm ci:unit:job-lifecycle`。`pnpm ci:integration:recovery` 的 [Dispatcher PG 夹具](../apps/scheduler/src/dispatch-credential-refusal.fixture.ts)复用现有 Job rerun 隔离数据库和正式冻结快照，调用实际本地拒绝入口，受控进程返回合成 Claude stream-json 与退出码 1，再经过真实 executeReal、runRealAgent、分类器及终态 SQL。断言 `jobs.error` 稳定码、单次失败 Attempt 的 reason/error/finished_at、执行证据引用，以及不会恢复进程或创建重试 Attempt。`agent_run` 未确认效果保持 unknown/never。固定原生 CLI 的拒绝行为由原有 Claude 专项独立验证。新增回归尚未执行，须由最终 SHA Actions 验收，A2 保持待决定的远期边界。
 
 ## Job-scoped model recovery (#1002 P1-9)
 

@@ -1058,6 +1058,7 @@ function auditCredentialDenial(
   jt: { id?: unknown; job_id?: unknown; attempt_id?: unknown; project_id?: unknown },
   surface: CredentialDenialSurface,
 ): void {
+  inc("deepsonar_gateway_credential_leak_total");
   void recordSystemAudit({
     action: "gateway.credential_denied",
     projectId: typeof jt.project_id === "string" ? jt.project_id : null,

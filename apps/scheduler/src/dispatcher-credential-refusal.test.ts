@@ -18,6 +18,17 @@ const GATEWAY_DENIALS = [
   "Job credential in trailers",
 ];
 
+test("#1032: Claude HTTP 400 JSON 外壳保留精确的凭据拒绝类型", () => {
+  const envelope = JSON.stringify({ error: { type: "credential_in_business_data", message: "Job credential in body" } });
+  const observed = `agent 运行失败: agent CLI 退出码 1: API Error: 400 ${envelope}`;
+  assert.equal(classifyDispatcherFailure(new Error(observed)).reason, CREDENTIAL_IN_BUSINESS_DATA_REASON);
+  for (const text of [
+    `API Error: 500 ${envelope}`, `API Error: 1400 ${envelope}`, envelope,
+    'API Error: 400 {"error":{"type":"invalid_request_error","message":"credential_in_business_data"}}',
+    'API Error: 400 {"error":{"type":"credential_in_business_data"}',
+  ]) assert.equal(isCredentialInBusinessDataMessage(text), false, text);
+});
+
 test("#1032: 凭据守卫拒绝被识别为平台稳定错误码，而非 CLI 黑话", () => {
   for (const denial of GATEWAY_DENIALS) {
     // 现场形态：executor 的 agent 运行失败前缀 + CLI 进程退出短语 + gateway 400 摘要。
