@@ -22,17 +22,14 @@ import {
   projectJobQuotaFromConfig,
   recoverVerifyJobTerminal,
   rolesForProject,
-  type ProjectRules,
 } from "./core.js";
-import { PLATFORM_DEFAULT_AGENT_CLI, type AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
-import { credentialConcurrencyPolicy } from "./credentials.js";
+import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import {
   accumulateDispatchCounts,
-  dispatchModelKey,
+  dispatchSkipReason,
+  type DispatchCandidate,
   type ActiveDispatchRow,
-  type DispatchCounts,
 } from "./dispatch-active-concurrency.js";
-import { snapshotUpstreamModel } from "./provider-effective-model.js";
 import { assertPiSnapshotLaunchSelection } from "./provider-settings.js";
 import { sql } from "./db.js";
 import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/index.js";
@@ -162,7 +159,7 @@ import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
 } from "./domains/role-runtime-snapshot/index.js";
-import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb, noteClaimContentionWake } from "./schedule-wake.js";
+import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb, noteClaimContentionWake, noteCredentialCapacityWake } from "./schedule-wake.js";
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { readPlatformClaimsControl } from "./domains/platform-claims/store.js";
@@ -228,23 +225,6 @@ export { CHROME_RUNTIME_IMAGE_KEYS } from "./domains/role-runtime-snapshot/index
 /** 在执行的 job（优雅退出 drain 用，§12.2） */
 const inFlight = new Set<Promise<void>>();
 
-export type DispatchCandidate = {
-  id?: unknown;
-  project_id: unknown;
-  canvas_id?: unknown;
-  finding_id?: unknown;
-  type?: unknown;
-  payload_json?: unknown;
-  canvas_target_json?: unknown;
-  project_config_json?: unknown;
-  agent_cli: unknown;
-  credential_provider: unknown;
-  credential_id: unknown;
-  model: unknown;
-  upstream_model?: unknown;
-  credential_metadata: unknown;
-  agent_snapshot_json?: unknown;
-};
 
 export interface GraphEligibilityState {
   activeHub?: boolean;
@@ -429,8 +409,8 @@ function parseDispatchPayload(value: unknown): Record<string, unknown> {
   return {};
 }
 
-export type { DispatchCounts } from "./dispatch-active-concurrency.js";
-export { dispatchModelKey } from "./dispatch-active-concurrency.js";
+export type { DispatchCandidate, DispatchCounts } from "./dispatch-active-concurrency.js";
+export { dispatchModelKey, dispatchSkipReason } from "./dispatch-active-concurrency.js";
 
 /** Number of additional active jobs the effective global cap permits. */
 export function dispatchSlots(maxGlobalJobs: number | null, totalActive: number): number {
@@ -462,39 +442,6 @@ export function scanDispatchPages<T>(
     }
   }
   return selected;
-}
-
-/**
- * Return the first resource gate that blocks a pending candidate, or null if
- * the candidate can be claimed. Kept pure so the quota ordering is unit
- * testable without a live Postgres/Scheduler process.
- */
-export function dispatchSkipReason(
-  job: DispatchCandidate,
-  counts: DispatchCounts,
-  rules: Pick<ProjectRules, "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
-  projectJobLimit: number | null,
-): string | null {
-  const projectId = String(job.project_id);
-  // Historical snapshots may omit agent_cli; use the platform default in quota accounting.
-  const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
-  const provider = String(job.credential_provider ?? "");
-  const credentialId = String(job.credential_id ?? "");
-  const model = snapshotUpstreamModel(job) ?? "";
-  if (projectJobLimit !== null && (counts.project.get(projectId) ?? 0) >= projectJobLimit) return "project";
-  const providerLimit = provider ? rules.maxConcurrentByProvider[provider] : undefined;
-  if (providerLimit !== undefined && (counts.provider.get(provider) ?? 0) >= providerLimit) return "provider";
-  const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
-  if (credentialId && credentialPolicy.maxConcurrent !== null && (counts.credential.get(credentialId) ?? 0) >= credentialPolicy.maxConcurrent) {
-    return "credential";
-  }
-  const modelLimit = model ? credentialPolicy.modelConcurrency[model] : undefined;
-  if (credentialId && model && modelLimit !== undefined && (counts.model.get(dispatchModelKey(credentialId, model)) ?? 0) >= modelLimit) {
-    return "model";
-  }
-  const cliLimit = rules.maxConcurrentByAgentCli[cli];
-  if (cliLimit !== undefined && (counts.cli.get(cli) ?? 0) >= cliLimit) return "agent_cli";
-  return null;
 }
 
 export function projectJobLimitForCandidate(
@@ -778,7 +725,10 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       if (canvasScheduleBlocksDispatch(job.canvas_target_json)) return skip("canvas_schedule");
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       if (await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job, graphBatch)) return skip("graph_ineligible");
+      if (job.canvas_id && !await canClaimQueuedTask(/* SAFETY: same postgres.js transaction handle. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id), job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) return skip("project_task_queue");
       const dispatchSkip = dispatchSkipReason(job, counts, rules, projectJobLimitForCandidate(job, rules.maxJobsPerProject));
+      if (["provider", "credential", "model"].includes(dispatchSkip ?? "")
+        && (job.agent_snapshot_json as AgentRuntimeSnapshot | undefined)?.credential_selection) noteCredentialCapacityWake();
       return dispatchSkip ? skip(dispatchSkip) : true;
     };
     // 只冻结本页的身份提示；资格判定在排好序的画布/项目锁与 Job SKIP LOCKED 复读之后以权威结果为准。
@@ -819,7 +769,6 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       // Re-check scope, pause/schedule, graph and quotas from locked rows before CAS.
       if (claimed.length >= slots) break;
       if (!(await eligible(job, graphBatch))) continue;
-      if (job.canvas_id && !await canClaimQueuedTask(/* SAFETY: postgres.js tx handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id), job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) continue;
       const row = await lifecycle.claimPendingJob(job.id);
       if (!row) continue;
       if (job.canvas_id && !(job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) await markQueuedTaskClaimed(/* SAFETY: same postgres.js tx handle; the store only uses the tagged template interface. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id));

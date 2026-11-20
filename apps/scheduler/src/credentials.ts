@@ -363,6 +363,17 @@ export function credentialConcurrencyPolicy(metadata: unknown): CredentialConcur
   };
 }
 
+/** Shared normalization for the global Provider quota map, including explicit zero. */
+export function providerConcurrencyLimits(value: unknown, fallback: Record<string, number>): Record<string, number> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const limits: Record<string, number> = {};
+  for (const [provider, limit] of Object.entries(value as Record<string, unknown>)) {
+    if (!isProviderKnown(provider) || typeof limit !== "number" || !Number.isInteger(limit) || limit < 0 || limit > 1000) return fallback;
+    limits[provider] = limit;
+  }
+  return limits;
+}
+
 /**
  * 固定 Provider → 环境变量映射（§6.2：用户不能自由填写变量名，取代 env_keys）。
  * 值来自 Credential 解密结果；base_url 等非密钥项走 public_metadata_json。

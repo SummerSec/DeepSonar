@@ -69,6 +69,12 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
 
+### 凭据容量与健康反馈（#1078）
+
+readiness 与严格 resolver 对全满候选返回稳定 `provider_credential_all_at_capacity`，RepairFeedback 为 `transient_retryable`，下一步 `wait_for_provider_capacity`，预检展示 `CREDENTIAL_AT_CAPACITY` 警告。临时健康排除后全部不可用或冻结账号不健康返回 `provider_credential_health_unavailable`，预检展示 `CREDENTIAL_HEALTH_UNAVAILABLE`，下一步检查连接。显式授权引用失效仍整次返回 stale 错误。Job 创建内部允许保存容量等待决定并保持 pending，领取按固定间隔重读，没有新增最大排队时长或取消策略。
+
+新快照可选 `credential_selection` 保存版本、观测时刻、选择理由及候选三层容量，`capacity_wait` 是选择理由枚举，仅在创建时容量阻挡时出现；没有同名无条件字段、等待 deadline 或执行 timeout 预算。字段语义、健康探测 unknown 的例外及跨 Provider 未交付边界统一见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)。历史快照保持冻结。
+
 ### 项目默认 Provider 账号选择（#914）
 
 项目 Provider 面板通过既有 settings PATCH 显式设置、更换或清除 `default_credential_id`。候选须是 active、全局或当前项目可见、在项目凭据与 CLI 启用范围内的 Provider；未配置凭据白名单表示未收紧，显式 `[]` 没有候选，不自动选择其他账号。现有失效引用清理控件继续保留；默认账号不可用时要求用户明确清除或更换，加载失败不能视作空名单并清掉配置。

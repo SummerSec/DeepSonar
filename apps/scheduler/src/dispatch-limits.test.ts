@@ -21,7 +21,7 @@ import {
   type DispatchCounts,
 } from "./dispatcher.js";
 import { sql } from "./db.js";
-import { bindScheduleWake, clearScheduleWake, noteClaimContentionWake, noteScheduleWakeAt, unbindScheduleWake } from "./schedule-wake.js";
+import { bindScheduleWake, clearScheduleWake, noteClaimContentionWake, noteCredentialCapacityWake, noteScheduleWakeAt, unbindScheduleWake } from "./schedule-wake.js";
 import { parseConcurrencyRulesPatch } from "./domains/settings/routes.js";
 
 function emptyCounts(): DispatchCounts {
@@ -57,6 +57,27 @@ test("claim contention wake coalesces, stays separate from schedules and stops w
     noteClaimContentionWake();
     t.mock.timers.tick(1_000);
     assert.equal(wakes, 2);
+  } finally { unbindScheduleWake(); }
+});
+
+test("#1078 capacity wake coalesces at five seconds and stops with Dispatcher", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let wakes = 0;
+  try {
+    bindScheduleWake(() => { wakes++; });
+    for (let index = 0; index < 100; index++) noteCredentialCapacityWake();
+    clearScheduleWake();
+    t.mock.timers.tick(4_999);
+    assert.equal(wakes, 0);
+    t.mock.timers.tick(1);
+    assert.equal(wakes, 1);
+    t.mock.timers.tick(60_000);
+    assert.equal(wakes, 1, "only a new observed capacity block rearms the timer");
+    noteCredentialCapacityWake();
+    unbindScheduleWake();
+    bindScheduleWake(() => { wakes++; });
+    t.mock.timers.tick(5_000);
+    assert.equal(wakes, 1, "a stopped generation cannot wake its replacement");
   } finally { unbindScheduleWake(); }
 });
 

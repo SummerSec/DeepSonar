@@ -21,6 +21,7 @@ export type RoleRuntimeSnapshotTransaction = ((strings: TemplateStringsArray, ..
 };
 
 export interface RoleRuntimeSnapshotResult {
+  credential_selection?: import("../provider-adapter/resolve-credential.js").CredentialSelection;
   task_contract?: import("@deepsonar/shared-types").TaskContract;
   name: string;
   role_kind: "role" | "hub" | "system";
@@ -129,7 +130,7 @@ export interface RoleRuntimeSnapshotApplication {
     options?: {
       runtimeImageKey?: string | null;
       /** Kernel-only original credential preference during existing-Job recovery. */
-      existingCredentialId?: string | null;
+      existingCredentialId?: string | null; existingJobId?: string | null;
       /** Hub 提案的 agent_cli；省略时走项目软缺省 / RoleConfig。 */
       agentCli?: string | null;
       /** Hub 提案的 Provider 插件 id（credentials.provider）；禁止提交账号 UUID。Scheduler 在授权目录内解析凭据。 */

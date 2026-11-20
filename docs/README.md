@@ -10,7 +10,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 
 #1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入；原字节 Gateway 守卫不变。映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，同 UID 隔离、诊断/审计与生产验证未交付。
 
-#1002 P1-8 与 #1078/#1096 的[同质账号池选择](architecture/06-runtime-view.md#凭据与-cli-解析757)在当前授权的同 Provider/CLI/模型候选内，先保留仍有余量的冻结恢复身份，再选择仍有余量的默认账号，其余按并发余量及稳定并列规则选择。readiness 读取负载投影，恢复继续核验冻结身份与预算。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
+#1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，合法原 Job 的冻结恢复身份先于默认，满额时等待原账号，保留预算门；#1078 新 Job 按余量比例、真实在途数、历史及当前分配数、默认平局优先、稳定 ID 排序；三层容量、临时健康过滤、全满保留 pending 与无秘密冻结审计对齐现有 Dispatcher，5 秒合并唤醒不引入排队取消期限，跨 Provider 治理等价仍未交付，详见同一运行时视图；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
 > 同步日期：2026-11-20

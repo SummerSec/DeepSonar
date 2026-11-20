@@ -15,9 +15,11 @@ const MAX_TIMER_MS = 2_147_483_647;
 /** Fire slightly after the wall time so claim sees start_at <= now(). */
 const WAKE_SLACK_MS = 25;
 const CLAIM_CONTENTION_RETRY_MS = 250;
+const CREDENTIAL_CAPACITY_RETRY_MS = 5_000;
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let claimContentionTimer: ReturnType<typeof setTimeout> | null = null;
+let credentialCapacityTimer: ReturnType<typeof setTimeout> | null = null;
 let armedUntilMs: number | null = null;
 let refreshInFlight: Promise<void> | null = null;
 let refreshRequestsDueKick = false;
@@ -34,6 +36,8 @@ export function unbindScheduleWake(): void {
   clearArmedTimer();
   if (claimContentionTimer) clearTimeout(claimContentionTimer);
   claimContentionTimer = null;
+  if (credentialCapacityTimer) clearTimeout(credentialCapacityTimer);
+  credentialCapacityTimer = null;
 }
 
 function fireKick(): void {
@@ -50,6 +54,16 @@ export function noteClaimContentionWake(): void {
     fireKick();
   }, CLAIM_CONTENTION_RETRY_MS);
   claimContentionTimer.unref?.();
+}
+
+/** Coalesce observed quota waits. Pending time never consumes execution timeout. */
+export function noteCredentialCapacityWake(): void {
+  if (!kick || credentialCapacityTimer) return;
+  credentialCapacityTimer = setTimeout(() => {
+    credentialCapacityTimer = null;
+    fireKick();
+  }, CREDENTIAL_CAPACITY_RETRY_MS);
+  credentialCapacityTimer.unref?.();
 }
 
 export function noteScheduleWakeAt(at: Date | number | string | null | undefined): void {

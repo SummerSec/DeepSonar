@@ -73,16 +73,19 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 1. Hub 的 Provider/model 需求、项目默认模型和全局角色模型按既有优先级形成模型要求；模型按每张凭据的 CLI 方言核对配置清单。
 2. Hub 显式 CLI 是硬约束，与候选冲突继续 `provider_credential_cli_mismatch`（`permanent_failure`）；不能通过改选 CLI 绕过排他绑定。
-3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致，则先保持自身仍有余量的恢复身份（冻结快照已授权的那个凭据），再保持仍有余量的显式缺省凭据，其余候选按 `metadata.max_concurrent` 与该负载投影算出的余量比例排序（未设置视为不限），并列时依次按显式缺省凭据、恢复身份、同项目非终态 Job 数、历史分配数、稳定 ID 决定；因此「缺省满额时选了同伴并冻结、缺省之后腾出容量」不会把恢复 Job 换回缺省而制造 `SNAPSHOT_STALE`（#1096），恢复身份自身满额或已不在授权池内时仍让位给缺省，全部候选都达上限时仍取缺省且不新增失败码。这个余量只用于偏好排序，不占位、不放宽授权、也不改变准入判定；跨 provider 的候选等价判据仍需决策，其他歧义仍返回 `provider_credential_multi_match`。
-4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
-5. 池选择是现有 Job 历史的只读投影，readiness 读取该投影。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，在当前合法候选内按第 3 项的同质池余量规则选择。恢复仍核验冻结身份及累计预算。运行中不换 key、不因故障重选账号或重置预算。
-6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
+3. 唯一候选决定 CLI，但仍须核对容量。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好。模型/CLI/协议硬约束先行，再排除明确失败的健康候选。`health_status=unknown` 仍可用，`error` 且 `health_error_category=unknown` 沿用 #491 的目录探测限制语义，不能据此证明推理不可用。其他 `error` 暂时排除，全部不可用返回 `provider_credential_health_unavailable`。冻结账号健康失败同样返回该错误，不换账号。显式名单内删除、停用或不可访问引用仍先使整次解析以 `provider_credential_allowlist_stale` 拒绝。
+4. 显式授权白名单内 Provider、CLI 和解析后上游模型一致的多账号池，合法冻结身份保持原账号。新 Job 先排除满额候选，再按三层最小剩余容量比例降序、全项目真实凭据在途数升序、同项目历史分配数升序、同项目当前非终态分配数升序、默认账号优先、稳定 ID 选择。未设上限的层剩余比例为 1，显式 0 为 0。冻结身份满额时等待原账号，不转同伴。默认账号仅在前述负载条件相同时优先。异身份池仍保留显式默认账号硬选，不自动跨身份轮换。缺少白名单或模型/Provider 身份不同且没有明确默认或恢复身份时，继续 `provider_credential_multi_match`。不同 Provider 的同名模型及同 base_url 没有受治理等价证明，不能自动池化。
+5. #1078 的凭据、模型、Provider 三层容量共用 Dispatcher 的计数函数及全项目 `claimed` / `provisioning` / `running` 账本。凭据和模型限制读取 `public_metadata_json.max_concurrent` / `model_concurrency`，模型键使用真实上游 ID，Provider 限制复用全局 `maxConcurrentByProvider` 及同一纯解析函数。`pending` / `waiting_human` 只参与项目分配排序，不占执行名额。恢复重验用内核持有的当前 Job ID 在同一查询中排除自身，其他 Job 仍计入。选择不预留名额，readiness 不消费轮次。真正领取仍在 `DISPATCH_CLAIM_ADVISORY_KEY` 锁内复核，历史身份漂移、累计预算和未知效果门保持。运行中不换 key、不因故障重选账号或重置预算。升级离线预检仍仅消费导出的配置，不加载数据库或 core 初始化，不验证实时容量，并在 `not_checked` 明示 `live_credential_capacity`。
+6. 严格解析及 readiness 在全部可选身份满额时返回 `provider_credential_all_at_capacity`，分类为 `transient_retryable`，下一步为等待容量。Job 创建显式允许持久化等待决定并保存 pending Job，防止派发输入丢失。Dispatcher 在暂停、定时、依赖及项目 FIFO 资格满足后观测容量阻挡，合并为单个 5 秒定时器，按既有每页最多 500 个候选的领取扫描重读，释放后再由领取锁准入。没有最大排队时长契约，pending 不因创建时间或执行 timeout 到期而取消。此计时器不创建预约或等待预算。
+7. 新快照的可选 `credential_selection` 使用 `deepsonar.credential-selection/v1`，记录观测时刻、选中 UUID、选择理由、稳定错误码，以及经过授权/模型/协议硬约束后的候选 UUID、健康状态、跳过原因及三层容量。健康排除的候选容量为 null。`reason=capacity_wait` 仅表示创建时容量已满的观测，其他选择的 `error_code=null`，不携带等待起点、deadline 或执行预算。 显式同质池全满时，新 Job 优先冻结凭据、模型、Provider 三层均未显式设为 0 的暂满账号；没有此类账号时保留原等待选择，恢复与异质池默认身份不轮换。该投影没有密钥、原生设置、账号名或地址。已有快照不补写，负载释放及恢复重验不改写原冻结决定。
+
+回归接既有 `ci:unit:capability-pack`、`ci:unit:runtime-cleanup`、并发单测、`ci:integration:role-config` 与 `ci:integration:dispatch-limits`。覆盖管理 API 配额、跨项目占用、三层零上限、健康与失效引用、默认仅平局优先、连续十次创建及领取不超 3/10 上限、冻结恢复、全满保留 pending、无通知释放唤醒和并发 claim。`role-config` 另接凭据选择及 Job 插入后的事务回滚、并发创建、重复 ingress 拒绝与释放后领取的组合回归，核对三层占用和原冻结审计。新增回归尚未执行，最终提交的 Actions 结果另验。跨 Provider 受治理等价映射、版本/能力约束与迁移规则尚未交付，当前 ModelDescriptor/FrozenModelDescriptor 没有此类身份字段，仍须独立设计。
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
 
 #914 的项目账号引用 DELETE/设置事务、scope 过滤及双向竞态回归见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)；运行期停用和既有失效引用仍按上述解析门 fail closed，#929 已另行交付默认账号选择与修复导航，不自动重跑或改写旧快照。
 
-#1002 P1-8 的选择、默认优先、异质池拒绝与恢复偏好回归接 `pnpm ci:unit:capability-pack`；隔离 PostgreSQL 中真实创建两个 Job、不同测试 key 的 Gateway 请求、独立用量归属、停用拒绝与快照不变接现有 `pnpm ci:integration:role-config`。该夹具使用 loopback 上游，不证明厂商模型质量或容量；最终 SHA Actions 待验。没有新增 UI、配置开关、池状态或分配账本；使用现有账号白名单及默认账号清除操作。
+#1002 P1-8 的选择、默认平局优先、异质池拒绝与恢复偏好回归接 `pnpm ci:unit:capability-pack`；隔离 PostgreSQL 中真实创建两个 Job、不同测试 key 的 Gateway 请求、独立用量归属、停用拒绝与快照不变接现有 `pnpm ci:integration:role-config`。该夹具使用 loopback 上游，不证明厂商模型质量或容量；最终 SHA Actions 待验。没有新增 UI、配置开关、池状态或分配账本；使用现有账号白名单及默认账号清除操作。
 
 实现入口：[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[快照组装](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 

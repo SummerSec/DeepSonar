@@ -206,10 +206,12 @@ export async function validatePlatformUpgradeConfiguration(input: unknown): Prom
         const key = JSON.stringify([modelRef, preferredAgentCli]);
         if (seen.has(key)) continue;
         seen.add(key);
-        const db = (async () => snapshot.credentials.filter(row => row.kind === "llm_provider" && row.status === "active"
-          && (row.project_id == null || row.project_id === project.id))) as unknown as ResolveProviderCredentialInput["db"];
+        const db = (async (strings: TemplateStringsArray) => strings.join("?").includes("FROM credentials")
+          ? snapshot.credentials.filter(row => row.kind === "llm_provider" && row.status === "active"
+            && (row.project_id == null || row.project_id === project.id))
+          : []) as unknown as ResolveProviderCredentialInput["db"];
         try {
-          await resolveProviderCredentialForJob({db, projectId: String(project.id), allowlist, preferredAgentCli, modelRef,
+          await resolveProviderCredentialForJob({db, projectId: String(project.id), allowlist, preferredAgentCli, modelRef, allowCapacityWait: true,
             allowPassthrough: config.allowModelCatalogPassthrough || allowlist.allow_model_catalog_passthrough});
         } catch (error) {
           const known = new Set(["provider_credential_allowlist_stale", "provider_credential_no_match", "provider_credential_cli_mismatch", "provider_credential_protocol_incompatible", "provider_credential_multi_match"]);
@@ -220,7 +222,7 @@ export async function validatePlatformUpgradeConfiguration(input: unknown): Prom
     }
   }
   result.coverage.push("credential_default_resolution");
-  result.not_checked.push("future_job_provider_model_constraints");
+  result.not_checked.push("future_job_provider_model_constraints", "live_credential_capacity");
   result.ok = result.blocking_errors.length === 0;
   return result;
 }
