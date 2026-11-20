@@ -12,6 +12,19 @@ import { CREATE_CIRCUIT_COOLDOWN_MS, CREATE_CIRCUIT_MAX_COOLDOWN_MS, CREATE_CIRC
   resetOpenSandboxCreateCircuitForTests } from "./opensandbox-create-circuit.js";
 import { resetOpenSandboxUploadCircuitForTests } from "./opensandbox-upload-circuit.js";
 
+/** Same dependency order as recovery-issue186 teardown, scoped to this fixture's rows. */
+export async function deleteDispatchFixtureRows(db: typeof sql, jobIds: string[], canvasIds: string[]): Promise<void> {
+  await db.begin(async tx => {
+    await tx`DELETE FROM canvas_changes WHERE canvas_id=ANY(${canvasIds}::text[])`;
+    await tx`DELETE FROM canvas_edges WHERE canvas_id=ANY(${canvasIds}::text[])`;
+    await tx`DELETE FROM canvas_nodes WHERE canvas_id=ANY(${canvasIds}::text[])`;
+    await tx`DELETE FROM event_dedup WHERE job_id=ANY(${jobIds}::uuid[])`;
+    await tx`DELETE FROM events WHERE job_id=ANY(${jobIds}::uuid[])`;
+    await tx`DELETE FROM jobs WHERE id=ANY(${jobIds}::uuid[])`;
+    await tx`DELETE FROM canvases WHERE id=ANY(${canvasIds}::text[])`;
+  });
+}
+
 export async function runUnlimitedCreateCircuitFixture(
   db: typeof sql, claim: () => Promise<{ id: string; probe: { canary: boolean; episode: number | null } | null }[]>,
   pendingIds: string[],
@@ -86,6 +99,8 @@ export async function runCreateFailureDispatchFixture(
   const ids: string[] = [];
   const canvases: string[] = [];
   const called: string[] = [];
+  let failed = false;
+  let failure: unknown;
   let now = 1_000_000;
   const controlled = new OpenSandboxRunner({
     create: async input => {
@@ -125,8 +140,13 @@ export async function runCreateFailureDispatchFixture(
       await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
         VALUES(${id},${projectId},${canvas},${roleName},'pending',${db.json(snapshot as never)})`;
     }
-    const counter = async () => Number((await renderMetrics())
-      .match(/^deepsonar_opensandbox_create_failures_total (\d+)$/m)?.[1] ?? 0);
+    const counter = async () => {
+      const metrics = await renderMetrics();
+      const name = "deepsonar_opensandbox_create_failures_total";
+      assert.ok(metrics.includes(`# HELP ${name} `), "create failure counter must be registered for export");
+      assert.ok(metrics.includes(`# TYPE ${name} counter\n`), "create failure metric must remain a counter");
+      return Number(metrics.match(/^deepsonar_opensandbox_create_failures_total (\d+)$/m)?.[1] ?? 0);
+    };
     const before = await counter();
     for (let i = 0; i < CREATE_CIRCUIT_FAILURES_TO_TRIP; i++) {
       assert.equal(await dispatch(), 1);
@@ -175,17 +195,24 @@ export async function runCreateFailureDispatchFixture(
     }
     assert.equal((await db`SELECT count(*)::int AS n FROM jobs WHERE id=ANY(${ids}::uuid[])
       AND status='pending' AND claimed_at IS NULL`)[0]!.n, 1);
+  } catch (error) {
+    failed = true;
+    failure = error;
+    throw error;
   } finally {
-    await drainInFlight();
+    const cleanupErrors: unknown[] = [];
+    await drainInFlight().catch(error => { cleanupErrors.push(error); });
     runner.provision = provision;
     Object.assign(config.runtime, runtime);
     Object.assign(config.runtime.openSandbox, sandbox);
     Object.assign(config.hub, { enabled: hubEnabled });
-    await db`UPDATE global_settings SET rules_json=${db.json(settings!.rules_json)} WHERE id='global'`;
+    await db`UPDATE global_settings SET rules_json=${db.json(settings!.rules_json)} WHERE id='global'`
+      .catch(error => { cleanupErrors.push(error); });
     resetOpenSandboxCreateCircuitForTests();
     resetOpenSandboxUploadCircuitForTests();
     resetOpenSandboxServerStatusForTests();
-    await db`DELETE FROM jobs WHERE id=ANY(${ids}::uuid[])`;
-    await db`DELETE FROM canvases WHERE id=ANY(${canvases}::text[])`;
+    await deleteDispatchFixtureRows(db, ids, canvases).catch(error => { cleanupErrors.push(error); });
+    if (cleanupErrors.length) throw new AggregateError(failed ? [failure, ...cleanupErrors] : cleanupErrors,
+      "create failure fixture cleanup failed", { cause: failed ? failure : cleanupErrors[0] });
   }
 }

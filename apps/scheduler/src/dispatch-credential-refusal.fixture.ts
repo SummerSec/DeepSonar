@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { MODEL_REQUEST_POLICY_SOURCE, type RuntimeHost, type RuntimeProcess, type RuntimeProcessChunk } from "@deepsonar/runtime-sandbox";
 import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import type { sql } from "./db.js";
+import { deleteDispatchFixtureRows } from "./dispatch-create-circuit.fixture.js";
 
 /** Controlled transport only. The production runner still frames and decodes
  * Claude stream-json, handles process exit and decides whether to resume. */
@@ -18,13 +19,16 @@ class RefusalProcess implements RuntimeProcess {
   private wake?: () => void;
   constructor(private readonly reply: () => Promise<{ stdout: string; exitCode: number }>) {}
   async write() {
-    assert.equal(++this.writes, 1, "no prompt or private-file operation may be replayed");
-    const { stdout, exitCode } = await this.reply();
-    const split = Math.floor(stdout.length / 2);
-    this.queue.push({ type: "stdout", chunk: stdout.slice(0, split) }, { type: "stdout", chunk: stdout.slice(split) },
-      { type: "exit", exitCode });
-    this.ended = true;
-    this.wake?.();
+    try {
+      assert.equal(++this.writes, 1, "no prompt or private-file operation may be replayed");
+      const { stdout, exitCode } = await this.reply();
+      const split = Math.floor(stdout.length / 2);
+      this.queue.push({ type: "stdout", chunk: stdout.slice(0, split) }, { type: "stdout", chunk: stdout.slice(split) },
+        { type: "exit", exitCode });
+    } finally {
+      this.ended = true;
+      this.wake?.();
+    }
   }
   async closeStdin() { this.stdinClosed = true; }
   async kill() { this.ended = true; this.wake?.(); }
@@ -57,6 +61,8 @@ export async function runCredentialRefusalDispatchFixture(
   const directory = await mkdtemp(path.join(tmpdir(), "credential-refusal-policy-"));
   let policy: { close(): Promise<void> } | undefined;
   let launches = 0, provisions = 0, refusals = 0;
+  let failed = false;
+  let failure: unknown;
   const processes: RefusalProcess[] = [];
   try {
     const script = path.join(directory, "policy.mjs");
@@ -75,7 +81,7 @@ export async function runCredentialRefusalDispatchFixture(
         assert.match(command, /claude -p/u);
         launches++;
         const process = new RefusalProcess(async () => {
-          const response = await fetch(url, { method: "POST", headers: { authorization: `Bearer ${secret}`,
+          const response = await fetch(url, { method: "POST", signal: AbortSignal.timeout(5_000), headers: { authorization: `Bearer ${secret}`,
             "content-type": "application/json" }, body: JSON.stringify({ messages: [{ role: "user", content: secret }] }) });
           assert.equal(response.status, 400);
           assert.equal(response.headers.get("x-should-retry"), "false");
@@ -131,16 +137,25 @@ export async function runCredentialRefusalDispatchFixture(
     assert.equal(await dispatchOnce(), 0, "terminal refusal cannot silently requeue the Job");
     assert.equal(provisions, 1);
     assert.equal(launches, 1);
+  } catch (error) {
+    failed = true;
+    failure = error;
+    throw error;
   } finally {
-    await drainInFlight();
+    const cleanupErrors: unknown[] = [];
+    await Promise.all(processes.map(process => process.kill().catch(error => { cleanupErrors.push(error); })));
+    await drainInFlight().catch(error => { cleanupErrors.push(error); });
     runner.provision = provision;
     runner.ensureHost = ensureHost;
     Object.assign(config.runtime, runtime);
     Object.assign(config.hub, { enabled: hubEnabled });
-    await db`UPDATE global_settings SET rules_json=${db.json(settings!.rules_json)} WHERE id='global'`;
-    await db`DELETE FROM jobs WHERE id=${jobId}`;
-    await db`DELETE FROM canvases WHERE id=${canvasId}`;
-    await policy?.close();
-    await rm(directory, { recursive: true, force: true });
+    await db`UPDATE global_settings SET rules_json=${db.json(settings!.rules_json)} WHERE id='global'`
+      .catch(error => { cleanupErrors.push(error); });
+    await deleteDispatchFixtureRows(db, [jobId], [canvasId]).catch(error => { cleanupErrors.push(error); });
+    // The loopback server owns an event-loop handle even if PostgreSQL teardown fails.
+    await policy?.close().catch(error => { cleanupErrors.push(error); });
+    await rm(directory, { recursive: true, force: true }).catch(error => { cleanupErrors.push(error); });
+    if (cleanupErrors.length) throw new AggregateError(failed ? [failure, ...cleanupErrors] : cleanupErrors,
+      "credential refusal fixture cleanup failed", { cause: failed ? failure : cleanupErrors[0] });
   }
 }
