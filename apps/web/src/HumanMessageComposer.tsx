@@ -60,9 +60,10 @@ export function HumanMessageComposer({
   }, [draftRequest, request.target]);
   const requestChanged = Boolean(request.target && draftRequest && (request.target.request_id !== draftRequest.request_id
     || request.target.expected_revision !== draftRequest.expected_revision));
-  const jobTarget = nodeEligible ? waitingJob ? request.target : humanMessageTargetForNode(selectedNode, jobs) : null;
+  const jobTarget = nodeEligible ? waitingJob || draftRequest ? request.target : humanMessageTargetForNode(selectedNode, jobs) : null;
   const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
-  const waitingForCurrentRequest = targetKind === "job" && (Boolean(waitingJob && (!request.target || !draftRequest || requestChanged))
+  const waitingForCurrentRequest = targetKind === "job" && (Boolean(draftRequest && !waitingJob)
+    || Boolean(waitingJob && (!request.target || !draftRequest || requestChanged))
     || Boolean(intervention?.pending && (intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true)));
   const canSubmit = Boolean(projectId && target && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy && !waitingForCurrentRequest);
   const targetTitle = targetKind === "hub" ? "Hub" : targetKind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
@@ -154,6 +155,9 @@ export function HumanMessageComposer({
               </p>
             </section>
           )}
+          {targetKind === "job" && draftRequest && !waitingJob && <div className="human-message-feedback" role="alert">
+            当前运行已不再等待人工回复，暂停发送。草稿和附件已保留，不会自动作为普通运行消息发送；请核对运行状态，或显式选择其他消息目标。
+          </div>}
           {showCurrentRequest && requestChanged && <div className="human-message-feedback" role="alert">
             人工问题或版本已变化。草稿和附件已保留，请核对上方当前问题，确认后再发送。
             <button type="button" disabled={busy || !request.target || Boolean(intervention?.pending && (intervention.detailStatus !== "loaded" || !intervention.detailVersionMatches))}

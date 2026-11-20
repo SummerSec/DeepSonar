@@ -83,8 +83,8 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     const selected = openHumanInterventionForJob(requests, "job-0")!;
     const preview = listHumanInterventions(requests).map(item => item.node);
     const waitingTarget = { ...target, job_id: "job-0", status: "waiting_human" };
-    const renderWaiting = (intervention: ReturnType<typeof listHumanInterventions>[number] | null) => act(() => root.render(createElement(HumanMessageComposer, {
-      canvasId: "canvas-a", projectId: "project-a", selectedNode: waitingTarget, intervention,
+    const renderWaiting = (intervention: ReturnType<typeof listHumanInterventions>[number] | null, node = waitingTarget, jobs?: { id: string; status: string }[]) => act(() => root.render(createElement(HumanMessageComposer, {
+      canvasId: "canvas-a", projectId: "project-a", selectedNode: node, intervention, jobs,
       onClose: () => {}, onSent: () => { newCallback++; },
     })));
     const sendDisabled = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.disabled;
@@ -255,6 +255,26 @@ test("a reply saved after leaving and returning to a task cannot close its new d
       kind: "request", request_id: "request-c", expected_revision: 0,
     });
     assert.equal(createMessage.mock.calls[6]!.arguments[1].body, "写给问题 A 的草稿");
+
+    act(() => root.render(null));
+    requestResult = Promise.resolve(currentDetail);
+    const runningTarget = { ...waitingTarget, status: "running" };
+    await act(async () => {
+      renderWaiting(null, runningTarget, [{ id: "job-0", status: "waiting_human" }]);
+      await requestResult;
+    });
+    type("人工等待结束前写好的回复");
+    assert.equal(sendDisabled(), false);
+    renderWaiting(null, runningTarget, [{ id: "job-0", status: "running" }]);
+    assert.equal(sendDisabled(), true, "a bound reply cannot become a generic Job message when the Job list updates");
+    assert.match(container.textContent ?? "", /不再等待/);
+    assert.equal(container.querySelector("textarea")!.value, "人工等待结束前写好的回复");
+    act(() => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.click());
+    assert.equal(createMessage.mock.callCount(), 7, "ending human wait must never send the old reply through the generic Job API");
+    act(() => container.querySelectorAll<HTMLInputElement>('input[type="radio"]')[0]!.click());
+    assert.equal(sendDisabled(), false, "only an explicit target change can repurpose the retained draft");
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[7]!.arguments[1].target, { kind: "hub" });
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();
