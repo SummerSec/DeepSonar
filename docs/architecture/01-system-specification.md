@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -171,7 +171,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-010 Claim、并发和 Lease
 
-- **规范要求**：Scheduler 必须在持久化 claim、全局/项目并发和 lease 约束内领取 Job；Lease 续期必须绑定有效 Job/Attempt，过期或迟到回调不得重新取得执行权。
+- **规范要求**：Scheduler 必须在持久化 claim、全局/项目并发和 lease 约束内领取 Job；#1123 三项全局并发配额缺省且未配环境变量时为 null（不限），显式 null 覆盖环境变量，显式数字保留，0 拒绝；项目 null 继承，0 暂停新领取。Lease 续期必须绑定有效 Job/Attempt，过期或迟到回调不得重新取得执行权。
 - **决策来源**：多 Scheduler 副本、重试和迟到网络回调不能造成双执行或跨项目资源占用。
 - **实现状态**：as-built；claim 使用持久状态和锁，Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
 - **代码入口**：[Dispatch 控制](../../apps/scheduler/src/task-execution-control.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[全局设置](../../apps/scheduler/src/config.ts)。
@@ -697,7 +697,7 @@ OCI 扫描创建与凭据删除共用凭据行锁；导入事务内重验 active
 - **决策来源**：凭据、模型、CLI 和镜像是组合约束，不能由 prompt 绕过目录。
 - **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。#914 的引用保护切片在设置事务内重验所有保留/新增凭据，并与 DELETE 共用凭据行锁；项目 impact 按 actor scope 过滤，删除独立检查全局引用，拒绝时不自动修复白名单。此处为 #925 服务端切片；#929 已交付默认账号显式选择与修复导航，详见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[限制发现](../../apps/scheduler/src/domains/provider-adapter/model-discovery.ts)、[预算冻结](../../apps/scheduler/src/domains/provider-adapter/model-budget.ts)。
-- **#1002 P1-8 补充契约**：显式授权且 Provider/CLI/解析模型一致的多账号池，在没有默认账号时按同项目现有 Job 负载选择并冻结新 Job。readiness 只读，不消耗轮次；已有 Job 的仍合法冻结账号偏好、显式默认优先、身份漂移/累计预算及未知效果门保留。不同模型或 Provider 不自动任选；实现/回归见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)，最终 SHA Actions 待验。
+- **#1002 P1-8、#1078 与 #1096 的凭据选择契约**。显式授权且 Provider/CLI/解析模型一致的多账号池，先保留仍有余量的冻结恢复身份，再选择仍有余量的显式默认账号，其余按现有 Job 负载计算的余量比例及稳定并列规则选择并冻结新 Job。readiness 读取负载投影，恢复继续核验当前授权、模型/CLI、冻结身份、累计预算与未知效果。精确排序、计数范围、满额及其他候选组合见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)，恢复优先顺序的修正已由 [#1103](https://github.com/SummerSec/DeepSonar/pull/1103) 采纳并合入。最终 SHA Actions 待验。
 - **#958 补充契约**：发现限制逐字段保存 provider_declared 来源与 declared/missing/invalid 状态；发现不扩大账号配置模型名单。显式预算优先于声明，运行观测不改冻结；非法显式值拒绝，未知/非法发现值不猜容量。配置/投影回归沿用下列 credential-compatibility / provider-settings，实际锁版本 SDK 输出参数回归接 `pnpm ci:integration:request-budget-sdk`；最终 SHA Actions 待验，详见[专题](../PI_MODEL_BUDGET_RECOVERY.md)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
@@ -1144,6 +1144,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **规范要求**：系统必须提供健康、就绪和 metrics 端点，端点返回的指标/状态只含受控计数、错误类别和组件 readiness，不得输出 token、Provider secret、完整 prompt 或沙箱原文。
 - **决策来源**：运维探针和监控系统需要机器可读状态而不是秘密副本。
 - **实现状态**：as-built；health/readiness/metrics 路由已注册并有 route surface 约束。
+- **列表延迟尾部（#1136）**：`deepsonar_api_list_query_seconds` 按分页和成功/失败保留样本，有限累积桶包含 30/60/120/300 秒。超过 300 秒的观测仍计入 `+Inf`、`_count` 和 `_sum`；排障时用同标签的 `+Inf` 与 `le="300"` 累积桶在同一时间窗内的增量差监控溢出，不把处于溢出范围的分位数当作准确耗时。
 - **代码入口**：[system routes](../../apps/scheduler/src/domains/system/routes.ts)、[metrics](../../apps/scheduler/src/metrics.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 - **验证证据**：`pnpm ci:unit:runtime-cleanup`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:authz`。
 

@@ -25,13 +25,13 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 
 ### 人类用户认证
 
-人类登录使用数据库中的 scrypt 用户会话，与 API Token 服务账号分离。空库启动时 Scheduler 只创建一次公开的默认管理员 `admin` / `Deep@Sonar66`；已有任意用户时不会重置密码或再次创建。生产或公网部署必须在首次登录后立即修改登录名和密码。密码或登录名修改会吊销该用户全部旧会话，并返回一个新的会话 Token。
+人类登录使用数据库用户会话，与 PAT 和服务账号分离。空库只能通过 Scheduler 的部署秘密文件初始化首个管理员，具体获取方式由部署管理方提供；已有账号不会被重置。登录名或密码变更会吊销全部旧会话，并返回一个新会话 token。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /auth/status | 豁免 | 返回 `auth_required`、`has_users`、`bootstrap_available`、`default_admin_credentials_active`（仅默认 admin 仍可用时为 true） |
+| GET | /auth/status | 豁免 | 返回 `auth_required`、`has_users`、`bootstrap_available`、`default_admin_credentials_active`（后两字段已废弃，固定为 `false`，不代表既有账号已改密） |
 | POST | /auth/login | 豁免 | `{username,password}`；返回用户会话。任意校验（含成功）按用户名+IP 5 次/5 分钟，并按 IP 20 次/5 分钟；超限 `429 LOGIN_RATE_LIMITED`，不泄露用户是否存在 |
-| POST | /auth/bootstrap | 豁免 | 兼容旧版首次引导；默认管理员种子后返回 409 |
+| POST | /auth/bootstrap | 豁免 | 已禁用；有用户时返回 409，否则返回 403 `BOOTSTRAP_REQUIRES_DEPLOYMENT_SECRET` |
 | POST | /auth/logout | projects:read | 吊销当前用户会话 |
 | GET | /auth/me | projects:read | 当前用户/认证主体 |
 | POST | /auth/change-password | projects:read | `{current_password,new_password}`；旧会话失效并返回新 Token |

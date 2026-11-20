@@ -118,6 +118,8 @@ test("/health OpenAPI includes deploy version", () => {
   assert.equal(schema.properties.git_revision.type, "string");
   assert.deepEqual(schema.properties.opensandbox.required, ["level", "domain", "ready"]);
   assert.equal(schema.properties.version.type, "string");
+  assert.deepEqual(schema.properties.concurrency_limits.type, ["object", "null"]);
+  assert.deepEqual(schema.properties.concurrency_limits.properties.maxGlobalJobs.type, ["integer", "null"]);
 });
 
 test("runtime registry channel OpenAPI is strict and project-scope aware", () => {

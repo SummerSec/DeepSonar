@@ -6,7 +6,6 @@ import { sql } from "../../db.js";
 import {
   countUsers,
   createUser,
-  defaultAdminCredentialsActive,
   issueUserSession,
   listUsers,
   loginUser,
@@ -30,8 +29,9 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     return {
       auth_required: config.auth.required,
       has_users: n > 0,
-      bootstrap_available: n === 0,
-      default_admin_credentials_active: await defaultAdminCredentialsActive(),
+      bootstrap_available: false,
+      // Deprecated response field: the product no longer supplies a public password.
+      default_admin_credentials_active: false,
       session_ttl_days: 7,
     };
   });
@@ -75,44 +75,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     return { ...ticket, job_id: body.job_id, purpose: body.purpose };
   });
 
-  app.post("/auth/bootstrap", async (req, reply) => {
-    const n = await countUsers();
-    if (n > 0) return reply.code(409).send({ error: "已有用户，无法 bootstrap", error_code: "ALREADY_BOOTSTRAPPED" });
-    const body = z
-      .object({
-        username: z.string().min(2).max(64),
-        password: z.string().min(8).max(200),
-        display_name: z.string().max(100).optional(),
-      })
-      .parse(req.body);
-    try {
-      const user = await createUser({
-        username: body.username,
-        password: body.password,
-        display_name: body.display_name,
-        role: "admin",
-        created_by: "bootstrap",
-      });
-      const session = await loginUser(body.username, body.password, {
-        ip: req.ip,
-        userAgent: req.headers["user-agent"],
-      });
-      await audit(req, {
-        action: "auth.bootstrap",
-        resourceType: "user",
-        resourceId: user.id,
-        after: { username: user.username, role: user.role },
-      });
-      return reply.code(201).send({
-        user: session.user,
-        token: session.token,
-        expires_at: session.expires_at,
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      const code = e && typeof e === "object" && "code" in e ? String((e as { code: string }).code) : "BOOTSTRAP_FAILED";
-      return reply.code(400).send({ error: msg, error_code: code });
-    }
+  // Kept as a fail-closed route so old clients cannot claim an empty database.
+  app.post("/auth/bootstrap", async (_req, reply) => {
+    if (await countUsers() > 0) return reply.code(409).send({ error: "已有用户，无法 bootstrap", error_code: "ALREADY_BOOTSTRAPPED" });
+    return reply.code(403).send({ error: "首个管理员必须由部署秘密初始化", error_code: "BOOTSTRAP_REQUIRES_DEPLOYMENT_SECRET" });
   });
 
   app.post("/auth/login", async (req, reply) => {

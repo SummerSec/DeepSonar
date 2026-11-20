@@ -12,10 +12,10 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 
 #1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入；原字节 Gateway 守卫不变。映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，同 UID 隔离、诊断/审计与生产验证未交付。
 
-#1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，沿用默认优先及原 Job 恢复身份/预算门；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
+#1002 P1-8 与 #1078/#1096 的[同质账号池选择](architecture/06-runtime-view.md#凭据与-cli-解析757)在当前授权的同 Provider/CLI/模型候选内，先保留仍有余量的冻结恢复身份，再选择仍有余量的默认账号，其余按并发余量及稳定并列规则选择。readiness 读取负载投影，恢复继续核验冻结身份与预算。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-20
 > **进度消费与保活（#1092）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)记录 chunk/RPC 的协作 I/O 让出和普通多行文本脱敏优化，保留完整进度、转义/畸形 OM 隐私与退出诊断。独立 Worker＋真实 Undici 的回归接既有 Actions，最终 head 见 PR #1093；无任务重跑或部署。
 > **可行动人工请求（2026-11-09）**：严格 guidance、完整 body_json、L0/L1 按需读取、waiting_human 当前 Scheduler 投影及同 Job 待办去重已同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](architecture/01-system-specification.md)、[接口/运行时视图](architecture/09-interface-specs.md#可行动人工请求2026-11-09)和[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。消息账本、恢复准入、ACK 和完成仍独立；最终 SHA Actions 待验，注意力收益未测量。
 > **Pi 请求错误诊断（#1083）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)与[运行时视图](architecture/06-runtime-view.md#pi-请求失败诊断与恢复分类1083)记录允许名单化错误阶段/cause 投影、分类与恢复许可分离及共享 DSH reader 边界。请求包装失败不新增 CLI 重启或未知效果重放；本轮最终 SHA Actions 待验，原失败根因未全部确定。
@@ -25,6 +25,8 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 > **Pi 模型预算与截断（#958）**：[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)记录发现声明/显式配置/CLI 观测分层、创建期冻结、同 Session 有界恢复及压缩无进展停止；不扩大权限/额度，不伪造上下文证据。行为回归与实际锁版本 SDK、HTTP/PG 入口已接既有 Actions，最终 SHA 待验；本地与生产验证均未执行。
 > **#951 完成失败诊断**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。核心缺诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA 另验，全量覆盖和生产归因仍未验证。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
+
+#1123 的[默认不限调度配额](architecture/06-runtime-view.md#默认不限的调度配额1123)使用全局 null 不限、项目 null 继承和项目 0 暂停。显式数字及环境变量保留，缺省采用新 null 契约，设置输入与生效值分开展示；正常 HTTP/claim 与 DOM 回归已接线，最终 SHA Actions 待验。
 
 > **v0.6.16 发布准备（2026-11-07）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)：compare 为 `v0.6.15...v0.6.16`，前一版本取最高既有 tag v0.6.15（其 Release 在 Chrome / ClickHouse 子镜像失败、未形成正式 Release，但仍参与比较，不移动旧 tag）。范围为 #944 与 #958，叠加已合入的 #971–#976、#961 P2/P3、#967、#945、#979，清单见 [CHANGELOG](../CHANGELOG.md)。**2026-11-07 的发布准备基线要求 schema 68**（v0.6.14/v0.6.15 均为 67，schema 68 由 #954/#960 引入，故本版是首个要求 68 的发布；无就地升级路径，非空库须先备份再按 `database/schema.sql` 重建）；该次发布准备不改 schema；后续 #1002 P1-7A 的集成目标见[数据架构](architecture/08-data-architecture.md)，发布时必须按最终源码重核，产品版本只由 tag 注入的 `DEEPSONAR_VERSION` 决定。#984 与 #989 需先合并并通过适用 Actions，之后才打不可变 `v0.6.16`；最终 main Actions 与正式产物成功状态分别核对。
 

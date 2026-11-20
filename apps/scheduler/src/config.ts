@@ -52,6 +52,16 @@ function usageLimit(name: string, max: number, allowUnlimited = false): number {
   if (process.env.DEEPSONAR_OFFLINE_PREFLIGHT === "1") return 0;
   throw new Error(`[config] ${name} must be an integer between 0 and ${max}`);
 }
+/** Missing concurrency caps are unlimited. Explicit invalid caps reject startup. */
+function concurrencyLimit(name: string): number | null {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return null;
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 1 && value <= 1000) return value;
+  configInputErrors.add(name);
+  if (process.env.DEEPSONAR_OFFLINE_PREFLIGHT === "1") return null;
+  throw new Error(`[config] ${name} must be an integer between 1 and 1000, or blank for unlimited`);
+}
 /** Bounded positive integer configuration; invalid or out-of-range values use the safe default. */
 function boundedInt(name: string, dflt: number, max: number): number {
   const v = Number(process.env[name]);
@@ -168,10 +178,10 @@ export const config = {
   },
 
   limits: {
-    maxGlobalJobs: int("MAX_GLOBAL_JOBS", 20),
-    maxJobsPerProject: int("MAX_JOBS_PER_PROJECT", 5),
+    maxGlobalJobs: concurrencyLimit("MAX_GLOBAL_JOBS"),
+    maxJobsPerProject: concurrencyLimit("MAX_JOBS_PER_PROJECT"),
     /** Provisioning admission 兜底；落库的全局规则拥有最终权威。 */
-    maxConcurrentProvisioning: boundedInt("PROVISION_CONCURRENCY", 2, 1000),
+    maxConcurrentProvisioning: concurrencyLimit("PROVISION_CONCURRENCY"),
     maxFollowupsPerJob: int("MAX_FOLLOWUPS_PER_JOB", 60),
     maxFollowupDepth: int("MAX_FOLLOWUP_DEPTH", 12),
     maxAutoRetries: int("MAX_AUTO_RETRIES", 6),

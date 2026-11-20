@@ -119,6 +119,7 @@ services:
       SCHEDULER_HOST: 0.0.0.0
       SCHEDULER_PORT: 3100
       DEEPSONAR_AUTH_REQUIRED: "true"
+      DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap-admin/password
       BLOB_STORE: ${BLOB_STORE:-s3}
       BLOB_S3_ENDPOINT: ${BLOB_S3_ENDPOINT:-http://silo:9000}
       BLOB_S3_REGION: ${BLOB_S3_REGION:-us-east-1}
@@ -148,6 +149,8 @@ services:
     volumes:
       - blob_data:/app/data
       - ./master.key:/run/secrets/deepsonar_master_key:ro
+      # Empty directory on existing installs is safe: Scheduler checks the users table before reading.
+      - ./bootstrap-admin:/run/secrets/bootstrap-admin:ro
       - gateway_upstream:/run/deepsonar-gateway
     depends_on:
       postgres:
