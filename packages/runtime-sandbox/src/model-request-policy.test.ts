@@ -18,7 +18,7 @@ import { shellQuote, type RuntimeHost } from "./runtime-host.js";
 import { CLAUDE_PRIVATE_KEY_HELPER_SOURCE } from "./private-credential-reader.js";
 
 const claudeSettings = { apiKeyHelper: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs",
-  disableAllHooks: false, hooks: { PostToolUse: [{ hooks: [{ type: "command",
+  hooks: { PostToolUse: [{ hooks: [{ type: "command",
     command: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs --post-tool-use", timeout: 10 }] }] } };
 
 const privateAuth = privateJobFixture();
@@ -233,6 +233,43 @@ test("byte validation preserves every compliant byte and refuses required policy
       assert.throws(() => file.api.prepareModelRequestBytes(Buffer.from(duplicate), "/v1/chat/completions", allowance));
     }
   } finally { await file.close(); }
+});
+
+test("Claude start and resume reject effective hook disabling before allowance without changing settings", async () => {
+  const file = await fixture();
+  let requests = 0;
+  const server = http.createServer((_req, res) => {
+    requests++;
+    res.setHeader("content-type", "application/json");
+    res.end('{"remaining_tokens":null,"policy_required":true}');
+  });
+  const environment = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${await listen(server)}/gateway`, ...privateAuth.environment };
+  const originalEnvironment = structuredClone(environment);
+  try {
+    for (const command of ["claude -p", "claude -p --resume fixture"]) {
+      for (const disabled of [true, null, 0, 1, "false", undefined]) {
+        const settings = [{ disableAllHooks: false }, { disableAllHooks: disabled,
+          hooks: { SessionStart: [{ hooks: [{ type: "command", command: "retained legacy hook" }] }] } },
+          { env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "5" } }];
+        const original = structuredClone(settings);
+        const before = requests;
+        await assert.rejects(file.api.prepareClaudeLaunch(command, environment, settings),
+          { message: "MODEL_REQUEST_POLICY_HOOKS_DISABLED" });
+        assert.equal(requests, before, "a later settings object without this field cannot clear disabling");
+        assert.deepEqual(settings, original);
+      }
+      const settings = [{ disableAllHooks: true, hooks: { PreToolUse: [] } }, { disableAllHooks: false }];
+      const original = structuredClone(settings);
+      const before = requests;
+      const prepared = await file.api.prepareClaudeLaunch(command, environment, settings);
+      assert.equal(requests, before + 1, "an explicit later false permits the normal allowance read");
+      assert.equal(prepared.command, command + " --settings " + shellQuote(JSON.stringify(claudeSettings)));
+      assert.deepEqual(settings, original);
+      assert.deepEqual(environment, originalEnvironment);
+      assert.doesNotMatch(prepared.command, /disableAllHooks/u,
+        "the generated override must not turn legacy hooks back on");
+    }
+  } finally { await close(server); await file.close(); }
 });
 
 test("Claude launch and resume prepare the native output option before the CLI forms requests", async () => {

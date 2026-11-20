@@ -307,11 +307,12 @@ export function claudeOutputCap(allowance, ceilings = []) {
 // live process would require rewriting the body or restarting the CLI mid-turn, which
 // the accepted 2026-11-06 scope excludes; session resume is the supported boundary.
 export async function prepareClaudeLaunch(command, environment, settings = []) {
+  const hookSettings = settings.findLast(setting => setting && Object.hasOwn(setting, 'disableAllHooks'));
+  if (hookSettings && hookSettings.disableAllHooks !== false) fail('MODEL_REQUEST_POLICY_HOOKS_DISABLED');
   const allowance = await readLaunchAllowance(new URL(environment.DEEPSONAR_REQUEST_POLICY_UPSTREAM), readPrivateCredential(environment.DEEPSONAR_GATEWAY_TOKEN_FILE));
   const cap = claudeOutputCap(allowance, [environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...settings.map(setting => setting?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)]);
   const configuration = JSON.stringify({
     apiKeyHelper: ${JSON.stringify("node " + CLAUDE_PRIVATE_HELPER_PATH)},
-    disableAllHooks: false,
     hooks: { PostToolUse: [{ hooks: [{ type: 'command',
       command: ${JSON.stringify("node " + CLAUDE_PRIVATE_HELPER_PATH + " --post-tool-use")}, timeout: 10 }] }] },
     ...(cap === null ? {} : { env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } }),
@@ -334,8 +335,10 @@ async function launch() {
   if (process.argv.slice(2,delimiter).includes('--claude-launch-budget')) {
     try {
       const settings = [];
-      for (const file of new Set([path.join(process.env.HOME ?? '/workspace/.deepsonar-home','.claude/settings.json'),
+      const configDirectory = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME ?? '/workspace/.deepsonar-home','.claude');
+      for (const file of new Set([path.join(configDirectory,'settings.json'),
         path.join(process.cwd(),'.claude/settings.json'), path.join(process.cwd(),'.claude/settings.local.json')])) {
+        // Only an absent file is ignored. Validation and policy failures propagate.
         try { settings.push(JSON.parse(await readFile(file,'utf8'))); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
@@ -362,6 +365,9 @@ async function launch() {
   child.once('exit',(code,signal) => { void finish(code ?? (signal === 'SIGINT' ? 130 : 143)); });
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  launch().catch(() => { process.stderr.write('MODEL_REQUEST_POLICY_START_FAILED\n'); process.exitCode = 78; });
+  launch().catch(error => {
+    const code = error?.message === 'MODEL_REQUEST_POLICY_HOOKS_DISABLED' ? error.message : 'MODEL_REQUEST_POLICY_START_FAILED';
+    process.stderr.write(code + '\n'); process.exitCode = 78;
+  });
 }
 `;

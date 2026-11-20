@@ -146,6 +146,65 @@ async function bytes(req: http.IncomingMessage) {
   return Buffer.concat(chunks);
 }
 
+test("Claude disabled hooks in a custom config directory reject before legacy hooks and upstream IO", { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "claude-disabled-hooks-"));
+  const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);
+  const home = path.join(dir, "home"), configDirectory = path.join(dir, "custom-config");
+  const sessionMarker = path.join(dir, "legacy-session-start"), toolMarker = path.join(dir, "legacy-pre-tool-use");
+  await mkdir(credentials, { mode: 0o700 });
+  await mkdir(path.join(home, ".claude"), { recursive: true });
+  await mkdir(configDirectory);
+  const homeSettings = JSON.stringify({ disableAllHooks: false });
+  const disabledSettings = JSON.stringify({ disableAllHooks: true, hooks: {
+    SessionStart: [{ hooks: [{ type: "command", command: `touch ${JSON.stringify(sessionMarker)}` }] }],
+    PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: `touch ${JSON.stringify(toolMarker)}` }] }],
+  } });
+  await writeFile(path.join(home, ".claude/settings.json"), homeSettings);
+  await writeFile(path.join(configDirectory, "settings.json"), disabledSettings);
+  await writeFile(path.join(credentials, "gateway-token"), token, { mode: 0o600 });
+  let requests = 0;
+  const server = http.createServer((_req, res) => {
+    requests++;
+    res.writeHead(200, { "content-type": "application/json" }).end('{"remaining_tokens":null,"policy_required":true}');
+  });
+  let child: ChildProcess | undefined;
+  try {
+    const upstream = await listen(server);
+    const fixture = JSON.parse(await readFile("/acceptance/runtime-fixture.json", "utf8"));
+    const script = path.join(dir, "policy.mjs");
+    await writeFile(script, fixture.policySource);
+    child = spawn(process.execPath, [script, "--claude-launch-budget", "--",
+      "claude -p --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash"], {
+      cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: configDirectory,
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:38127/gateway", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", MAX_THINKING_TOKENS: "0",
+        DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway",
+        DEEPSONAR_GATEWAY_TOKEN_FILE: path.join(credentials, "gateway-token"),
+        DEEPSONAR_CONTROL_TOKEN_FILE: undefined, DEEPSONAR_OM_GATEWAY_TOKEN_FILE: undefined },
+    });
+    let stdout = "", stderr = "";
+    child.stdout!.on("data", chunk => { stdout += chunk; });
+    child.stderr!.on("data", chunk => { stderr += chunk; });
+    child.stdin!.on("error", () => {}); // An admission refusal can close stdin before the fixture write completes.
+    const timeout = setTimeout(() => child!.kill("SIGTERM"), 30_000);
+    const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child!.once("error", reject);
+      child!.once("close", (code, signal) => resolve({ code, signal }));
+      child!.stdin!.end(fixture.encodedInput);
+    }).finally(() => clearTimeout(timeout));
+    assert.deepEqual(outcome, { code: 78, signal: null });
+    assert.equal(stdout, "");
+    assert.equal(stderr, "MODEL_REQUEST_POLICY_HOOKS_DISABLED\n", "the inner file-read catch must preserve the policy refusal");
+    assert.equal(requests, 0, "even the allowance endpoint must remain untouched");
+    for (const marker of [sessionMarker, toolMarker]) await assert.rejects(readFile(marker), { code: "ENOENT" });
+    assert.equal(await readFile(path.join(configDirectory, "settings.json"), "utf8"), disabledSettings);
+    assert.equal(await readFile(path.join(home, ".claude/settings.json"), "utf8"), homeSettings);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    await close(server); await rm(dir, { recursive: true, force: true });
+  }
+});
+
 for (const mode of ["success", "failed-tool", "failed-hook", "residual-input"] as const)
 test(`#1032 Claude native credential-file projection ${mode}`, { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "claude-private-text-"));

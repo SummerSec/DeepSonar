@@ -205,6 +205,8 @@ Pi 使用 auth store，models.json 不含 key 或环境占位符。Claude 使用
 
 ## 普通文本凭据出口（#1032）
 
+Claude start/resume 先读取 `CLAUDE_CONFIG_DIR/settings.json`（未配置目录时使用 `HOME/.claude/settings.json`），再读取当前项目的 `.claude/settings.json` 和 `.claude/settings.local.json`。最后一个显式 `disableAllHooks` 字段决定有效值，后置的严格 `false` 可覆盖前面的禁用；字段缺省沿用 CLI 默认。有效字段为其他值时，launcher 在额度查询和 CLI 启动前以固定 `MODEL_REQUEST_POLICY_HOOKS_DISABLED`、退出码 78 拒绝，旧 SessionStart / PreToolUse hook 均不会执行。生成的 override 只注入受治理认证、成功输出钩子与预算字段，原设置文件保留原字节。文件读取仅忽略 ENOENT，清理层 catch 重新抛出拒绝，顶层 catch 保留该固定码。单测覆盖 start/resume、优先级及输入不变，native 夹具使用自定义配置目录的 true 和两种旧 hook marker，要求零上游请求、零 marker、退出 78；新增用例仍待最终 SHA Actions 验收。
+
 核对基线为 2026-11-20 的 #1169 本地候选，映射 NFR-SEC-003 / FR-CRED-003。issue 的 P0-1 要求模型出口精确保护，补充评论 [6746237481](https://github.com/SummerSec/DeepSonar/issues/1032#issuecomment-6746237481) 将 A1 扩为认证文件普通读取不可得或按已登记值脱敏。A2 在正文标为远期，评论 [6823496195](https://github.com/SummerSec/DeepSonar/issues/1032#issuecomment-6823496195) 仍待决定是否立项。
 
 | 入口 | 当前处理 | Actions 回归入口 |
