@@ -1,5 +1,7 @@
 # DeepSonar 系统架构设计
 
+#1133 将 FR-VERIFY-005 / FR-DEV-002 的人工技术决定与补证设备冻结接到[接口视图](09-interface-specs.md#人工结束技术验证1133)、运行时视图及既有设备专题，新增轮次与持久审计使用现有数据结构。最终 SHA Actions 待验。
+
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
 > 同步日期：2026-11-19
 
@@ -58,7 +60,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 ## 1. 阅读路径与目录
 
-#1074 的 [ADR 0024](adr/0024-restricted-human-session-import.md)在原持久请求与预算边界内增加 Pi/Claude 受限主会话文字导入，DSH unsupported + structured；具体能力矩阵与原生 Actions 接线见[人工续做专题](../HUMAN_CONTINUATION.md)。
+#1074 的 [ADR 0025](adr/0025-restricted-human-session-import.md)在原持久请求与预算边界内增加 Pi/Claude 受限主会话文字导入，DSH unsupported + structured；具体能力矩阵与原生 Actions 接线见[人工续做专题](../HUMAN_CONTINUATION.md)。
 
 | 文件 | 回答的问题 | 状态 |
 | --- | --- | --- |

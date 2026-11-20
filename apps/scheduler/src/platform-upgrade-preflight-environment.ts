@@ -17,6 +17,12 @@ export function validatePreflightEnvironment(snapshot: PreflightSnapshot, block:
   for (const [key, allowed] of Object.entries({ AGENT_MODE: ["real", "fake"], SANDBOX_PROVIDER: ["opensandbox"], OPEN_SANDBOX_PROTOCOL: ["http", "https"], MIN_VERIFY_SEVERITY: ["critical", "high", "medium", "low", "info"] })) {
     if (env[key] !== undefined && !allowed.includes(env[key])) invalid(key);
   }
+  for (const key of ["MAX_GLOBAL_JOBS", "MAX_JOBS_PER_PROJECT", "PROVISION_CONCURRENCY"]) {
+    const raw = env[key];
+    if (raw === undefined || raw.trim() === "") continue;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 1000) invalid(key);
+  }
   if (env.BLOB_STORE && !["fs", "s3"].includes(env.BLOB_STORE.toLowerCase())) invalid("BLOB_STORE");
   if (env.BLOB_S3_FORCE_PATH_STYLE && !/^(1|0|true|false|yes|no|on|off)$/i.test(env.BLOB_S3_FORCE_PATH_STYLE)) invalid("BLOB_S3_FORCE_PATH_STYLE");
   if (env.OPEN_SANDBOX_DOMAIN && (!validConfigurationUrl(`http://${env.OPEN_SANDBOX_DOMAIN}`) || /[/?#@]/.test(env.OPEN_SANDBOX_DOMAIN))) invalid("OPEN_SANDBOX_DOMAIN");

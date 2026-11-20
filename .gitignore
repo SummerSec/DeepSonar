@@ -19,3 +19,6 @@ deploy/master.key
 deploy/.upgrade/
 
 /artifacts/plan-replay/
+# Deployment-only human administrator seed (never commit or copy into builds).
+deploy/bootstrap-admin/
+.deepsonar-bootstrap-admin

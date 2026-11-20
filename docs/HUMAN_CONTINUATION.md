@@ -83,7 +83,7 @@ structured 模式恢复验证后的业务文件、原问题、用户回复和有
 
 ## 注意力成本与验收
 
-维护预检直接重核断点过期时间，避免后台清理尚未执行时把已过期的 ready 记录当作可安全维护的等待任务。隔离 PostgreSQL 回归覆盖合法封存、过期窗口、退出证明缺失、沙箱残留、未决效果、旧 Control token 与新 Attempt 归属，接既有 `pnpm ci:unit:migrations`。本次最终 SHA 的 Actions 待验。
+维护预检同时要求 manifest 的版本是 JSON 数字 2。v0.6.20 的 v1 文件项缺少 mode，仍可续接的 waiting_human（含已回复但未续接）不能豁免活动任务门，正常升级返回 ACTIVE_SOURCE_JOBS；保持源清单不变，应先在原版本完成或通过既有管理操作明确结束等待，再重新预检。不补权限、不改写或迁移 v1，不放宽 v2-only 恢复。维护预检直接重核断点过期时间，避免后台清理尚未执行时把已过期的 ready 记录当作可安全维护的等待任务。隔离 PostgreSQL 回归覆盖合法封存、过期窗口、退出证明缺失、沙箱残留、未决效果、旧 Control token 与新 Attempt 归属，接既有 `pnpm ci:unit:migrations`。本次最终 SHA 的 Actions 待验。
 
 | 触发 | 用户看到 | 需要的动作 | 失败反馈 |
 | --- | --- | --- | --- |

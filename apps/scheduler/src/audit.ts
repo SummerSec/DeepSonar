@@ -96,10 +96,19 @@ export function credentialAuditState(input: {
 
 /** 从请求上下文写审计（actor 由 authHook 放置；无 actor 记 anonymous，如认证失败） */
 export async function audit(req: FastifyRequest, entry: AuditEntry): Promise<void> {
-  const actor = req.actor;
   try {
-    await sql`
-      INSERT INTO audit_logs ${sql({
+    await recordDurableAudit(req, entry, sql);
+  } catch (e) {
+    // 审计失败不阻断业务，但必须留痕（否则静默丢审计）
+    console.error(`[audit] 写入失败 ${entry.action}:`, e instanceof Error ? e.message : e);
+  }
+}
+
+/** 人工决策与审计使用同一事务，写入失败必须回滚决策。 */
+export async function recordDurableAudit(req: FastifyRequest, entry: AuditEntry, db: typeof sql): Promise<void> {
+  const actor = req.actor;
+  await db`
+      INSERT INTO audit_logs ${db({
         actor_type: actor?.type ?? "anonymous",
         actor_id: actor?.name ?? "anonymous",
         action: entry.action,
@@ -109,15 +118,11 @@ export async function audit(req: FastifyRequest, entry: AuditEntry): Promise<voi
         request_id: (req.id as string) ?? null,
         ip: req.ip ?? null,
         user_agent: (req.headers["user-agent"] as string)?.slice(0, 300) ?? null,
-        before_json: entry.before === undefined ? null : sql.json(entry.before as never),
-        after_json: entry.after === undefined ? null : sql.json(entry.after as never),
+        before_json: entry.before === undefined ? null : db.json(entry.before as never),
+        after_json: entry.after === undefined ? null : db.json(entry.after as never),
         result: entry.result ?? "ok",
         error_code: entry.errorCode ?? null,
       })}`;
-  } catch (e) {
-    // 审计失败不阻断业务，但必须留痕（否则静默丢审计）
-    console.error(`[audit] 写入失败 ${entry.action}:`, e instanceof Error ? e.message : e);
-  }
 }
 
 type SystemAuditEntry = AuditEntry & { actorId?: string };
