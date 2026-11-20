@@ -717,7 +717,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。
 
-#1032 的 [Pi context 凭据投影首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)在 SDK 生成前共用当前 main/Control/OM token 的精确替换，不改已生成请求、认证、预算与回执。工具读取 env 和认证文件、错误及 OM 来源的回归接上述 runtime-sandbox、锁版本 request-budget-sdk 与原生 om-provider-headers；最终 SHA Actions 待验，同 UID 凭据隔离和 deny 诊断/审计仍未交付。
+#1032 的 [Pi context 凭据投影首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)在 SDK 生成前共用当前 main/Control/OM token 的精确替换，不改已生成请求、认证、预算与回执。工具读取 env 和认证文件、错误及 OM 来源的回归接上述 runtime-sandbox、锁版本 request-budget-sdk 与原生 om-provider-headers。五处 Gateway 凭据拒绝共用无标签计数 `deepsonar_gateway_credential_leak_total` 与安全审计；Claude HTTP 400 JSON 拒绝沿稳定类型分类并持久化 Job/Attempt 失败，回归接 platform-api、job-lifecycle 与 recovery，详见[拒绝观测与持久化](../MODEL_GATEWAY_TRANSPARENCY.md#凭据拒绝的审计留痕1032-观测片)。最终 SHA Actions 待验，A2 同 UID 身份隔离保持远期边界。
 
 #1097 的 [managed proxy 逐跳隔离](../MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)回归接现有 `pnpm ci:unit:runtime-sandbox`，覆盖连接广告归属与内容/流式边界；最终 SHA Actions 另验，不回填历史模型错误原因。
 

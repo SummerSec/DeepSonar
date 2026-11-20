@@ -6,8 +6,8 @@
  * Pi CLI 把该拒绝折叠成进程退出短语，文本形态取决于 provider 适配：
  * Anthropic 路径是 `error: 400: Job credential in body`；锁定的 Pi 1.5.2
  * 对 `openai-responses`（非 Anthropic Pi 配置的默认 provider）经
- * `formatProviderError` 产出 `<provider> API error (400): <body>`。两种
- * 封装都识别回平台的稳定错误码，使 Job 失败不再是 CLI 黑话，并且该失败
+ * `formatProviderError` 产出 `<provider> API error (400): <body>`。Claude 保留
+ * HTTP 400 JSON 外壳时按精确 error.type 识别。上述封装均映射为稳定错误码，并且该失败
  * **永不进入任何自动重试预算**（provision / 流截断 / 上下文窗口）：token
  * 一旦进入模型可见面对当前 Attempt 即为永久拒绝，只有平台侧（后续
  * #1032 P0-2 认证隔离）能修复发生条件，模型无法 un-see。
@@ -23,7 +23,16 @@ const CREDENTIAL_IN_BUSINESS_DATA_RE =
   /(?:(?:^|: )400:|\(\s*400\s*\)\s*:)\s*Job credential in (?:request target|body|upstream target|business data|trailers)(?:[:\s]|$)/i;
 
 export function isCredentialInBusinessDataMessage(text: string): boolean {
-  return CREDENTIAL_IN_BUSINESS_DATA_RE.test(text);
+  if (CREDENTIAL_IN_BUSINESS_DATA_RE.test(text)) return true;
+  // Claude can retain the HTTP error body instead of folding error.message.
+  // Require both HTTP 400 and the exact JSON type, never a bare code mention.
+  const body = /\b400:?\s+(\{[\s\S]*\})\s*$/u.exec(text)?.[1];
+  if (!body) return false;
+  try {
+    return JSON.parse(body)?.error?.type === CREDENTIAL_IN_BUSINESS_DATA_REASON;
+  } catch {
+    return false;
+  }
 }
 
 export function formatCredentialInBusinessDataMessage(message: string): string {

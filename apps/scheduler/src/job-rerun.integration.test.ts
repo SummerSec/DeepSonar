@@ -127,6 +127,10 @@ if (!testDatabaseUrl) {
         const { runCreateFailureDispatchFixture } = await import("./dispatch-create-circuit.fixture.js");
         await runCreateFailureDispatchFixture(sql, projectId, roleName, baselineSnapshot);
       });
+      await t.test("#1032 Claude credential refusal persists through actual Dispatcher failure", async () => {
+        const { runCredentialRefusalDispatchFixture } = await import("./dispatch-credential-refusal.fixture.js");
+        await runCredentialRefusalDispatchFixture(sql, projectId, roleName, baselineSnapshot);
+      });
       const attemptIdentity = (
         snapshot: Awaited<ReturnType<typeof currentSnapshot>>,
       ) => ({

@@ -9,6 +9,7 @@ import { MODEL_REQUEST_POLICY_SOURCE } from "@deepsonar/runtime-sandbox";
 import { createServer, request, type IncomingMessage } from "node:http";
 import { connect } from "node:net";
 import { gzipSync } from "node:zlib";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import postgres from "postgres";
 import { anthropicUsageShapeCases } from "./gateway-usage-shape-fixture.js";
@@ -23,13 +24,14 @@ const read = async (stream: IncomingMessage): Promise<Buffer> => {
   for await (const chunk of stream) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks);
 };
-function send(port: number, path: string, method: string, headers: string[], chunks: Buffer[] = []): Promise<Response> {
+function send(port: number, path: string, method: string, headers: string[], chunks: Buffer[] = [], trailers: [string, string][] = []): Promise<Response> {
   return new Promise((resolve, reject) => {
     const outgoing = request({ host: "127.0.0.1", port, path, method, headers: ["host", `127.0.0.1:${port}`, ...headers] }, (response) => {
       void read(response).then(body => resolve({ status: response.statusCode!, headers: response.rawHeaders, body }), reject);
     });
     outgoing.on("error", reject);
     for (const chunk of chunks) outgoing.write(chunk);
+    if (trailers.length) outgoing.addTrailers(trailers);
     outgoing.end();
   });
 }
@@ -286,7 +288,13 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     });
     await t.test("Job token in a business header or body is rejected before forwarding", async () => {
       const before = captured.length;
-      const headerLeak = await via("/v1/messages", "GET", ["x-business-data", `prefix-${token.plaintext}`]);
+      const { renderMetrics } = await import("./metrics.js");
+      const metricName = "deepsonar_gateway_credential_leak_total";
+      const counter = (text: string) => Number(text.match(new RegExp(`^${metricName} (\\d+)$`, "m"))?.[1] ?? 0);
+      const beforeMetric = counter(await renderMetrics());
+      const [{ n: beforeAudits }] = await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='gateway.credential_denied'`;
+      const headerLeak = await via("/v1/messages", "GET", ["x-business-data", `prefix-${token.plaintext}`,
+        "user-agent", token.plaintext, "x-request-id", token.plaintext]);
       assert.equal(headerLeak.status, 400);
       const bodyLeak = await via("/v1/messages", "POST", ["content-type", "application/octet-stream"], [Buffer.from(token.plaintext)]);
       assert.equal(bodyLeak.status, 400);
@@ -303,12 +311,44 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         ["content-type", "application/json", "content-encoding", "gzip"],
         [gzipSync(Buffer.from(JSON.stringify({ debug: token.plaintext })))]);
       assert.equal(compressedLeak.status, 400);
+      const trailerLeak = await send(gatewayPort, "/gateway/v1/messages", "POST",
+        [...auth, "transfer-encoding", "chunked", "trailer", "x-business-data"], [Buffer.from("safe body")],
+        [["x-business-data", token.plaintext]]);
+      assert.equal(trailerLeak.status, 400);
+      // A governed base URL can itself contain the Job token. Keep its frozen
+      // binding valid so the test reaches the independent upstream-target guard.
+      try {
+        await sql`UPDATE credentials SET public_metadata_json=${sql.json({ base_url: `http://127.0.0.1:${address.port}/v1/${token.plaintext}` })}
+          WHERE id=${credentialId}`;
+        const [changed] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
+        await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{gateway_provider_binding}',
+          ${sql.json(freezeGatewayProviderBinding(changed as never) as never)}) WHERE id=${jobId}`;
+        assert.equal((await via("/v1/messages")).status, 400);
+      } finally {
+        await sql`UPDATE credentials SET public_metadata_json=${sql.json({ base_url: `http://127.0.0.1:${address.port}/v1` })}
+          WHERE id=${credentialId}`;
+        await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{gateway_provider_binding}',
+          ${sql.json(binding as never)}) WHERE id=${jobId}`;
+      }
       assert.equal(captured.length, before);
+      const metrics = await renderMetrics();
+      assert.equal(counter(metrics), beforeMetric + 12, "every rejected request increments once across all five guards");
+      assert.ok(metrics.includes(`# HELP ${metricName} `));
+      assert.ok(metrics.includes(`# TYPE ${metricName} counter\n`));
+      assert.ok(!metrics.includes(token.plaintext));
+      // Audit writes are best effort and asynchronous. Wait for their actual
+      // commit, then assert exact multiplicity rather than a partial lower bound.
+      const auditDeadline = Date.now() + 5_000;
+      while (true) {
+        const [{ n }] = await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='gateway.credential_denied'`;
+        if (n >= beforeAudits + 12 || Date.now() >= auditDeadline) break;
+        await delay(10);
+      }
       // #1032: 每次凭据拒绝都必须留下可审计痕迹，而痕迹本身不得携带凭据或请求元数据。
       const denials = await sql`SELECT actor_type, actor_id, action, project_id, resource_type, resource_id,
           request_id, ip, user_agent, result, error_code, after_json
         FROM audit_logs WHERE action = 'gateway.credential_denied' ORDER BY id ASC`;
-      assert.ok(denials.length >= 4, "each credential surface records one denial trace");
+      assert.equal(denials.length, beforeAudits + 12, "each credential rejection records exactly one denial trace");
       const surfaces = new Set<string>();
       for (const row of denials) {
         assert.equal(row.actor_type, "system", "denial audit must not persist request actor metadata");
@@ -326,8 +366,8 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         assert.equal((row.after_json as Record<string, unknown>).job_id, jobId);
         surfaces.add(String((row.after_json as Record<string, unknown>).surface));
       }
-      assert.deepEqual([...surfaces].sort(), ["body", "request_target", "upstream_data"],
-        "body, request target and business-header rejections each name their surface");
+      assert.deepEqual([...surfaces].sort(), ["body", "request_target", "trailers", "upstream_data", "upstream_target"],
+        "all five credential guards retain their fixed audit surface");
       assert.ok(!JSON.stringify(denials).includes(token.plaintext), "audit entries never echo the credential");
     });
     await t.test("duplicate policy members cannot exploit different upstream JSON parsers", async () => {
