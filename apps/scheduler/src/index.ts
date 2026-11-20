@@ -36,7 +36,7 @@ import { dispatcherRuntimeStatus, markDispatcherEnabled } from "./startup-status
 import { normalizePendingJobPriorities, scrubLeftoverStoredRules, scrubRedundantConfigSurface } from "./core.js";
 import { scrubIgnoredProjectRoleConfigIdentity } from "./domains/role-runtime-snapshot/index.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
-import { ensureDefaultAdmin } from "./users.js";
+import { ensureBootstrapAdmin } from "./users.js";
 import { refreshHostDiskPressure, startHostDiskMonitor } from "./host-disk.js";
 import { startRuntimeImageGc } from "./runtime-image-gc.js";
 import { seedLocalWorkerNode } from "./domains/worker-nodes/index.js";
@@ -112,12 +112,12 @@ async function main() {
   });
   await maintenance.refresh();
   if (!maintenance.identityMatches()) throw new Error("platform upgrade state does not authorize this runtime");
+  const bootstrapAdmin = await ensureBootstrapAdmin();
+  if (bootstrapAdmin.created) console.log("[boot] 已通过部署秘密初始化管理员账号");
   const localWorker = await seedLocalWorkerNode();
   if (localWorker) {
     console.log(`[boot] execution-plane local worker ${localWorker.id} @ ${localWorker.endpoint}`);
   }
-  const defaultAdmin = await ensureDefaultAdmin();
-  if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   const scrubbed = await scrubIgnoredProjectRoleConfigIdentity(sql);
   if (scrubbed.runtime_image_keys > 0 || scrubbed.inherit_global_models > 0) {
     console.warn(
