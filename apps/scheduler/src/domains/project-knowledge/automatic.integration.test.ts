@@ -33,13 +33,41 @@ test("success registration is durable and idempotent under concurrent terminal c
     const logs = await db`SELECT after_json FROM audit_logs WHERE project_id=${source.projectId} AND action=${SOURCE_REGISTERED_ACTION}`;
     assert.equal(logs.length, 1);
     assert.deepEqual(logs[0]!.after_json, { version: 1, canvas_id: source.canvasId,
-      attempt_id: source.attemptId, has_facts: true, has_evidence: false });
+      attempt_id: source.attemptId, has_facts: true, has_evidence: false, has_feedback: false });
     const preview = await inspectAutomaticKnowledgeJob(db, source.projectId, source.jobId);
     assert.equal(preview.status, "eligible");
     assert.ok(preview.registration);
     assert.equal(JSON.stringify(preview).includes("private source body"), false);
     assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
     assert.equal((await db`SELECT id FROM jobs`).length, 1);
+  });
+});
+
+test("accepted feedback qualifies only the successful latest Attempt with its original request permission", async () => {
+  await withKnowledgeDatabase(async db => {
+    const source = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
+    await db`UPDATE jobs SET status='succeeded' WHERE id=${source.jobId}`;
+    await db`UPDATE job_attempts SET status='succeeded' WHERE id=${source.attemptId}`;
+    await db`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,feedback_json)
+      VALUES(${source.projectId},${source.jobId},${source.attemptId},'global:fixture',${"a".repeat(64)},
+        ${db.json({ outcome: "failure", next_action: "revise", reason: "private feedback",
+          evidence_refs: [{ kind: "asset", ref: randomUUID(), content_hash: "b".repeat(64) }] })})`;
+    const inspected = await inspectAutomaticKnowledgeJob(db, source.projectId, source.jobId);
+    assert.equal(inspected.status, "eligible");
+    assert.equal(inspected.has_feedback, true);
+    assert.equal(inspected.has_facts, false);
+    assert.equal(inspected.has_evidence, false);
+    await Promise.all([register(db, source), register(db, source)]);
+    const [audit] = await db`SELECT after_json FROM audit_logs WHERE resource_id=${source.jobId} AND action=${SOURCE_REGISTERED_ACTION}`;
+    assert.equal(audit!.after_json.has_feedback, true);
+    assert.doesNotMatch(JSON.stringify(audit!.after_json), /private feedback|evidence_refs/);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
+    await db`UPDATE jobs SET agent_snapshot_json='{"platform_tools":["record_knowledge_feedback"]}' WHERE id=${source.jobId}`;
+    assert.equal((await inspectAutomaticKnowledgeJob(db, source.projectId, source.jobId)).reason, "request_not_allowed");
+    await db`UPDATE jobs SET agent_snapshot_json='{"platform_tools":["request_project_knowledge"]}' WHERE id=${source.jobId}`;
+    await db`INSERT INTO job_attempts(job_id,attempt_no,status,phase,session_id)
+      VALUES(${source.jobId},2,'succeeded','terminal','latest-without-feedback')`;
+    assert.equal((await inspectAutomaticKnowledgeJob(db, source.projectId, source.jobId)).reason, "no_sources");
   });
 });
 

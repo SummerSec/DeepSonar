@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -194,7 +194,9 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 
 ## 来源登记与历史预览边界（#1035）
 
-成功来源登记仅含Scheduler审计元数据；GET历史预览重新检查资格并限制项目和分页，不授予历史执行权限、不创建知识Job，也不保证保留正文。本轮用户授权的collector按[ADR 0023](adr/0023-project-knowledge-collection.md)取代0021对批量整理的暂缓：CAS准备在短事务外，项目行锁下重新核验冻结整理权限、最新成功Attempt、未结算效果、项目/来源/hash与已处理记录，work和逐来源采集链接原子提交。不复活来源Job token，不把旧knowledge:auto工作迁移为新批次。超大、失权、未知效果或准备失败留下持久skipped，不自动重放外部效果或坏源热重试。
+本轮评审封闭 usage 反馈旁路：record_knowledge_feedback 只记录反馈，不返回 work_ref 或另启自动 work，成功 Job 的已接受反馈必须经普通来源登记及 collector 重新准入。原 Job 无冻结 request_project_knowledge 权限时不得以反馈扩权；仍核验成功 Attempt、精确 usage/target 版本/hash 和 evidence refs 的项目/读取权限，不复制跨项目来源正文。collector 的积累、间隔、连续失败停发及预算不可被逐反馈建链绕过。显式 request_project_knowledge 仍是独立获授权的请求入口，不由自动策略取代，也不得将 recorded 解释为显式请求或成功恢复。
+
+成功来源登记仅含Scheduler审计元数据；GET历史预览重新检查资格并限制项目和分页，不授予历史执行权限、不创建知识Job，也不保证保留正文。本轮用户授权的collector按[ADR 0023](adr/0023-project-knowledge-collection.md)取代0021对批量整理的暂缓：CAS准备在短事务外，项目行锁下重新核验冻结整理权限、最新成功Attempt、未结算效果、项目/来源/hash与已处理记录，work和逐来源采集链接原子提交。本轮 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 进一步要求锁内以 collector/wake/activity 共用数据库规则重验 4 来源或 24 小时、自动间隔 24 小时、连续无产出停发及繁忙状态；CAS 准备期间的准入变化不得被旧 ready 结果绕过。连续失败从持久 work/proposal 历史推导，重启、时间或治理 hash 变化不得清零，成功显式整理恢复仍不扩大原权限和预算。不复活来源 Job token，不把旧 knowledge:auto 工作迁移为新批次。32 候选中仅因本批容量放不下者不消费；单源超大、失权、未知效果等永久拒绝，以及瞬态准备失败耗尽后才持久 skipped，不自动重放外部效果或坏源热重试。
 
 自动批次与全部trial经[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)收紧stage工具与原授权交集、关闭出网、清角色预加载skills/modules/MCP等内容及共享资产；trial再清空普通知识/全局Skill目录。assignment.source_mode只标识治理来源，不授予权限。共同task_inputs必须显式选冻结材料，不能自动复制全部来源或把原结论当共同答案；平台核验引用，maker/reviewer承担语义泄漏审查。trial只接收专用Skill与当前arm，rubric限定eval/review audience，不以沙箱隔离宣称模型独立性或质量已证明。完整6×2矩阵、真实资产版本/hash和独立Job/Attempt证据门保留；只有target comparator fail可作对照，目标arm及全部安全组须pass，unexecuted/缺项/重复/未知效果不能激活，治理hash变化阻断旧work且不改历史。
 

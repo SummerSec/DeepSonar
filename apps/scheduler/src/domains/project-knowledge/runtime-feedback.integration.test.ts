@@ -92,9 +92,11 @@ test("Knowledge feedback survives domain, runtime registry and real Control HTTP
     const acceptedFeedback = await post("record_knowledge_feedback", feedback, keyA);
     assert.equal(acceptedFeedback.statusCode, 200, acceptedFeedback.body);
     assert.equal(acceptedFeedback.json().accepted, true);
+    assert.equal(acceptedFeedback.json().state, "recorded");
+    assert.equal(Object.hasOwn(acceptedFeedback.json(), "work_ref"), false);
     const [originalUsage] = await sql`SELECT feedback_json FROM project_knowledge_usages WHERE id=${feedback.usage_ref}`;
     const originalWork = await sql`SELECT id,trigger_key,input_manifest_json,reason FROM project_knowledge_work WHERE origin_job_id=${consumer.jobId} ORDER BY id`;
-    assert.equal(originalWork.length, 1);
+    assert.equal(originalWork.length, 0, "accepted feedback must not create work outside project collection");
     const conflictingFeedback = await post("record_knowledge_feedback", { ...feedback, reason: "replace the prior reason" }, keyB);
     assert.equal(conflictingFeedback.statusCode, 422, conflictingFeedback.body);
     const refusal = conflictingFeedback.json();

@@ -37,10 +37,18 @@ test("activity requests encode project and use bounded explicit pagination", asy
   const paths: string[] = [];
   globalThis.fetch = (async input => {
     paths.push(String(input));
-    return new Response(JSON.stringify({ summary: {}, items: [], next_offset: null }));
+    const page: KnowledgeActivity = {
+      collection: { state: "idle", pending_sources: 0, consecutive_failures: 0, next_collection_at: null },
+      summary: { registered_sources: 0, collected_sources: 0, skipped_sources: 0, pending_sources: 0,
+        active_memory: 0, active_skills: 0, draft_items: 0, completed_work: 0, blocked_work: 0,
+        usage_count: 0, feedback_count: 0, successful_feedback: 0 },
+      skipped_sources: [], items: [], next_offset: null,
+    };
+    return new Response(JSON.stringify(page));
   }) as typeof fetch;
   try {
-    await projectKnowledgeApi.activity("project/a");
+    const activity = await projectKnowledgeApi.activity("project/a");
+    assert.deepEqual(activity.collection, { state: "idle", pending_sources: 0, consecutive_failures: 0, next_collection_at: null });
     await projectKnowledgeApi.activity("project-b", { limit: 5, offset: 10 });
     assert.deepEqual(paths, ["/api/projects/project%2Fa/knowledge/activity?limit=10&offset=0",
       "/api/projects/project-b/knowledge/activity?limit=5&offset=10"]);
@@ -67,6 +75,7 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
   const container = dom.window.document.getElementById("root")!;
   let refreshRequests = 0;
   const page = (id: string, next: number | null = null): KnowledgeActivity => ({
+    collection: { state: "halted", pending_sources: 12, consecutive_failures: 2, next_collection_at: null },
     summary: { registered_sources: 24, collected_sources: 10, skipped_sources: 2, pending_sources: 12, active_memory: 1, active_skills: 2,
       draft_items: 3, completed_work: 4, blocked_work: 1, usage_count: 5, feedback_count: 2, successful_feedback: 1 },
     skipped_sources: [{ job_id: "skipped-a", reason: "source_input_limit", at: "2026-01-01" }],
@@ -90,6 +99,19 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     assert.match(container.textContent!, /Job 数量预算已耗尽/);
     assert.match(container.textContent!, /模型报告/);
     assert.match(container.textContent!, /不代表效果已证明/);
+    const collection = () => container.querySelector('[aria-label="自动整理状态"]')!;
+    assert.match(collection().textContent!, /自动整理已停发/);
+    assert.match(collection().textContent!, /待整理来源 12/);
+    assert.match(collection().textContent!, /连续无产出 2 批/);
+    assert.match(collection().textContent!, /来源已保留/);
+    assert.match(collection().textContent!, /修复.*成功.*显式.*整理/);
+    assert.match(collection().textContent!, /4 个来源.*24 小时/);
+    assert.match(collection().textContent!, /批次.*间隔 24 小时/);
+    assert.match(collection().textContent!, /连续 2 个自动批次无产出即停发/);
+    assert.equal(collection().querySelector("time"), null, "halted collection has no scheduled automatic recovery");
+    assert.equal(collection().querySelectorAll("button").length, 0, "collection status does not offer a recovery action");
+    assert.doesNotMatch(container.textContent!, /恢复按钮|恢复自动整理|立即恢复/);
+    assert.equal(container.querySelectorAll('[role="alert"]').length, 0, "halted status does not add a notification");
     assert.doesNotMatch(container.textContent!, /产物 24|成功率/);
     assert.ok(container.querySelector('a[href="/jobs?project=a&job=job-a"]'));
     assert.ok(container.querySelector('a[href="/projects/a/tasks/canvas-a"]'));
@@ -102,13 +124,21 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     await click("下一页工作");
     assert.equal(requests[1].offset, 10);
     await render("b");
-    assert.doesNotMatch(container.textContent!, /work-a|已登记来源 24/);
+    assert.doesNotMatch(container.textContent!, /work-a|已登记来源 24|自动整理已停发|来源已保留/);
     await act(async () => requests[1].resolve(page("late-a")));
-    assert.doesNotMatch(container.textContent!, /late-a|已登记来源 24/);
+    assert.doesNotMatch(container.textContent!, /late-a|已登记来源 24|自动整理已停发|来源已保留/);
     assert.equal(requests[2].project, "b");
     assert.equal(requests[2].offset, 0);
-    await act(async () => requests[2].resolve({ ...page("work-b"), items: [] }));
+    const nextCollection = "2026-11-17T02:00:00.000Z";
+    const accumulating: KnowledgeActivity["collection"] = { state: "accumulating", pending_sources: 3,
+      consecutive_failures: 0, next_collection_at: nextCollection };
+    await act(async () => requests[2].resolve({ ...page("work-b"), collection: accumulating, items: [] }));
     assert.match(container.textContent!, /暂无知识工作/);
+    assert.match(collection().textContent!, /正在积累来源/);
+    assert.match(collection().textContent!, /待整理来源 3/);
+    assert.match(collection().textContent!, /连续无产出 0 批/);
+    assert.doesNotMatch(collection().textContent!, /已停发|来源已保留|待整理来源 12/);
+    assert.equal(collection().querySelector("time")?.getAttribute("datetime"), nextCollection);
     await render("b", 1);
     assert.equal(requests.length, 4, "existing refresh trigger fetches activity once");
     await act(async () => requests[3].reject(new Error("server failure")));
@@ -121,6 +151,21 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     await act(async () => requests[4].reject(new Error("late refresh failure")));
     assert.match(container.textContent!, /current-b/);
     assert.equal(container.querySelector('[role="alert"]'), null, "a late failure from an earlier refresh cannot replace current data");
+    for (const [state, label, nextAt] of [
+      ["idle", "暂无待整理来源", null], ["busy", "已有知识工作待执行或整理中", null],
+      ["cooldown", "自动整理冷却中", nextCollection], ["ready", "已达到收集条件，等待调度", nextCollection],
+    ] as const) {
+      const requestIndex: number = requests.length;
+      await render("b", requestIndex);
+      await act(async () => requests[requestIndex].resolve({ ...page(`work-${state}`), collection: {
+        state, pending_sources: state === "idle" ? 0 : 4, consecutive_failures: state === "cooldown" ? 1 : 0,
+        next_collection_at: nextAt,
+      } }));
+      assert.match(collection().textContent!, new RegExp(label));
+      assert.equal(collection().querySelector("time")?.getAttribute("datetime") ?? null, nextAt);
+      assert.doesNotMatch(collection().textContent!, /自动整理已停发|来源已保留/);
+      assert.equal(requests.length, requestIndex + 1, "each refresh loads once without background requests");
+    }
   } finally {
     await act(async () => root.unmount());
     projectKnowledgeApi.activity = originalActivity;
