@@ -35,6 +35,8 @@ Gateway 原有的原字节 `credential_in_business_data` 拒绝保留，行为�
 
 五处拒绝共用入口同步递增 `deepsonar_gateway_credential_leak_total`，复用进程内 counter 与 Prometheus 导出，无标签。该指标统计 Gateway 因业务数据含 Job 凭据而拒绝的请求，每次拒绝递增一次，进程重启归零。它与异步尽力写入的审计各自记录事实。Claude 本地准入在请求到达 Gateway 前拒绝时，不计入此 Gateway 指标。
 
+入站与绑定上游的 URL 先按完整 `%HH` 字节观察已知 ASCII 凭据，再执行严格转义校验。另一参数含 `%ZZ` 等坏转义时，合法编码片段中的凭据仍进入统一拒绝、计数和审计。无已知凭据的坏 URL 继续返回 `invalid_request_target`，凭据观测产生的解码值仅用于检测，转发使用原请求字节。该顺序修复对应 #1177 完整 Actions 中已观察到的 9/12 次计数缺口，最终修复行为仍待新候选 Actions 验证。
+
 `pnpm ci:integration:platform-api` 的 [透明 Gateway PG 回归](../apps/scheduler/src/gateway-transparent.integration.test.ts)经真实 HTTP 覆盖五处拒绝、编码与压缩输入，共 12 次命中，核对计数准确增量、HELP/TYPE/样本导出和每次拒绝恰好一条 system 审计。请求元数据保持 null，`after_json` 固定键及指标、审计均不得含凭据明文。
 
 P1-3 的 [分类器](../apps/scheduler/src/credential-refusal.ts)同时处理 Pi 折叠文案与 Claude HTTP 400 JSON 外壳，后者必须具备精确的 `error.type=credential_in_business_data`。单测接 `pnpm ci:unit:job-lifecycle`。`pnpm ci:integration:recovery` 的 [Dispatcher PG 夹具](../apps/scheduler/src/dispatch-credential-refusal.fixture.ts)复用现有 Job rerun 隔离数据库和正式冻结快照，调用实际本地拒绝入口，受控进程返回合成 Claude stream-json 与退出码 1，再经过真实 executeReal、runRealAgent、分类器及终态 SQL。断言 `jobs.error` 稳定码、单次失败 Attempt 的 reason/error/finished_at、执行证据引用，以及不会恢复进程或创建重试 Attempt。`agent_run` 未确认效果保持 unknown/never。固定原生 CLI 的拒绝行为由原有 Claude 专项独立验证。新增回归尚未执行，须由最终 SHA Actions 验收，A2 保持待决定的远期边界。
