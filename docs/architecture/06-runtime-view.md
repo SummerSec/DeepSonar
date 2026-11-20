@@ -9,6 +9,8 @@
 
 `closeVerifyRound` 复用 `rulesForProject` 的项目 → 全局 → env 有效规则。`maxNoProgressRounds=0` 关闭本入口的缺项重复刹车，正值继续采用独立阈值 `VERIFY_NO_PROGRESS_LIMIT=2`，第二次连续相同 `decision_missing` 回弹时收口 `needs_human`。每轮决策缺项仍写入 round 快照，业务轮数上限、证据门与基础设施失败处理继续分别执行。现有 PostgreSQL 生命周期夹具通过真实 `closeVerifyRound` 事务与轮次读写，覆盖 0 下连续三轮保持 `rework` 且无人工 blocker，以及 1、5 下第二轮收口并记录 `verify_no_progress`。回归接 `pnpm ci:integration:verify-eligibility`，本地未执行，最终 SHA Actions 待验。规则分类见[用量说明](../USAGE_LIMITS.md)。
 
+#1119/#1046 的[创建故障与管理探测](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)把服务故障计数与重放准入分别判断。真实 create 阶段 5xx 和目录创建 500 计入现有进程内熔断，未知效果仍拒绝重放。Scheduler 以带 `OPEN-SANDBOX-API-KEY` 的只读 List 探测管理面，List 成功与实际创建成功分别观测。半开单名额、出站前 episode 重查和过期准入延期沿用[默认不限调度配额的恢复边界](#默认不限的调度配额1123)。
+
 ## 行锁竞争后的认领唤醒
 
 Dispatcher 的有界候选页先读身份，再以 `SKIP LOCKED` 取得 Canvas/Job 行锁。锁定复读结果少于选中的候选时，现有 [schedule-wake](../../apps/scheduler/src/schedule-wake.ts) 绑定登记一个可合并的延后认领唤醒；候选也可能已变化或消失，下一轮仍完整复读与核验，不凭旧身份授予执行资格。重试延迟以代码为准，不新增用户设置。

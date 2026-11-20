@@ -162,3 +162,8 @@ test("dispatcher failure messages scrub NUL before classification", () => {
   assert.match(message, /Upload failed \(status=500\)/);
   assert.equal(isRetryableProvisionFailure(new Error("Upload failed (status=500)\0")), true);
 });
+
+test("directory create 500 is circuit evidence without enlarging automatic replay candidacy", () => {
+  assert.equal(isRetryableProvisionFailure(new Error(
+    "Failed to create directory /opt/opensandbox in sandbox: 500 Server Error")), false);
+});

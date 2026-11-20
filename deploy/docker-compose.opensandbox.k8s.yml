@@ -13,24 +13,17 @@ services:
     environment:
       SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
       OPENSANDBOX_SERVER_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
-      # #1046 P1-4：external-cluster 服务器监听 18084，就绪探针用同一端口。
       OPENSANDBOX_PROBE_PORT: "18084"
     volumes:
       - ./opensandbox/config.k8s.external.toml:/etc/opensandbox/config.toml:ro
       - ./opensandbox/batchsandbox-template.yaml:/etc/opensandbox/batchsandbox-template.yaml:ro
       - ${OPEN_SANDBOX_KUBECONFIG:?set OPEN_SANDBOX_KUBECONFIG}:/etc/opensandbox/kubeconfig:ro
-      # OpenSandbox 就绪探针脚本也走只读挂载。
-      - ./opensandbox/readiness-probe.py:/etc/opensandbox/readiness-probe.py:ro
+      - ./opensandbox/management-health.py:/etc/opensandbox/management-health.py:ro
       - opensandbox-k8s-data:/var/lib/opensandbox
     healthcheck:
-      # #1046 P1-4（选定方案 1）：readiness = 带鉴权的管理面 List（GET /sandboxes，
-      # 只读幂等；401/403/5xx/慢 List 均判 unhealthy）。/health 仅作存活性信号。
-      test:
-        - CMD
-        - /app/.venv/bin/python3
-        - /etc/opensandbox/readiness-probe.py
+      test: ["CMD", "/app/.venv/bin/python3", "/etc/opensandbox/management-health.py"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 20
 
 volumes:

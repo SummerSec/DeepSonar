@@ -35,6 +35,11 @@ test("offline bundle binds every image archive and ID to the full branch SHA", a
     }
     assert.match(readFileSync(join(out, "deployment", "deploy", ".env.example"), "utf8"), /POSTGRES_BIND=127\.0\.0\.1:55432/);
     const deploy = join(out, "deployment", "deploy");
+    for (const script of ["resource-preflight.py", "management-health.py"]) {
+      const relative = `deployment/deploy/opensandbox/${script}`;
+      assert.deepEqual(readFileSync(join(out, relative)), readFileSync(join(repoRoot, "deploy/opensandbox", script)));
+      assert.ok(lines.some(line => line.endsWith(`  ${relative}`)), `${script} must be checksum-bound`);
+    }
     copyFileSync(join(deploy, ".env.example"), join(deploy, ".env"));
     writeFileSync(join(deploy, "master.key"), "0".repeat(64));
     execFileSync("docker", ["compose", "-p", "issue752-trial", "--env-file", "deploy/.env",

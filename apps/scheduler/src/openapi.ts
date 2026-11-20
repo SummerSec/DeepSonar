@@ -456,7 +456,7 @@ const OPS: Op[] = [
               create_circuit: {
                 type: "object",
                 additionalProperties: true,
-                description: "沙箱 create 熔断状态（#1046/#1119）：closed | open | half_open，含 episode、openedAt、lastTripReason 与窗口内 recentFailures。open 期间新 claim 暂停；冷却后转 half_open，按 canary 放行认领（并发仍受 maxConcurrentProvisioning 约束，不是严格的单试探）；任一 canary 成功即 closed，失败立即重新 open。",
+                description: "沙箱 create 熔断状态（#1046/#1119），包含 closed | open | half_open、episode、openedAt、lastTripReason 与窗口内 recentFailures。open 期间新 claim 暂停。冷却后进入 half_open，观察到半开的进程在 claim 数据库锁内按 claimed/provisioning 计数限制一个创建名额，全局配额不限时仍生效。出站前重查 episode，过期准入记为 provision_admission_deferred 并重新等待，保留真实创建失败重试额度。当前 episode 的 canary 成功关闭熔断，失败重新打开。状态在进程内，多副本或重启没有共享 episode 的保证。",
               },
             },
           },

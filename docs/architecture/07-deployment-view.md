@@ -1,11 +1,13 @@
 # 07 部署视图
 
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 
 部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 的 `platform` catalog 用于版本发现；发布路径还提供经 inspect 校验的平台 digest，宿主升级据此选择目标。原同 schema 路径保留，维护升级的身份隔离、候选库和受管节点路径已接线，不能由模块存在推定真实部署验收通过。平台镜像的 registry 通道由 `deploy/platform-release-catalog.mjs` 单点定义，升级沿用当前部署通道而不静默迁移，签名验证固定 GHCR（#842）。
 
 ## 生产 Compose 拓扑
+
+#1119/#1046 的生产、远程 Worker 及外置 Kubernetes OpenSandbox healthcheck 共用只读 Python 脚本，以容器环境中的管理 key 请求 `/v1/sandboxes?page=1&pageSize=1`。`OPENSANDBOX_PROBE_PORT` 对齐各自 server TOML 的管理端口并核验范围，超时、认证、重定向及响应格式失败返回固定码，响应字节受限。隔离 smoke 复制该脚本，试运行包同时携带管理探针与资源预检脚本并绑定摘要；#1176 的 Kubernetes 覆盖与部署说明由此统一。List 就绪与实际 create 成功分别观测。Podman `service_started` overlay 沿用原配置，部署成功仍受最终 readiness 检查约束。契约、接线及 Actions 验收入口见[OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)。
 
 #1074 的人工等待仅在断点未过期、原执行可信退出并已释放资源、最新 Attempt 为 interrupted、效果全部结清且旧 token 与设备/Worker 租约均已撤销时，才可从数据库重建的活动任务阻塞项中排除。预检直接检查过期时间，清理循环尚未把过期断点标为 blocked 时也拒绝豁免。隔离 PostgreSQL 回归接既有 `pnpm ci:unit:migrations`，最终提交的 Actions 待验。文件在目标副本的可读性仍由恢复前的 blob/hash 核验判断。详见[人工续做](../HUMAN_CONTINUATION.md)。
 
@@ -67,10 +69,6 @@ OpenHarmony Fuzz 的工具链与发布检查（核对 2026-11-01）见[发布契
 ## 受管 Docker 资源声明预检（#1002 P2-11）
 
 开发、生产 OpenSandbox overlay 和远程 Worker 的依赖链新增 `opensandbox-resource-preflight`。它用相同固定 server image、相同 Engine socket，只读检查 CPU/memory/PIDs 声明；unsupported/unknown 非零退出，普通 Compose 启动不得越过该 init。Podman 的 Scheduler healthcheck 兼容不解除此依赖。检查不是逐容器强制证明，也不持续覆盖复用的已完成 init、服务重启、`--no-deps`、外部 OpenSandbox 或 Kubernetes；实现与 Actions 边界见[权威专题](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)，剩余缺口登记 D-10。
-
-## OpenSandbox 就绪探针（#1046 P1-4）
-
-生产 OpenSandbox overlay 与远程 Worker 的 `opensandbox` 服务，healthcheck 执行 `deploy/opensandbox/readiness-probe.py`：带鉴权的管理面 List（`GET /sandboxes`，与 dispatcher 的探测同口径：`OPEN-SANDBOX-API-KEY` + 5s 超时，只读幂等；401/403/5xx/慢 List 均判 unhealthy）。`GET /health` 仅继续作为进程存活信号，不再是就绪条件：事故形态「List 200 / POST 500」下 /health 依旧绿灯而 create 持续失败（#1046）。Podman 兼容层的 `service_started`（#726）语义不变；就绪语义由该探针承担。
 
 ## Pi 扩展部署与观测内存准入（#815）
 

@@ -1047,7 +1047,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Scheduler 必须区分 liveness、readiness 和 runtime-image warmup；镜像/依赖未准备好时服务可保持 live 但不得启用 Dispatcher，错误必须可查询并有界退避。
 - **决策来源**：容器存活不等于可安全执行，错误就绪会把资源问题扩大为 Job 失败。
-- **实现状态**：as-built；启动 gate、健康端点和 image readiness 分层。
+- **实现状态**：as-built；启动 gate、健康端点和 image readiness 分层。#1119/#1046 的创建熔断独立计入真实 create 阶段服务故障与目录创建 500，计数不授权重放。生产、Worker、外置 Kubernetes 共用鉴权 List 探针并核验端口，Scheduler 使用同一管理接口契约；试运行包与隔离 smoke 携带所需脚本。List 成功与 create 成功分别观测，见 [OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)。
 - **代码入口**：[readiness](../../apps/scheduler/src/readiness.ts)、[image warmup](../../apps/scheduler/src/runtime-image-warmup.ts)、[readiness tests](../../apps/scheduler/src/readiness.test.ts)。
 - **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-prod`。
 

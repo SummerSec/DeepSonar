@@ -142,7 +142,7 @@ export function isRetryableProvisionFailure(error: unknown): boolean {
   if (error instanceof DeviceNotAuthorizedError) return false;
   if (error instanceof DeviceNotAvailableError) return true;
   const text = formatDispatcherFailureMessage(error);
-  return /CONTAINER_START_FAILED|SANDBOX_START_FAILED|Egress sidecar (?:container failed to start|did not become ready)|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)|Sandbox health check timed out|Server disconnected without sending a response|Upload failed\s*\(\s*status\s*=\s*5\d\d\s*\)|UNEXPECTED_RESPONSE|An internal error occurred in the proxy|websocket proxy failure/i.test(text);
+  return isOpenSandboxTransientProvisionFailure(text);
 }
 
 /** Pi Anthropic transport truncation after provision; schema/auth stay fail closed. */
@@ -173,7 +173,7 @@ import {
   OPENSANDBOX_CREATE_CIRCUIT_OPEN,
   openSandboxCreateCircuitAllowsClaim,
   openSandboxCreateCircuitStatus,
-  recordOpenSandboxProvisionFailure,
+  recordOpenSandboxProvisionError, isOpenSandboxTransientProvisionFailure,
   recordOpenSandboxProvisionSuccess,
   createCircuitProbeFor, createCircuitClaimSlots, shouldLogCreateCircuitPause, type CreateCircuitProbe,
   assertOpenSandboxCreateAdmission, OpenSandboxCreateAdmissionExpiredError,
@@ -1111,6 +1111,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
           roleName: String(snapshot.name ?? job.type ?? ""),
         });
       }
+      let provisionDiagnostic: import("@deepsonar/runtime-sandbox").ProvisionFailureDiagnostic | undefined;
       const provisionInput = {
         jobId,
         attemptId: attemptId!,
@@ -1137,6 +1138,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         // provision 超时或取消时，运行时适配器必须真正终止外部创建并清理迟到资源。
         signal: provisionAbort.signal,
         onFailure: async (diagnostic: import("@deepsonar/runtime-sandbox").ProvisionFailureDiagnostic) => {
+          provisionDiagnostic = diagnostic;
           await recordProvisionFailureEvidence(sql, {
             jobId, projectId: job.project_id as string, attemptId: attemptId!, diagnostic,
           });
@@ -1195,10 +1197,8 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
           if (provider === "opensandbox") recordOpenSandboxProvisionSuccess(createProbe);
         } catch (error) {
           inc("deepsonar_sandbox_provision_failed_total", { provider });
-          // #1046: only the retryable service-level shapes (create/sidecar 5xx) feed the
-          // create-path circuit; ordinary configuration failures must not pause claims.
-          if (provider === "opensandbox" && isRetryableProvisionFailure(error)) {
-            recordOpenSandboxProvisionFailure(formatDispatcherFailureMessage(error), createProbe);
+          if (provider === "opensandbox") {
+            recordOpenSandboxProvisionError(formatDispatcherFailureMessage(error), provisionDiagnostic, createProbe);
           }
           throw error;
         }

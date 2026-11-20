@@ -12,10 +12,12 @@ import {
   resetOpenSandboxCreateCircuitForTests,
   shouldLogCreateCircuitPause,
   classifyProvisionFailure,
+  recordOpenSandboxProvisionError,
   createCircuitClaimSlots,
   assertOpenSandboxCreateAdmission,
   OpenSandboxCreateAdmissionExpiredError,
 } from "./opensandbox-create-circuit.js";
+import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus, resetOpenSandboxServerStatusForTests } from "./opensandbox-health.js";
 import { claimSkipCacheSizeForTests, logClaimSkip, logClaimStarved, resetClaimDiagnosticsForTests } from "./dispatch-claim-diagnostics.js";
 
 function clockAt(start = 1_000_000) {
@@ -197,15 +199,74 @@ test("#1046 dispatcher wires the circuit into claims, provision failures and rec
   const gate = source.indexOf("openSandboxCreateCircuitAllowsClaim(createCircuit)");
   const claimScan = source.indexOf("type ClaimPage");
   assert.ok(gate > 0 && gate < claimScan, "the gate must run before claim scanning");
-  assert.ok(source.includes("recordOpenSandboxProvisionFailure("), "provision failures must feed the circuit");
+  assert.ok(source.includes("recordOpenSandboxProvisionError("), "provision failures must feed the circuit");
   assert.ok(source.includes("recordOpenSandboxProvisionSuccess(createProbe)"),
     "successful provision must close it only through the claim-time probe");
-  assert.ok(source.includes("isRetryableProvisionFailure(error)"), "only retryable service shapes should trip");
+  assert.ok(source.includes("recordOpenSandboxProvisionError(formatDispatcherFailureMessage(error), provisionDiagnostic, createProbe)"),
+    "service failure accounting is independent of replay candidacy");
   assert.ok(source.includes("shouldLogCreateCircuitPause()"), "the pause log must be throttled at the circuit");
   assert.ok(source.includes("createProbe = createCircuitProbeFor(createAdmission)"),
     "probe identity must be bound at admission time");
   assert.ok(!source.includes('openSandboxCreateCircuitStatus().state === "half_open",'),
     "the outcome must not sample the global circuit state when it is recorded");
+});
+
+test("#1119 List success cannot clear a create 500 burst or grant a replay", async () => {
+  resetOpenSandboxCreateCircuitForTests(() => 1_000_000);
+  resetOpenSandboxServerStatusForTests();
+  const reason = "Failed to create directory /opt/opensandbox in sandbox: 500 Server Error secret-fixture";
+  for (let i = 0; i < 2; i++) recordOpenSandboxProvisionError(reason);
+  const list = await refreshOpenSandboxServerStatus(async () => {}, {
+    agentMode: "real", provider: "opensandbox", domain: "fixture", apiKey: "secret-fixture",
+  });
+  assert.equal(openSandboxAllowsDispatch(list), true);
+  assert.equal(openSandboxCreateCircuitStatus().state, "open");
+  assert.equal(openSandboxCreateCircuitStatus().lastTripReason, "SANDBOX_CREATE_DIRECTORY_FAILED");
+  assert.equal(openSandboxCreateCircuitAllowsClaim().allowed, false);
+  assert.equal(JSON.stringify(openSandboxCreateCircuitStatus()).includes("secret-fixture"), false);
+});
+
+test("#1119 create diagnostics count server failures independently of session observation and replay", () => {
+  const diagnostic = { stage: "create" as const, session_observed: false, cancelled: false, http_status: 503,
+    signals: { execd_distribution_failed: false, broken_pipe: false, connection_reset: false, timeout: false } };
+  resetOpenSandboxCreateCircuitForTests(() => 1_000_000);
+  recordOpenSandboxProvisionError("opaque service body", diagnostic);
+  recordOpenSandboxProvisionError("opaque service body", { ...diagnostic, session_observed: true });
+  assert.equal(openSandboxCreateCircuitStatus().state, "open");
+  assert.equal(openSandboxCreateCircuitStatus().lastTripReason, "SANDBOX_CREATE_SERVER_ERROR");
+  for (const excluded of [{ ...diagnostic, http_status: 401 }, { ...diagnostic, stage: "runtime_contract" as const },
+    { ...diagnostic, cancelled: true }]) {
+    resetOpenSandboxCreateCircuitForTests();
+    recordOpenSandboxProvisionError("opaque service body", excluded);
+    assert.equal(openSandboxCreateCircuitStatus().recentFailures, 0);
+  }
+  recordOpenSandboxProvisionError("Failed to create directory /opt/opensandbox in sandbox: 400 Server Error");
+  recordOpenSandboxProvisionError("ordinary runtime image contract mismatch");
+  assert.equal(openSandboxCreateCircuitStatus().recentFailures, 0);
+});
+
+test("#1119 directory failure trips a half-open probe again without recording provider text", () => {
+  const { clock, advance } = clockAt();
+  resetOpenSandboxCreateCircuitForTests(clock);
+  const error = "Failed to create directory /opt/opensandbox in sandbox: 500 Server Error private-body";
+  recordOpenSandboxProvisionError(error);
+  recordOpenSandboxProvisionError(error);
+  advance(CREATE_CIRCUIT_COOLDOWN_MS);
+  const admission = openSandboxCreateCircuitAllowsClaim();
+  assert.equal(admission.canary, true);
+  const probe = { canary: true, episode: admission.episode };
+  assert.equal(createCircuitClaimSlots(probe, 0), 1);
+  assert.equal(createCircuitClaimSlots(probe, 1), 0);
+  assert.doesNotThrow(() => assertOpenSandboxCreateAdmission(probe));
+  recordOpenSandboxProvisionError(error, undefined, probe);
+  assert.equal(openSandboxCreateCircuitStatus().state, "open");
+  assert.equal(openSandboxCreateCircuitStatus().recentFailures, 3);
+  assert.equal(openSandboxCreateCircuitStatus().lastTripReason, "SANDBOX_CREATE_DIRECTORY_FAILED");
+  assert.throws(() => assertOpenSandboxCreateAdmission(probe), OpenSandboxCreateAdmissionExpiredError);
+  advance(CREATE_CIRCUIT_COOLDOWN_MS);
+  const next = openSandboxCreateCircuitAllowsClaim();
+  assert.throws(() => assertOpenSandboxCreateAdmission(probe), OpenSandboxCreateAdmissionExpiredError);
+  assert.doesNotThrow(() => assertOpenSandboxCreateAdmission({ canary: true, episode: next.episode }));
 });
 
 test("#1046 an outcome from a claim admitted before the trip cannot close or own the new episode", () => {

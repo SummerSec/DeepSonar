@@ -11,6 +11,8 @@ const referenceFiles = [
   "deploy/issue752-trial.override.yml",
   "deploy/opensandbox/config.toml",
   "deploy/opensandbox/dockerenv",
+  "deploy/opensandbox/resource-preflight.py",
+  "deploy/opensandbox/management-health.py",
   "deploy/runtime-image-registry.json",
   "database/schema.sql",
   "apps/scheduler/src/schema-version.ts",
