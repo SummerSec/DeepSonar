@@ -62,6 +62,8 @@ export function HumanMessageComposer({
   const targetTitle = targetKind === "hub" ? "Hub" : targetKind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
   const currentPayload = targetKind === "job" && waitingJob ? request.request?.payload : null;
   const showCurrentRequest = targetKind === "job" && waitingJob;
+  const canvasDetailFailed = intervention?.pending && intervention.detailStatus === "error";
+  const retryRequest = () => { request.retry(); onRetryIntervention?.(); setError(""); };
   const totalBytes = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
 
   const addFiles = (incoming: FileList | null) => {
@@ -135,11 +137,11 @@ export function HumanMessageComposer({
                 reason={currentPayload?.reason ?? intervention?.reason ?? ""}
                 guidance={currentPayload ? currentPayload.guidance ?? null : intervention?.guidance ?? null}
                 guidanceStatus={showCurrentRequest ? request.status === "loaded" ? currentPayload?.guidance ? "available" : "missing" : request.status : intervention?.guidanceStatus ?? "loading"}
-                detailStatus={showCurrentRequest ? request.status : intervention?.detailStatus ?? "loading"}
+                detailStatus={canvasDetailFailed ? "error" : showCurrentRequest ? request.status : intervention?.detailStatus ?? "loading"}
                 detailVersionMatches={showCurrentRequest ? request.status === "loaded" && (!intervention || intervention.detailVersionMatches === true) : intervention?.detailVersionMatches === true}
-                detailError={showCurrentRequest ? request.error : intervention?.detailError}
+                detailError={canvasDetailFailed ? intervention.detailError : showCurrentRequest ? request.error : intervention?.detailError}
                 safetyMessage={intervention ? humanInterventionSafetyMessage(intervention.node) : null}
-                onRetry={() => { if (showCurrentRequest) request.retry(); onRetryIntervention?.(); }}
+                onRetry={showCurrentRequest ? retryRequest : onRetryIntervention}
               />
               <p className="mt-2 text-[10px] leading-5 text-zinc-500">
                 本消息等待投递；若运行正在等待此回复，平台核验当前权限和恢复条件后，才会重新排队。消息送达、Agent 确认和任务完成分别更新。
@@ -174,7 +176,9 @@ export function HumanMessageComposer({
             <p>附件会先作为项目共享资产完整上传，再一次性引用；任一上传失败都不会发送残缺消息。</p>
           </div>
 
-          {error && <div className="human-message-feedback is-error" role="alert">{error}</div>}
+          {error && <div className="human-message-feedback is-error" role="alert">{error}
+            {showCurrentRequest && <button type="button" disabled={busy} onClick={retryRequest}>重新读取当前请求</button>}
+          </div>}
           {progress && <div className="human-message-feedback" aria-live="polite"><CheckCircle size={14} /> {progress}</div>}
         </div>
 

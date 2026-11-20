@@ -21,7 +21,11 @@ test("a reply saved after leaving and returning to a task cannot close its new d
   const root = createRoot(container);
   let save!: (value: Awaited<ReturnType<typeof api.createCanvasMessage>>) => void;
   const saved = new Promise<Awaited<ReturnType<typeof api.createCanvasMessage>>>(resolve => { save = resolve; });
-  const createMessage = mock.method(api, "createCanvasMessage", (_canvasId: string, _message: CreateCanvasHumanMessage) => saved);
+  let sendError: Error | null = null;
+  const createMessage = mock.method(api, "createCanvasMessage", (_canvasId: string, _message: CreateCanvasHumanMessage) => {
+    if (sendError) return Promise.reject(sendError);
+    return saved;
+  });
   let loadRequest!: (value: Awaited<ReturnType<typeof api.job>>) => void;
   const requestLoaded = new Promise<Awaited<ReturnType<typeof api.job>>>(resolve => { loadRequest = resolve; });
   let requestResult = requestLoaded;
@@ -112,6 +116,10 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     });
     assert.match(container.textContent ?? "", /当前持久请求的完整问题/);
     assert.equal(sendDisabled(), false, "the current request and revision are loaded before sending");
+    renderWaiting({ ...currentItem(), detailStatus: "error", detailVersionMatches: false, detailError: "画布详情暂时不可读" });
+    assert.equal(sendDisabled(), true);
+    assert.match(container.textContent ?? "", /画布详情暂时不可读/);
+    assert.ok([...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "重试读取"));
     renderWaiting({ ...currentItem(), detailVersionMatches: false });
     assert.equal(sendDisabled(), true, "a changed request version disables the existing draft");
     assert.equal(createMessage.mock.callCount(), 2, "guarded drafts never reach the message API");
@@ -176,6 +184,42 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     assert.deepEqual(createMessage.mock.calls[3]!.arguments[1].target, {
       kind: "request", request_id: "request-b", expected_revision: 7,
     }, "an old request read cannot overwrite the current composer's target");
+
+    act(() => root.render(null));
+    requestResult = Promise.resolve({ ...currentDetail,
+      human_request: { ...currentDetail.human_request!, event_id: "request-b" },
+      human_continuation: { ...currentDetail.human_continuation!, id: "request-b", revision: 7 },
+    });
+    await act(async () => { renderWaiting(null); await requestResult; });
+    type("重新打开后回复当前问题");
+    const radios = container.querySelectorAll<HTMLInputElement>('input[type="radio"]');
+    act(() => radios[0]!.click());
+    let finishNewRead!: (detail: typeof currentDetail) => void;
+    requestResult = new Promise(resolve => { finishNewRead = resolve; });
+    act(() => radios[1]!.click());
+    assert.equal(sendDisabled(), true, "returning from Hub must wait for a fresh read, not reuse a cached request");
+    const nextDetail = { ...currentDetail,
+      human_request: { ...currentDetail.human_request!, event_id: "request-b" },
+      human_continuation: { ...currentDetail.human_continuation!, id: "request-b", revision: 8 },
+    };
+    await act(async () => { finishNewRead(nextDetail); await requestResult; });
+    sendError = new Error("HUMAN_REQUEST_CHANGED: 请求已变化");
+    await act(async () => { send(); await saved; });
+    assert.match(container.textContent ?? "", /HUMAN_REQUEST_CHANGED/);
+    assert.equal(container.querySelector("textarea")!.value, "重新打开后回复当前问题");
+    requestResult = Promise.resolve({ ...nextDetail,
+      human_continuation: { ...nextDetail.human_continuation!, revision: 9 },
+    });
+    await act(async () => {
+      [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "重新读取当前请求")!.click();
+      await requestResult;
+    });
+    assert.equal(container.querySelector("textarea")!.value, "重新打开后回复当前问题");
+    sendError = null;
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[5]!.arguments[1].target, {
+      kind: "request", request_id: "request-b", expected_revision: 9,
+    }, "after a stale revision is rejected, the retained draft can answer the freshly read request");
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();

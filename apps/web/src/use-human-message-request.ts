@@ -10,7 +10,7 @@ export function useHumanMessageRequest(canvasId: string, jobId: string | null, v
   const [reload, setReload] = useState(0);
   const key = jobId ? JSON.stringify([canvasId, jobId, version, reload]) : null;
   useEffect(() => {
-    if (!jobId || !key) return;
+    if (!jobId || !key) { setRead(null); return; }
     let stopped = false;
     void api.job(jobId).then(detail => {
       if (detail.job.id !== jobId || detail.job.canvas_id !== canvasId) {
