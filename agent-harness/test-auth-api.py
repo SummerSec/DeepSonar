@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """AUTH 工作包验收（SEC-01/§6.1）：平台 API Token 鉴权（可 CI）。
 
-需要 DEEPSONAR_AUTH_REQUIRED=true + DEEPSONAR_ADMIN_TOKEN 的实例：
-  DEEPSONAR_AUTH_REQUIRED=true DEEPSONAR_ADMIN_TOKEN=boot-secret SCHEDULER_PORT=3101 \\
+需要 DEEPSONAR_AUTH_REQUIRED=true、DEEPSONAR_ADMIN_TOKEN 及部署生成的测试密码文件：
+  DEEPSONAR_AUTH_REQUIRED=true DEEPSONAR_ADMIN_TOKEN=boot-secret DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE=/path/to/test-secret SCHEDULER_PORT=3101 \\
     node apps/scheduler/dist/index.js
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
+from pathlib import Path
 
 BASE = os.environ.get("DEEPSONAR_BASE", "http://127.0.0.1:3101").rstrip("/")
 ADMIN = os.environ.get("DEEPSONAR_ADMIN_TOKEN", "boot-secret")
@@ -95,19 +96,20 @@ def main() -> None:
     # 4. First-run human account: the scheduler seeds this only when users is empty.
     status = req("GET", "/auth/status")
     assert status["has_users"] and not status["bootstrap_available"], status
-    assert status["default_admin_credentials_active"], status
-    human = req("POST", "/auth/login", {"username": "admin", "password": "Deep@Sonar66"})
+    assert not status["default_admin_credentials_active"], status
+    seed_password = Path(os.environ["DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE"]).read_text(encoding="utf-8").removesuffix("\n")
+    human = req("POST", "/auth/login", {"username": "admin", "password": seed_password})
     human_token = human["token"]
     changed_password = f"{uuid.uuid4().hex}A!"
     changed_username = f"admin-ci-{uuid.uuid4().hex[:8]}"
     changed = req(
         "POST",
         "/auth/change-password",
-        {"current_password": "Deep@Sonar66", "new_password": changed_password},
+        {"current_password": seed_password, "new_password": changed_password},
         human_token,
     )
     req("GET", "/auth/me", token=human_token, expect=401)
-    req("POST", "/auth/login", {"username": "admin", "password": "Deep@Sonar66"}, expect=401)
+    req("POST", "/auth/login", {"username": "admin", "password": seed_password}, expect=401)
     req("POST", "/auth/login", {"username": "admin", "password": changed_password})
     renamed = req(
         "POST",
@@ -118,7 +120,7 @@ def main() -> None:
     req("GET", "/auth/me", token=changed["token"], expect=401)
     req("POST", "/auth/login", {"username": "admin", "password": changed_password}, expect=401)
     req("POST", "/auth/login", {"username": changed_username, "password": changed_password})
-    # Restore the public fixture so other CI smoke steps never depend on a generated credential.
+    # Restore the ephemeral fixture account for any subsequent smoke steps.
     restored_name = req(
         "POST",
         "/auth/change-username",
@@ -128,7 +130,7 @@ def main() -> None:
     req(
         "POST",
         "/auth/change-password",
-        {"current_password": changed_password, "new_password": "Deep@Sonar66"},
+        {"current_password": changed_password, "new_password": seed_password},
         restored_name["token"],
     )
     print("默认人类管理员登录、改密、改名及旧会话吊销 OK")

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
-import { api, type CanvasNode } from "./api.js";
+import { api, type CanvasNode, type CreateCanvasHumanMessage } from "./api.js";
 import { listHumanInterventions, openHumanInterventionForJob } from "./human-messages.js";
 import { HumanInterventionDetailStore, mergeHumanInterventionDetails } from "./human-intervention-details.js";
 
@@ -21,7 +21,15 @@ test("a reply saved after leaving and returning to a task cannot close its new d
   const root = createRoot(container);
   let save!: (value: Awaited<ReturnType<typeof api.createCanvasMessage>>) => void;
   const saved = new Promise<Awaited<ReturnType<typeof api.createCanvasMessage>>>(resolve => { save = resolve; });
-  const createMessage = mock.method(api, "createCanvasMessage", () => saved);
+  let sendError: Error | null = null;
+  const createMessage = mock.method(api, "createCanvasMessage", (_canvasId: string, _message: CreateCanvasHumanMessage) => {
+    if (sendError) return Promise.reject(sendError);
+    return saved;
+  });
+  let loadRequest!: (value: Awaited<ReturnType<typeof api.job>>) => void;
+  const requestLoaded = new Promise<Awaited<ReturnType<typeof api.job>>>(resolve => { loadRequest = resolve; });
+  let requestResult = requestLoaded;
+  const readJob = mock.method(api, "job", () => requestResult);
   const target = { id: "node-a", job_id: "job-a", node_type: "job", status: "running", title: "运行 A", body_json: {} } as CanvasNode;
   let oldCallback = 0;
   let newCallback = 0;
@@ -46,6 +54,8 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     type("第一条已授权发送的回复");
     send();
     assert.equal(createMessage.mock.callCount(), 1);
+    assert.equal(readJob.mock.callCount(), 0, "ordinary running messages do not read or answer a human request");
+    assert.deepEqual(createMessage.mock.calls[0]!.arguments[1].target, { kind: "job", node_id: "node-a" });
     act(() => root.render(null)); // Leave A, then return with a fresh composer instance.
     render(() => { newCallback++; });
     type("返回 A 后尚未发送的新草稿");
@@ -73,8 +83,8 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     const selected = openHumanInterventionForJob(requests, "job-0")!;
     const preview = listHumanInterventions(requests).map(item => item.node);
     const waitingTarget = { ...target, job_id: "job-0", status: "waiting_human" };
-    const renderWaiting = (intervention: ReturnType<typeof listHumanInterventions>[number] | null) => act(() => root.render(createElement(HumanMessageComposer, {
-      canvasId: "canvas-a", projectId: "project-a", selectedNode: waitingTarget, intervention,
+    const renderWaiting = (intervention: ReturnType<typeof listHumanInterventions>[number] | null, node = waitingTarget, jobs?: { id: string; status: string }[]) => act(() => root.render(createElement(HumanMessageComposer, {
+      canvasId: "canvas-a", projectId: "project-a", selectedNode: node, intervention, jobs,
       onClose: () => {}, onSent: () => { newCallback++; },
     })));
     const sendDisabled = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.disabled;
@@ -94,13 +104,197 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     store.refresh("canvas-a", [...preview].reverse(), selected);
     renderWaiting(currentItem());
     assert.match(container.textContent ?? "", /完整问题 human-0/);
-    assert.equal(sendDisabled(), false, "the pinned thirteenth request is verified after preview reordering");
+    assert.equal(sendDisabled(), true, "canvas detail alone cannot authorize a durable request reply");
+    const currentDetail = {
+      job: { id: "job-0", canvas_id: "canvas-a", status: "waiting_human" },
+      human_request: { event_id: "request-a", current: true, payload: { reason: "当前持久请求的完整问题" } },
+      human_continuation: { id: "request-a", revision: 3, status: "open" },
+    } as Awaited<ReturnType<typeof api.job>>;
+    await act(async () => {
+      loadRequest(currentDetail);
+      await requestLoaded;
+    });
+    assert.match(container.textContent ?? "", /当前持久请求的完整问题/);
+    assert.equal(sendDisabled(), false, "the current request and revision are loaded before sending");
+    renderWaiting({ ...currentItem(), detailStatus: "error", detailVersionMatches: false, detailError: "画布详情暂时不可读" });
+    assert.equal(sendDisabled(), true);
+    assert.match(container.textContent ?? "", /画布详情暂时不可读/);
+    assert.ok([...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "重试读取"));
     renderWaiting({ ...currentItem(), detailVersionMatches: false });
     assert.equal(sendDisabled(), true, "a changed request version disables the existing draft");
     assert.equal(createMessage.mock.callCount(), 2, "guarded drafts never reach the message API");
+    renderWaiting(currentItem());
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[2]!.arguments[1].target, {
+      kind: "request", request_id: "request-a", expected_revision: 3,
+    }, "waiting_human replies must carry the durable request identity, not a generic Job target");
+    assert.equal(createMessage.mock.calls[2]!.arguments[1].body, "第十三条请求的草稿");
+
+    // Missing canvas preview must not hide a valid durable request or make the user guess its ID.
+    act(() => root.render(null));
+    requestResult = Promise.resolve(currentDetail);
+    await act(async () => { renderWaiting(null); await requestResult; });
+    type("无需画布摘要也能回复");
+    assert.equal(sendDisabled(), false);
+    assert.match(container.textContent ?? "", /当前持久请求的完整问题/);
+
+    for (const detail of [
+      { ...currentDetail, human_continuation: null },
+      { ...currentDetail, human_continuation: { ...currentDetail.human_continuation!, status: "answered" as const } },
+      { ...currentDetail, human_request: { ...currentDetail.human_request!, current: false } },
+      { ...currentDetail, human_request: { ...currentDetail.human_request!, event_id: "different-request" } },
+      { ...currentDetail, job: { ...currentDetail.job, canvas_id: "different-canvas" } },
+    ]) {
+      act(() => root.render(null));
+      requestResult = Promise.resolve(detail);
+      await act(async () => { renderWaiting(null); await requestResult; });
+      type("不可发送的草稿");
+      assert.equal(sendDisabled(), true, "missing, processed, historical or unrelated requests cannot be answered");
+    }
+
+    act(() => root.render(null));
+    requestResult = Promise.resolve(currentDetail).then(() => { throw new Error("请求读取失败"); });
+    await act(async () => { renderWaiting(null); await requestResult.catch(() => {}); });
+    type("读取失败仍保留草稿");
+    assert.equal(sendDisabled(), true);
+    assert.match(container.textContent ?? "", /请求读取失败/);
+    requestResult = Promise.resolve(currentDetail);
+    await act(async () => {
+      [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "重试读取")!.click();
+      await requestResult;
+    });
+    assert.equal(sendDisabled(), false);
+    assert.equal(container.querySelector("textarea")!.value, "读取失败仍保留草稿");
+    assert.equal(createMessage.mock.callCount(), 3, "loading, blocked and retry actions never send a message");
+
+    act(() => root.render(null));
+    let finishOldRead!: (detail: typeof currentDetail) => void;
+    const oldRead = new Promise<typeof currentDetail>(resolve => { finishOldRead = resolve; });
+    requestResult = oldRead;
+    renderWaiting(null);
+    act(() => root.render(null));
+    requestResult = Promise.resolve({ ...currentDetail,
+      human_request: { ...currentDetail.human_request!, event_id: "request-b" },
+      human_continuation: { ...currentDetail.human_continuation!, id: "request-b", revision: 7 },
+    });
+    await act(async () => { renderWaiting(null); await requestResult; });
+    type("重新打开后回复当前问题");
+    await act(async () => { finishOldRead(currentDetail); await oldRead; });
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[3]!.arguments[1].target, {
+      kind: "request", request_id: "request-b", expected_revision: 7,
+    }, "an old request read cannot overwrite the current composer's target");
+
+    act(() => root.render(null));
+    requestResult = Promise.resolve({ ...currentDetail,
+      human_request: { ...currentDetail.human_request!, event_id: "request-b" },
+      human_continuation: { ...currentDetail.human_continuation!, id: "request-b", revision: 7 },
+    });
+    await act(async () => { renderWaiting(null); await requestResult; });
+    type("重新打开后回复当前问题");
+    const radios = container.querySelectorAll<HTMLInputElement>('input[type="radio"]');
+    act(() => radios[0]!.click());
+    let finishNewRead!: (detail: typeof currentDetail) => void;
+    requestResult = new Promise(resolve => { finishNewRead = resolve; });
+    act(() => radios[1]!.click());
+    assert.equal(sendDisabled(), true, "returning from Hub must wait for a fresh read, not reuse a cached request");
+    const nextDetail = { ...currentDetail,
+      human_request: { ...currentDetail.human_request!, event_id: "request-b" },
+      human_continuation: { ...currentDetail.human_continuation!, id: "request-b", revision: 8 },
+    };
+    await act(async () => { finishNewRead(nextDetail); await requestResult; });
+    const confirmDraft = () => act(() => {
+      [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "确认用此草稿回复当前问题")!.click();
+    });
+    assert.equal(sendDisabled(), true, "a refreshed revision must not silently rebind the draft");
+    assert.equal(createMessage.mock.callCount(), 4);
+    confirmDraft();
+    sendError = new Error("HUMAN_REQUEST_CHANGED: 请求已变化");
+    await act(async () => { send(); await saved; });
+    assert.match(container.textContent ?? "", /HUMAN_REQUEST_CHANGED/);
+    assert.equal(container.querySelector("textarea")!.value, "重新打开后回复当前问题");
+    requestResult = Promise.resolve({ ...nextDetail,
+      human_continuation: { ...nextDetail.human_continuation!, revision: 9 },
+    });
+    await act(async () => {
+      [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "重新读取当前请求")!.click();
+      await requestResult;
+    });
+    assert.equal(container.querySelector("textarea")!.value, "重新打开后回复当前问题");
+    assert.equal(sendDisabled(), true);
+    assert.equal(createMessage.mock.callCount(), 5, "rereading never submits or rebinds the draft without confirmation");
+    confirmDraft();
+    sendError = null;
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[5]!.arguments[1].target, {
+      kind: "request", request_id: "request-b", expected_revision: 9,
+    }, "after a stale revision is rejected, the retained draft can answer the freshly read request");
+
+    act(() => root.render(null));
+    requestResult = Promise.resolve(currentDetail);
+    await act(async () => { renderWaiting(currentItem()); await requestResult; });
+    type("写给问题 A 的草稿");
+    const replacement = { ...currentDetail,
+      human_request: { ...currentDetail.human_request!, event_id: "request-c", payload: { reason: "新的问题 B" } },
+      human_continuation: { ...currentDetail.human_continuation!, id: "request-c", revision: 0 },
+    };
+    requestResult = Promise.resolve(replacement);
+    const refreshedItem = { ...currentItem(), node: { ...currentItem().node, updated_at: "2026-11-20T07:00:00.000Z" } };
+    await act(async () => { renderWaiting(refreshedItem); await requestResult; });
+    assert.match(container.textContent ?? "", /新的问题 B/);
+    assert.equal(container.querySelector("textarea")!.value, "写给问题 A 的草稿");
+    assert.equal(sendDisabled(), true, "a new request on the same Job must never inherit the previous request's answer");
+    act(() => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.click());
+    renderWaiting(refreshedItem);
+    assert.equal(sendDisabled(), true, "rerendering the new request cannot implicitly confirm the old draft");
+    assert.equal(createMessage.mock.callCount(), 6, "no reply API call is allowed before confirming the new question");
+    confirmDraft();
+    assert.equal(createMessage.mock.callCount(), 6, "confirmation alone must not send anything");
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[6]!.arguments[1].target, {
+      kind: "request", request_id: "request-c", expected_revision: 0,
+    });
+    assert.equal(createMessage.mock.calls[6]!.arguments[1].body, "写给问题 A 的草稿");
+
+    act(() => root.render(null));
+    requestResult = Promise.resolve(currentDetail);
+    const runningTarget = { ...waitingTarget, status: "running" };
+    await act(async () => {
+      renderWaiting(null, runningTarget, [{ id: "job-0", status: "waiting_human" }]);
+      await requestResult;
+    });
+    type("人工等待结束前写好的回复");
+    assert.equal(sendDisabled(), false);
+    renderWaiting(null, runningTarget, [{ id: "job-0", status: "running" }]);
+    assert.equal(sendDisabled(), true, "a bound reply cannot become a generic Job message when the Job list updates");
+    assert.match(container.textContent ?? "", /不再等待/);
+    assert.equal(container.querySelector("textarea")!.value, "人工等待结束前写好的回复");
+    act(() => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.click());
+    assert.equal(createMessage.mock.callCount(), 7, "ending human wait must never send the old reply through the generic Job API");
+    act(() => container.querySelectorAll<HTMLInputElement>('input[type="radio"]')[0]!.click());
+    assert.equal(sendDisabled(), false, "only an explicit target change can repurpose the retained draft");
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[7]!.arguments[1].target, { kind: "hub" });
+
+    act(() => root.render(null));
+    let finishFirstRead!: (detail: typeof currentDetail) => void;
+    requestResult = new Promise(resolve => { finishFirstRead = resolve; });
+    renderWaiting(null, runningTarget, [{ id: "job-0", status: "waiting_human" }]);
+    type("首次请求读取期间写好的回复");
+    renderWaiting(null, runningTarget, [{ id: "job-0", status: "running" }]);
+    assert.equal(sendDisabled(), true, "reply purpose is fixed before the first request read completes");
+    assert.equal(container.querySelector("textarea")!.value, "首次请求读取期间写好的回复");
+    await act(async () => { finishFirstRead(currentDetail); await requestResult; });
+    assert.equal(sendDisabled(), true, "a late first read cannot undo the wait-ended guard");
+    act(() => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.click());
+    assert.equal(createMessage.mock.callCount(), 8);
+    act(() => container.querySelectorAll<HTMLInputElement>('input[type="radio"]')[0]!.click());
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[8]!.arguments[1].target, { kind: "hub" });
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();
+    readJob.mock.restore();
     dom.window.close();
     for (const [key, descriptor] of previous) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
