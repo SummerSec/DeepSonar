@@ -30,7 +30,7 @@ Actions 实际调用 `pnpm ci:unit:runtime-cleanup`（`gate-runtime`）、`pnpm 
 
 熔断计数与重放权限分别判断。无会话、无句柄和 HTTP 500 均不构成无副作用证明。调用过 runner 的不确定结果继续记 `unknown`，自动重试仍要求当前 owner 和原有的显式 `never_started` / `external_effect=false` 证据。取消和普通配置错误不进入新增服务故障分类。
 
-#1119 本轮落实 A 的平台工程缺口。P1-3 要求的 OpenSandbox/execd 上游现场原始日志仍属外部 TODO，当前可读来源为正常 Job 错误及 `scheduler_audit` 的固定宿主诊断，现场根因仍待上游证据。B 的 gateway 迁移尚未被用户选定。C/#1121 的诊断推断无效果与自动重放提案已被用户拒绝，后续由主 Agent 关闭该危险提案，未知效果继续按内核规则处理。这些范围与外部证据分别记录，A 的工程 Actions 不能证明上游根因已解决。
+#1119 本轮落实 A 的平台工程缺口。P1-3 要求的 OpenSandbox/execd 上游现场原始日志仍属外部 TODO，当前可读来源为正常 Job 错误及 `scheduler_audit` 的固定宿主诊断，现场根因仍待上游证据。B 的 gateway 迁移尚未被用户选定。C/#1121 的诊断推断无效果与自动重放提案不满足既有内核的重放证据要求，不纳入本轮实现。该提案的处置与工程验收分别记录，未知效果继续按内核规则处理。这些范围与外部证据分别记录，A 的工程 Actions 不能证明上游根因已解决。
 
 生产、远程 Worker 与外置 Kubernetes Compose 共用只读挂载的 `deploy/opensandbox/management-health.py`，由容器内固定 Python 路径执行。它与 Scheduler 探测同用 `GET /v1/sandboxes?page=1&pageSize=1` 和 `OPEN-SANDBOX-API-KEY`，只接受 HTTP 200 且包含 `items` 数组的有界 JSON。探针从 `OPENSANDBOX_PROBE_PORT` 读取端口并核验合法范围，缺省端口及超时/字节上限以脚本为准；三份 Compose 显式绑定各自 server TOML 的监听端口。超时、缺 key、非法端口、认证失败、重定向与坏响应按固定码拒绝，错误正文和 key 不输出。管理 List 成功仅表示鉴权管理接口可用，实际 create 故障仍可独立暂停 claim，List 成功不会关闭 create 熔断。Podman 的 `service_started` overlay 与部署入口最终 readiness 检查继续按既有流程执行。
 
