@@ -360,7 +360,7 @@ Scheduler 在现有 claim advisory 锁内，先按项目 dispatch_last_served、
 
 项目 `maxConcurrentJobs=null` 清除覆盖并继承全局，全局也不限时项目不限。0 暂停该项目后续领取。有限项目配额仍与有限全局上限取最小值。全局不限仅解除对应三个闸，Canvas、FIFO、暂停、图资格、Provider、账号、模型、CLI、lease、镜像及 provision 准入继续核验。计数仍为 claimed/provisioning/running，改配额不终止运行任务。仅内部剩余槽计算使用 Infinity，数据库和 JSON API 使用 null。
 
-OpenSandbox 创建熔断半开恢复独立限制为一个 claimed/provisioning 席位，观察到半开的进程在现有 claim advisory 锁内重新读取熔断状态并按数据库计数核验。出站创建前同步核验 episode，过期准入沿现有未出站 provision 重排路径重新等待，使用 provision_admission_deferred 记录且不消耗或重置真实创建失败重试额度，并保留效果归属与 never_started 证明。全局配额不限仍保留该恢复门，失败探针重新打开熔断并保留其他 pending Job。熔断状态仍在进程内，多副本或重启没有共享熔断 episode 的保证。
+OpenSandbox 创建熔断半开恢复独立限制为一个 claimed/provisioning 席位，观察到半开的进程在现有 claim advisory 锁内重新读取熔断状态并按数据库计数核验。出站创建前同步核验 episode，过期准入沿现有未出站 provision 重排路径重新等待，使用 provision_admission_deferred 记录且不消耗或重置真实创建失败重试额度，并保留效果归属与 never_started 证明。全局配额不限仍保留该恢复门，当前失败探针重新打开熔断并保留其他 pending Job，下一次冷却翻倍至配置上限，成功恢复后重置。受控环境参数与默认退避序列见 [OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)，真实 Dispatcher/受控 runner create 500 到 PG 暂停认领组合回归接既有 `pnpm ci:integration:recovery`，最终 SHA Actions 待验。熔断状态仍在进程内，多副本或重启没有共享熔断 episode 的保证。
 
 设置页全局配额独立保存，仅提交用户修改的字段。输入来自已存值，生效值单独读取，避免把环境变量或其他硬上限推导值固化为覆盖。清空保存写 null，输入非法时显示错误并禁用保存。项目设置和项目列表将 null 展示为“不限”。该交互沿用配置中心入口，额外增加三个清空按钮及独立保存操作，以明确用户何时解除限制。行为证据来自 dispatch-limits、升级预检、配置子进程与 Web DOM 回归，最终 SHA Actions 待验。
 

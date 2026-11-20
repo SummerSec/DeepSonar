@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { mock, test } from "node:test";
 import {
   CREATE_CIRCUIT_COOLDOWN_MS,
+  CREATE_CIRCUIT_MAX_COOLDOWN_MS,
   CREATE_CIRCUIT_FAILURES_TO_TRIP,
   CREATE_CIRCUIT_WINDOW_MS,
   openSandboxCreateCircuitAllowsClaim,
@@ -13,6 +14,7 @@ import {
   shouldLogCreateCircuitPause,
   classifyProvisionFailure,
   recordOpenSandboxProvisionError,
+  createCircuitProbeFor,
   createCircuitClaimSlots,
   assertOpenSandboxCreateAdmission,
   OpenSandboxCreateAdmissionExpiredError,
@@ -46,7 +48,7 @@ test("outbound create rejects old episodes, including after a new cooldown", () 
   assert.doesNotThrow(() => assertOpenSandboxCreateAdmission(probe));
   recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED", probe);
   assert.throws(() => assertOpenSandboxCreateAdmission(probe), OpenSandboxCreateAdmissionExpiredError);
-  advance(CREATE_CIRCUIT_COOLDOWN_MS);
+  advance(Math.min(CREATE_CIRCUIT_COOLDOWN_MS * 2, CREATE_CIRCUIT_MAX_COOLDOWN_MS));
   const current = openSandboxCreateCircuitAllowsClaim();
   assert.throws(() => assertOpenSandboxCreateAdmission(probe), OpenSandboxCreateAdmissionExpiredError);
   assert.throws(() => assertOpenSandboxCreateAdmission(null), OpenSandboxCreateAdmissionExpiredError);
@@ -105,7 +107,7 @@ test("#1046 failed canary reopens; successful provision closes and clears the fa
     { canary: true, episode: firstProbe.episode });
   const reopened = openSandboxCreateCircuitStatus();
   assert.equal(reopened.state, "open");
-  advance(CREATE_CIRCUIT_COOLDOWN_MS);
+  advance(Math.min(CREATE_CIRCUIT_COOLDOWN_MS * 2, CREATE_CIRCUIT_MAX_COOLDOWN_MS));
   const secondProbe = openSandboxCreateCircuitAllowsClaim();
   assert.equal(secondProbe.canary, true);
   assert.notEqual(secondProbe.episode, firstProbe.episode, "each trip opens a new episode");
@@ -114,6 +116,34 @@ test("#1046 failed canary reopens; successful provision closes and clears the fa
   assert.equal(closed.state, "closed");
   assert.equal(closed.recentFailures, 0);
   assert.equal(closed.lastTripReason, null);
+});
+
+test("#1119 only failed current half-open probes double cooldown, capped and reset by recovery", () => {
+  const { clock, advance } = clockAt();
+  resetOpenSandboxCreateCircuitForTests(clock);
+  for (let i = 0; i < CREATE_CIRCUIT_FAILURES_TO_TRIP; i++) recordOpenSandboxProvisionError("DOCKER::SANDBOX_START_FAILED");
+  let delay = CREATE_CIRCUIT_COOLDOWN_MS;
+  for (let turn = 0; turn < 8; turn++) {
+    advance(delay - 1);
+    assert.equal(openSandboxCreateCircuitAllowsClaim().allowed, false);
+    advance(1);
+    const probe = createCircuitProbeFor(openSandboxCreateCircuitAllowsClaim());
+    assert.ok(probe);
+    recordOpenSandboxProvisionError("DOCKER::SANDBOX_START_FAILED", undefined, probe);
+    // An outcome from the old episode still counts, but cannot double the next wait.
+    recordOpenSandboxProvisionError("DOCKER::SANDBOX_START_FAILED", undefined, probe);
+    assert.throws(() => assertOpenSandboxCreateAdmission(probe), OpenSandboxCreateAdmissionExpiredError);
+    delay = Math.min(delay * 2, CREATE_CIRCUIT_MAX_COOLDOWN_MS);
+  }
+  advance(delay);
+  const recovered = createCircuitProbeFor(openSandboxCreateCircuitAllowsClaim());
+  assert.ok(recovered);
+  recordOpenSandboxProvisionSuccess(recovered);
+  for (let i = 0; i < CREATE_CIRCUIT_FAILURES_TO_TRIP; i++) recordOpenSandboxProvisionError("DOCKER::SANDBOX_START_FAILED");
+  advance(CREATE_CIRCUIT_COOLDOWN_MS - 1);
+  assert.equal(openSandboxCreateCircuitAllowsClaim().allowed, false);
+  advance(1);
+  assert.equal(openSandboxCreateCircuitAllowsClaim().canary, true);
 });
 
 test("#1046 failures older than the window no longer trip the circuit", () => {
@@ -263,7 +293,7 @@ test("#1119 directory failure trips a half-open probe again without recording pr
   assert.equal(openSandboxCreateCircuitStatus().recentFailures, 3);
   assert.equal(openSandboxCreateCircuitStatus().lastTripReason, "SANDBOX_CREATE_DIRECTORY_FAILED");
   assert.throws(() => assertOpenSandboxCreateAdmission(probe), OpenSandboxCreateAdmissionExpiredError);
-  advance(CREATE_CIRCUIT_COOLDOWN_MS);
+  advance(Math.min(CREATE_CIRCUIT_COOLDOWN_MS * 2, CREATE_CIRCUIT_MAX_COOLDOWN_MS));
   const next = openSandboxCreateCircuitAllowsClaim();
   assert.throws(() => assertOpenSandboxCreateAdmission(probe), OpenSandboxCreateAdmissionExpiredError);
   assert.doesNotThrow(() => assertOpenSandboxCreateAdmission({ canary: true, episode: next.episode }));

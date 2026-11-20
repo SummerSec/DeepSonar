@@ -12,7 +12,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("resume and rerun-current preserve history while governing snapshot identity", async () => {
+  test("resume and rerun-current preserve history while governing snapshot identity", async (t) => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
     const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -123,6 +123,10 @@ if (!testDatabaseUrl) {
       const baselineSnapshot = JSON.parse(
         JSON.stringify(await currentSnapshot()),
       ) as Awaited<ReturnType<typeof currentSnapshot>>;
+      await t.test("#1119 actual create 500 records failures and pauses PostgreSQL claims with bounded backoff", async () => {
+        const { runCreateFailureDispatchFixture } = await import("./dispatch-create-circuit.fixture.js");
+        await runCreateFailureDispatchFixture(sql, projectId, roleName, baselineSnapshot);
+      });
       const attemptIdentity = (
         snapshot: Awaited<ReturnType<typeof currentSnapshot>>,
       ) => ({

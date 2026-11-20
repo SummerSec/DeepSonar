@@ -6,7 +6,7 @@
 
 #1118 的[持久跨项目公平领取](architecture/06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。
 
-#1119/#1046 的[OpenSandbox 创建熔断与鉴权管理探测](OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)记录目录创建 500 计数、重放证据门、三种 Compose/Scheduler 的统一 List 契约、试运行包与隔离 smoke 接线，以及 #1176 覆盖审计。最终 SHA 的 Actions 待验。
+#1119/#1046 的[OpenSandbox 创建熔断与鉴权管理探测](OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)记录目录创建 500 计数、受控熔断参数与半开有界退避、真实 Dispatcher/受控 runner 到 PostgreSQL 暂停认领回归、重放证据门、三种 Compose/Scheduler 的统一 List 契约、试运行包与隔离 smoke 接线，以及 #1176 覆盖审计。最终 SHA 的 Actions 待验。
 
 NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁竞争后的认领唤醒)覆盖临时跳过后没有新通知的恢复，保留默认轮询关闭；真实 PostgreSQL 红测已复现，修复最终 SHA 的 Actions 另验，不把它当作历史 CI 持锁者的证据。
 

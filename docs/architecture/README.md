@@ -9,7 +9,7 @@
 
 #1082 的[最终用量与安全形态诊断](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
 
-#1119/#1046 的[创建故障与鉴权管理探测](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)归入 NFR-OPS-001 / IR-001，由运行时与部署视图记录计数、重放及 List/create 分层契约；专题含 #1176 Kubernetes 覆盖、统一探针、打包与 smoke 的替代审计，最终 SHA Actions 待验。
+#1119/#1046 的[创建故障与鉴权管理探测](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)归入 NFR-OPS-001 / IR-001，由运行时与部署视图记录计数、重放及 List/create 分层契约。专题含受控熔断参数、半开有界指数退避、真实 Dispatcher/受控 runner 到 PostgreSQL 暂停认领组合回归，以及 #1176 Kubernetes 覆盖、统一探针、打包与 smoke 的替代审计，最终 SHA Actions 待验。
 
 NFR-REL-001 的[行锁竞争认领唤醒](06-runtime-view.md#行锁竞争后的认领唤醒)合并 `SKIP LOCKED` 后的延后重试，保留默认轮询关闭与所有资格门；真实 PostgreSQL 红测已复现，修复后的最终 SHA Actions 另验，历史 CI 的具体持锁时序仍未证实。
 > #1074 的[人工断点续做](../HUMAN_CONTINUATION.md)与[ADR 0022](adr/0022-human-continuation.md)扩展 FR-JOB-008/FR-CTRL-006；schema 73、超时 overdue、有限封存回收和晚回复受治理续做已接线，业务文件清单 v2 增加最小权限恢复约束，最终 SHA Actions 另验。
