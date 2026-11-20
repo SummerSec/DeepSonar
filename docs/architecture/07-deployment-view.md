@@ -68,6 +68,10 @@ OpenHarmony Fuzz 的工具链与发布检查（核对 2026-11-01）见[发布契
 
 开发、生产 OpenSandbox overlay 和远程 Worker 的依赖链新增 `opensandbox-resource-preflight`。它用相同固定 server image、相同 Engine socket，只读检查 CPU/memory/PIDs 声明；unsupported/unknown 非零退出，普通 Compose 启动不得越过该 init。Podman 的 Scheduler healthcheck 兼容不解除此依赖。检查不是逐容器强制证明，也不持续覆盖复用的已完成 init、服务重启、`--no-deps`、外部 OpenSandbox 或 Kubernetes；实现与 Actions 边界见[权威专题](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)，剩余缺口登记 D-10。
 
+## OpenSandbox 就绪探针（#1046 P1-4）
+
+生产 OpenSandbox overlay 与远程 Worker 的 `opensandbox` 服务，healthcheck 执行 `deploy/opensandbox/readiness-probe.py`：带鉴权的管理面 List（`GET /sandboxes`，与 dispatcher 的探测同口径：`OPEN-SANDBOX-API-KEY` + 5s 超时，只读幂等；401/403/5xx/慢 List 均判 unhealthy）。`GET /health` 仅继续作为进程存活信号，不再是就绪条件：事故形态「List 200 / POST 500」下 /health 依旧绿灯而 create 持续失败（#1046）。Podman 兼容层的 `service_started`（#726）语义不变；就绪语义由该探针承担。
+
 ## Pi 扩展部署与观测内存准入（#815）
 
 Pi 扩展不是沙箱在启动时从项目目录发现的插件。准入发布物预装在镜像的 `/opt/deepsonar/pi-extensions/node_modules`，Scheduler 从 Job 冻结的 registry row 物化 `.pi/agent/extensions/<id>.ts` stub，并以 `--no-extensions` 加显式 `-e` 启动。当前 OM wrapper 位于 `/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts`，只加载固定的 `pi-observational-memory/src/index.ts`；`package`、`version`、`integrity`、entry、workspace path、wrapper fingerprint 和兼容镜像在 Job snapshot/manifest 侧重新校验，不能由 mutable tag、任务文本或 Agent 下载脚本改变运行时。

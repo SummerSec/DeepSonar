@@ -83,6 +83,12 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 - sh 的 `compose up` 普通失败保留原退出码；只有超时 `124` 且基础依赖真实就绪时允许受控恢复，恢复仍须等待 `silo-init` 成功退出，再启动 scheduler，最后通过同一入口与容器门禁。PowerShell 对 `compose up` 失败直接停止并输出有界诊断；不会因 `service_started` 跳过依赖探测或误报成功。
 - `pnpm ci:unit:deploy-ps1` 包含 sh 行为回归及 PowerShell 函数行为/原生命令超时回归；CI 必须提供 PowerShell。测试夹具不代替 Docker/Podman 真机部署验收。
 
+#### OpenSandbox 就绪探针（#1046 P1-4）
+
+- 生产 OpenSandbox overlay 与远程 Worker 的 `opensandbox` 服务，healthcheck 执行 `deploy/opensandbox/readiness-probe.py`：带鉴权的管理面 List（`GET /sandboxes`，与 Dispatcher 同口径：`OPEN-SANDBOX-API-KEY` + 5s 超时，只读幂等；401/403/5xx/慢 List 均判 unhealthy）。
+- `GET /health` 仅继续作为进程存活信号，不再是就绪条件：事故形态「List 200 / POST 500」下 /health 依旧绿灯而 create 持续失败（#1046）。
+- Podman 兼容层的 `service_started`（#726）语义不变；但最终就绪语义由该探针承担，不再由 /health 单独绿灯背书。
+
 ### 登录
 
 空库首次启动创建人类管理员，初始用户名为 `admin`。
