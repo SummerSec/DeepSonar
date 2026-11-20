@@ -50,7 +50,8 @@ test("JobDetail historical continuation respects permission, immutable retries a
     dispatched_prompt: null, context_diagnostics: null,
   };
   Object.assign(api, {
-    credentials: async () => [], authMe: async () => ({ actor: { scopes } }),
+    credentials: async () => [],
+    authMe: async () => ({ authenticated: true, auth_required: true, actor: { role: "operator", scopes } }),
     job: async () => ({ ...detail, job: { ...detail.job, id: jobId } }),
     jobEvidence: async () => { throw new Error("404"); }, jobSession: async () => { throw new Error("404"); },
     jobStreamPage: async () => ({ items: [], has_more: false, next_cursor: null }),
