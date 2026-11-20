@@ -203,7 +203,10 @@ export interface DashboardUsage {
     project_name: string;
     jobs: number;
   }>;
-  models: Array<UsageTokenCounts & { provider: string; model: string; workload: UsageWorkload }>;
+  models: Array<UsageTokenCounts & Pick<UsageTokenTotals, "settled" | "unknown" | "not_reported"> & {
+    provider: string; model: string; workload: UsageWorkload;
+  }>;
+  unconfirmed_models: DashboardUsage["models"];
 }
 
 export interface Project {

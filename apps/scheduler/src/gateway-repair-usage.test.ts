@@ -182,3 +182,51 @@ test("stream zero usage is known, and fractional usage is unknown across protoco
   assert.equal(scan("chat/completions", event(chatEnd) + event({ ...zeroChat, usage: { ...zeroChat.usage, prompt_tokens: 0.5 } }) + event("[DONE]"), true), null);
   assert.equal(scan("responses", event({ type: "response.completed", response: { ...zeroResponse, usage: { ...zeroResponse.usage, output_tokens: 0.5 } } }), true), null);
 });
+
+test("#1082 conservative B requires final delta evidence and tolerates only absent usage", () => {
+  const content = event({ type: "content_block_delta", delta: { type: "text_delta", text: "generated after initial usage" } });
+  const noUsage = event({ type: "message_delta", delta: { stop_reason: "end_turn" } });
+  for (const middle of ["", content, noUsage, content + noUsage]) {
+    assert.equal(scan("messages", event(antStart) + middle + event(antStop), true), null);
+  }
+  const complete = event(antStart) + content + noUsage + event(antDelta) + noUsage + event(antStop);
+  assert.deepEqual(scan("messages", complete, true), scan("messages", anthropic));
+  for (const broken of [null, [], "secret-value", 7, {}, { input_tokens: 10 }]) {
+    assert.equal(scan("messages", event(antStart) + event(antDelta) + event({ type: "message_delta", usage: broken }) + event(antStop), true), null);
+  }
+  assert.equal(scan("messages", event(antStart) + event(antDelta) + content + event(antStop), true), null,
+    "content after final usage invalidates its finality");
+  const pending = { ...antStart, message: { ...antStart.message, usage: { input_tokens: 10, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 } } };
+  assert.equal(scan("messages", event(pending) + noUsage + event(antStop), true), null);
+  assert.deepEqual(scan("messages", event(pending) + noUsage + event(antDelta) + event(antStop), true), scan("messages", anthropic));
+});
+
+test("#1082 diagnostics contain only fixed shapes, bounded counts and a non-content digest", () => {
+  const diagnose = (stream: string, chunk: number) => {
+    const scanner = createRepairUsageScanner("messages", true);
+    const bytes = Buffer.from(stream);
+    for (let i = 0; i < bytes.length; i += chunk) scanner.push(bytes.subarray(i, i + chunk));
+    scanner.finish();
+    assert.deepEqual(scanner.diagnostic(), scanner.diagnostic());
+    return scanner.diagnostic();
+  };
+  const stream = (secret: string) => event(antStart) + event({ type: "content_block_delta",
+    delta: { type: "text_delta", text: secret }, [secret]: { [secret]: secret } }) + event(antStop);
+  const first = diagnose(stream("SECRET_A_BEARER_PRIVATE_KEY"), 1);
+  const second = diagnose(stream("SECRET_B_BEARER_PRIVATE_KEY"), 16384);
+  assert.equal(first.reason, "missing_final_usage");
+  assert.equal(first.final_usage_seen, false);
+  assert.equal(first.events.content_block_delta, 1);
+  assert.deepEqual(first, second, "chunking, unknown keys and content values never enter the shape hash");
+  assert.ok(Buffer.byteLength(JSON.stringify(first)) <= 2048);
+  assert.doesNotMatch(JSON.stringify(first), /SECRET_|PRIVATE_KEY|text_delta|generated/);
+  const unknown = diagnose(event({ type: "SECRET_UNKNOWN_EVENT", SECRET_KEY: "SECRET_VALUE" }, "SECRET_UNKNOWN_EVENT"), 7);
+  assert.equal(unknown.reason, "unknown_event");
+  assert.equal(unknown.events.other, 1);
+  assert.doesNotMatch(JSON.stringify(unknown), /SECRET/);
+  const mismatch = diagnose(event(antStart, "message_delta"), 7);
+  assert.equal(mismatch.reason, "event_mismatch");
+  const long = diagnose(event(antStart) + event({ type: "ping" }).repeat(4000) + event(antStop), 65536);
+  assert.equal(long.events.ping, 4000);
+  assert.ok(Buffer.byteLength(JSON.stringify(long)) <= 2048);
+});

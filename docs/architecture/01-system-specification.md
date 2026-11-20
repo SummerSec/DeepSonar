@@ -705,6 +705,10 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### FR-CRED-003 Model Gateway 唯一出口
 
+#1082 的模型用量看板按 Provider、模型与 workload 独立呈现已结算、未上报、待对账请求数，单列未确认请求最多的 8 项以覆盖零 Token 模型。现有账本权限和时间过滤沿用，聚合/Web 回归接 `pnpm ci:unit:dashboard-overview`，最终 SHA Actions 待验。
+
+#1082 的[保守最终用量确认](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)继续要求 Anthropic 有效累计 usage delta 和 stop，任何 Provider 的 start-only 均不确认为 settled。缺省 usage delta 不产生新证据，真实 HTTP/PG main/OM 回归接 `pnpm ci:integration:platform-api`，scanner 单测接 `pnpm ci:unit:executor-real`，最终 SHA Actions 待验。
+
 - **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则准入，不得把长期 Provider key 注入 Sandbox。放行后保持业务请求/响应原始字节与端到端头；仅处理认证、绑定目标和必要 HTTP 边界，不隐式重试/重定向或静默改写模型/输出参数。
 - **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销；#923 及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)要求透明数据面与准入/结算分离。
 - **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。#923 / #928 已合入原始有界请求、单次 HTTP/SSE 传输及 OM scoped 结算查询，wrapper 确认 durable settled 前不提交终止结果；main 616d7a36 工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，后续 SHA 另验，协议限制见[专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
@@ -988,6 +992,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:recovery`、`pnpm ci:unit:runtime-sandbox`。
 
 ### NFR-OBS-001 审计、指标和状态可查询
+
+#1082 的 `gateway.usage_unconfirmed` 系统审计关联原 Job/Attempt/effect，只保存总计不超过 2048 字节的固定非秘密形态与其 SHA-256。未知键、event/type 值及业务原文不进入摘要或哈希。复用原审计权限，尽力写入与账本独立，字段及证据见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)。
 
 - **规范要求**：所有安全相关配置、权限决定、Job/Attempt 状态、Control 事件、外部效果和设备/镜像动作必须有可查询审计或指标；audit_logs 必须 append-only，指标不得包含秘密或客户原文。
 - **决策来源**：发生故障或争议时必须能区分提案、接受、执行、结算和终态。

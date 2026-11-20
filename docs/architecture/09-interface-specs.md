@@ -338,3 +338,8 @@ POST /projects/{id}/task-queue/yield 使用 jobs:control 与项目范围，输�
 ## PTY 清理证据详情（#1143）
 
 GET `/jobs/{id}` 增加可选 `process_diagnostics`，沿用 `tasks:read` 与项目归属权限，上限 64 条。它通过原 effect 的宿主审计引用读取精确进程终止、DELETE 与 sandbox 销毁结果。`host_kill_caller` 表示实际宿主调用来源，退出码未知保持 null。字段与恢复限制见 [PTY 清理专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。
+
+
+## 模型用量待确认投影（#1082）
+
+FR-CRED-003 / NFR-OBS-001 复用 `GET /dashboard/usage` 的项目权限、画布过滤与时间窗口。`models` 增加 `settled`、`unknown`、`not_reported` 计数，`unconfirmed_models` 按未确认请求数降序返回最多 8 个 Provider/model/workload 项。原 Token 排名与总计继续独立返回，零 Token 项可进入待确认表。字段、注意力成本与验收入口见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#模型用量待确认看板1082)，无数据库或写 API 变化。最终 SHA Actions 待验。

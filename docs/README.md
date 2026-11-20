@@ -2,6 +2,8 @@
 
 #1133 的[人工技术收口](architecture/09-interface-specs.md#人工结束技术验证1133)新增受权限、CAS、持久幂等与同事务审计保护的无定论终结轮次，并补齐[设备要求冻结](DEVICE_ACCESS.md)的自动和人工补证入口。既有 #1138 无进展刹车继续复用，最终 SHA Actions 待验。
 
+#1082 的[最终用量与安全形态诊断](MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
+
 NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁竞争后的认领唤醒)覆盖临时跳过后没有新通知的恢复，保留默认轮询关闭；真实 PostgreSQL 红测已复现，修复最终 SHA 的 Actions 另验，不把它当作历史 CI 持锁者的证据。
 
 #1088 的 [OpenSandbox PTY 退出诊断](AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)区分有效退出帧、WebSocket 中断与宿主主动终止，经原 Evidence 通路保留有界脱敏关闭码和错误原因；不新增重连或任务重跑权限。最终 SHA Actions 待验，历史现场底层原因仍未知。

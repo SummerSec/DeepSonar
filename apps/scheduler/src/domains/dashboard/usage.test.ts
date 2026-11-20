@@ -197,3 +197,26 @@ test("the same frozen model has distinct main and memory totals, including unset
   assert.equal(usage.tasks[0]!.total_tokens, 10);
   assert.equal(usage.totals.total_tokens, 910);
 });
+
+test("unconfirmed model usage remains visible when zero tokens falls outside the token top list", () => {
+  const window = resolveUsageWindow({ period: "week", now: NOW });
+  assert.ok(!("error_code" in window));
+  const usage = buildDashboardUsage({
+    window,
+    rows: [
+      ...Array.from({ length: 9 }, (_, index) => row({ model: `reported-${index}`, total_tokens: 100 + index })),
+      row({ model: "missing", settlement_status: "not_reported", total_tokens: 0 }),
+      row({ model: "missing", settlement_status: "not_reported", total_tokens: 0 }),
+      row({ model: "missing", settlement_status: "settled", total_tokens: 0 }),
+      row({ model: "missing", workload: "observational_memory", settlement_status: "unknown", total_tokens: 0 }),
+    ],
+  });
+  assert.equal(usage.models.some((model) => model.model === "missing"), false);
+  assert.deepEqual(usage.unconfirmed_models.map(({ model, workload, requests, settled, unknown, not_reported }) =>
+    ({ model, workload, requests, settled, unknown, not_reported })), [
+    { model: "missing", workload: "main", requests: 3, settled: 1, unknown: 0, not_reported: 2 },
+    { model: "missing", workload: "observational_memory", requests: 1, settled: 0, unknown: 1, not_reported: 0 },
+  ]);
+  assert.equal(usage.totals.not_reported, 2);
+  assert.equal(usage.totals.unknown, 1);
+});

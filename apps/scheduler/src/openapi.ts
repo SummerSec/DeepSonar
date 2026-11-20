@@ -822,7 +822,7 @@ const OPS: Op[] = [
     path: "/dashboard/usage",
     summary: "用量账本看板",
     description:
-      "聚合 job_usage_ledger（含缓存读/写 token）。period=day|week|month 为 Asia/Shanghai 滚动窗口；period=custom 时 from/to 为含首尾的日历日或 ISO 时刻，跨度最长 366 天。可选 project_id / canvas_id。不定价。项目级 token 只看到本项目。",
+      "聚合 job_usage_ledger（含缓存读/写 token）。models 含 settled/unknown/not_reported 计数；unconfirmed_models 按未确认请求数降序列出最多 8 项，保留零 token 项并区分 main/observational_memory。period=day|week|month 为 Asia/Shanghai 滚动窗口；period=custom 时 from/to 为含首尾的日历日或 ISO 时刻，跨度最长 366 天。可选 project_id / canvas_id。不定价。项目级 token 只看到本项目。",
     scope: "projects:read",
     tags: ["Dashboard"],
     query: {

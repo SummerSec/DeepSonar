@@ -1,7 +1,7 @@
 # Model Gateway 透明传输（#923）
 
 > 状态：as-built；#928 已合入 main 616d7a36，工程证据见下文；后续 SHA 另验，不代表真实模型、生产或性能验收。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-20
 
 ## Managed proxy 的逐跳连接策略（#1097）
 
@@ -95,6 +95,18 @@ JSON（包括扩展字段）、非 JSON 和二进制转发字节不重建。压�
 
 usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法完整观察、缺 terminal usage 或持久结算失败不能成为已知零成本。账本与已发生的外部效果不因客户端已收到数据而删除。Gateway 自身准入/无上游网络错误使用平台错误，已有上游响应保留上游语义。
 
+### Anthropic 最终用量与安全形态诊断（#1082）
+
+保守 B 由真实 `createRepairUsageScanner` 执行。`message_start.usage` 只建立 input/output/cache 累计基线，缺 output 可暂缓为 0，但不能凭 start 的整数或 `message_stop` 确认最终成本。任何 Provider 经 `/messages` 返回的 SSE 都必须有合法、单调的 `message_delta.usage.output_tokens` 和完整 `message_stop`。真正缺省 usage 的 delta 贡献零份新证据，可出现在有效最终 delta 前后。显式 null、错误类型、缺 output、计数回退、未知事件、event/type 不符、最终 usage 后再次生成 content、截断和超限继续拒绝确认。start-only 即使没有 content 也保留未确认。
+
+普通成功交换无可信 usage 记 `not_reported`，OM 记 `unknown`。这些行里的 0 不是已知零成本，有限余额或 OM 后续请求仍受原准入阻断。可信最终累计值只记一次，保留 input/output/cache。HTTP 状态、响应字节、分块、压缩和既有秘密回显守卫继续走原传输入口。诊断不授权重试、对账或历史回填，也不证明 #1082 现场实际收到何种帧。
+
+无可信用量的已完成观察调用现有系统审计，action=`gateway.usage_unconfirmed`，宿主关联 project/Job/Attempt/token/effect/request_no/workload。`after_json` 序列化上限 2048 UTF-8 字节。scan 只有固定 protocol/reason、SSE 布尔、已观察字节、已扫描帧数、固定事件分类计数、usage-less delta 计数、有效最终 usage 是否出现、固定 usage 字段类型及形态 SHA-256。未知键、type 和 event 字符串统一丢弃或归入 `other`。哈希仅输入固定分类和字段形态，不输入原始帧、键名或字段值。计数饱和，解析失败后的统计是前缀并标 `stopped_early`。不保存 prompt/completion/tool 参数、URL、header、凭据、原文摘要或原文哈希。
+
+复用现有审计权限与 append-only 表。审计使用 `recordSystemAudit` 的尽力写入和既有失败处理，与 usage ledger 独立，不能把审计丢失当作成本已知。每次未确认交换最多一条，不逐帧记录、不新增高基数指标。模型用量待确认看板见下节。
+
+scanner 单测接 `pnpm ci:unit:executor-real`（gate-runtime），真实普通 HTTP/PG 与 OM scoped receipt 回归分别在 `gateway-transparent.integration.test.ts`、`gateway-om-budget.integration.test.ts`，接 `pnpm ci:integration:platform-api`（gate-db-domain）。合成上游覆盖跨 Provider start-only、缺最终 delta、stop_reason-only、合法最终 delta 后无 usage、pending 补全、损坏和未知帧，并核查原始响应字节、账本归属、计数、安全审计与后续零出站拒绝。最终 SHA Actions 待验，本地测试/build/typecheck 未执行。
+
 绑定真实 key 在上游响应头/trailer 回显时中止；原始响应 body 通过跨 chunk 前缀观察阻断明文 key 回显。gzip、deflate、br 响应在转发每段压缩字节前通过独立解码观察检查回显，原压缩字节不替换；解码超限、非法或不支持的 Content-Encoding 明确断流，限制以 [响应守卫](../apps/scheduler/src/gateway-response-guard.ts) 为准。该检查不代表任意业务自定义编码/变换后的秘密检测。透明内容与秘密回显之间的安全例外必须如实记录，不能把原字节透传承诺扩张为放行已识别凭据。
 
 ## 预算与 OM 迁移
@@ -165,3 +177,12 @@ Reverse 工作流将 Claude、Pi/OM 和 Reverse/REA 分为三个独立原生双�
 `ci:integration:provider-headers-sdk` 使用独立测试 lockfile 的 Pi coding-agent/pi-ai 1.5.2，通过真实 ModelRuntime、ModelRegistry、内置 catalog 和 SDK 到 loopback 上游对照配置头；不改变生产 DSH 依赖。覆盖单个 override 仍保留其他内置模型、追加 custom model 后内置模型可调用、provider/override/definition 优先级，以及独立 Gateway 冻结模型 guard 对未授权模型的拒绝。测试源码为[原生对照回归](../agent-harness/pi-provider-headers-sdk-regression.test.ts)，已接入核心 Actions，新增行为的工程证据归属下述 main 验收基线。配置解析器负责生成默认值，不以局部覆盖集合取代模型授权。
 
 2026-11-06 工程证据：发布协调者已验收 main `616d7a3651c0e0b89d9457f4f435c02f51f8561b` 的核心与五项专项 Actions 日志，链接集中见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。后续提交仍须独立检查，不证明正式发布、生产或真实模型结果。
+
+
+### 模型用量待确认看板（#1082）
+
+现有 `GET /dashboard/usage` 从调用者可见范围内的 `job_usage_ledger` 聚合，每个 `models` 项增加 `settled`、`unknown`、`not_reported` 请求数，按 Provider、冻结模型和 main/observational_memory 独立归因。`unconfirmed_models` 单独列出未确认请求最多的 8 项，按请求总数和稳定身份打破并列，因此全部为零 Token 的模型也能出现。现有模型 Token 排名保持原算法。
+
+看板复用原筛选与折叠入口，仅在存在未确认项时显示该表。未上报与待对账分别显示计数，操作者可以看到需要核查的模型；不新增通知、配置或自动操作。总计覆盖完整查询窗口，该表最多展示 8 项，不表示完整模型目录。查询权限和时间窗口沿用原入口。
+
+聚合回归覆盖零 Token 模型被高用量模型挤出原排名的场景、已确认/未上报计数及主任务/后台隔离。Web 组件回归覆盖真实渲染与空表隐藏，保留 `pnpm ci:unit:dashboard-overview` 定向入口，并分别接入 Actions 实际调用的 `pnpm ci:unit:scheduler-characterization` 与 `pnpm ci:unit:web-facts`。本地未运行测试，最终提交 Actions 待验。历史原始帧缺失，历史形态和用量保持未确认。
