@@ -20,6 +20,7 @@
 ### 升级与验收范围
 
 - **数据库 schema 75 → 77**：76 新增预算 owner（`jobs.budget_owner_job_id` / `budget_execution_job_id`）与 `job_continuations`；77 在保留 76 的基础上新增公平领取字段（`projects.dispatch_last_served`、三列原子扫描游标、`global_settings` 单调计数器）及对应索引。非空库没有增量迁移链，升级前先备份并按受治理的基线重建流程预演，保留现有 `deploy/.env` 与显式配置；空库按新 schema 初始化。
+- **旧版人工等待断点**：在原版本用部署入口执行升级预检（`upgrade check`）。若仍有 `waiting_human` 任务使用旧 v1 断点，即使已经回复但尚未续跑，预检也会报 `ACTIVE_SOURCE_JOBS`；不会自动转换断点。请先在原版本完成任务，或由操作者明确结束等待，再重新预检；不要强制绕过。满足安全退出、释放资源、有效期及效果结算等全部条件的 v2 等待才可能豁免。详见[一键部署与升级](docs/ONE_CLICK_DEPLOYMENT.md)。
 - 工程验收以最终提交的 GitHub Actions 为准；不包括生产部署、历史任务重跑或真实模型验收。
 
 ## [0.6.21] - 2026-11-20
