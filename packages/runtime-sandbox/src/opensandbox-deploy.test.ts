@@ -186,7 +186,9 @@ test("production, worker and external Kubernetes share authenticated List readin
   const compat = readFileSync(join(root, "deploy/docker-compose.podman-compat.opensandbox.yml"), "utf8");
   assert.match(compat, /condition: service_started/);
   const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
-  assert.match(workflow, /python3 deploy\/opensandbox\/management-health\.test\.py/);
+  assert.match(workflow, /run: pnpm ci:unit:opensandbox-management-probe/);
+  const scripts = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts;
+  assert.equal(scripts["ci:unit:opensandbox-management-probe"], "python3 deploy/opensandbox/management-health.test.py");
 });
 
 test("offline trial CLI packages and checksum-binds both mounted OpenSandbox readers", () => {
