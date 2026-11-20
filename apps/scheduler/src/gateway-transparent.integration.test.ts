@@ -11,6 +11,7 @@ import { connect } from "node:net";
 import { gzipSync } from "node:zlib";
 import test from "node:test";
 import postgres from "postgres";
+import { anthropicUsageShapeCases } from "./gateway-usage-shape-fixture.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 type Captured = { method: string; path: string; headers: string[]; body: Buffer };
@@ -77,6 +78,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
   let cancelSeen: (() => void) | undefined;
   const sseFirst = Buffer.from('event: extension\r\ndata: {"unknown":true}\r\n\r\n');
   const sseLast = Buffer.from('data: {"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\ndata: [DONE]\n\n');
+  let usageShapeBody: string | undefined;
   const upstream = createServer((req, res) => {
     void (async () => {
       const body = await read(req);
@@ -86,7 +88,13 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       res.setHeader("x-request-id", "synthetic-request");
       res.setHeader("x-unknown-response", ["first", "second"]);
       res.setHeader("set-cookie", ["fixture=a", "fixture=b"]);
-      if (req.headers["x-policy-fixture"] === "main-generation") {
+      if (usageShapeBody !== undefined) {
+        res.setHeader("content-type", "text/event-stream");
+        res.setHeader("transfer-encoding", "chunked");
+        const bytes = Buffer.from(usageShapeBody);
+        res.write(bytes.subarray(0, 17));
+        res.end(bytes.subarray(17));
+      } else if (req.headers["x-policy-fixture"] === "main-generation") {
         const common = { input_tokens: 3, output_tokens: 2, total_tokens: 5 };
         const response = path === "/v1/messages"
           ? { type: "message", role: "assistant", stop_reason: "end_turn", content: [], usage: common }
@@ -188,6 +196,60 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       "anthropic-api-key", token.plaintext, "proxy-authorization", token.plaintext];
     const via = (path: string, method = "GET", headers: string[] = [], chunks: Buffer[] = []) =>
       send(gatewayPort, `/gateway${path}`, method, [...auth, ...headers], chunks);
+
+    await t.test("#1082 main HTTP preserves bytes and never settles start-only usage across providers", async () => {
+      for (const provider of ["openai", "anthropic"]) {
+        const shapeCredentialId = randomUUID();
+        await sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,public_metadata_json)
+          VALUES(${shapeCredentialId},'usage-shape','llm_provider',${provider},${encrypted.ciphertext},${encrypted.nonce},
+            ${encrypted.auth_tag},'offline','only',${sql.json({ base_url: `http://127.0.0.1:${address.port}` })})`;
+        const [credential] = await sql`SELECT * FROM credentials WHERE id=${shapeCredentialId}`;
+        for (const fixture of anthropicUsageShapeCases()) {
+          const shapeJobId = randomUUID();
+          await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+            VALUES(${shapeJobId},${projectId},'audit','running',${sql.json({ name: "audit", agent_cli: "claude-code",
+              runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} },
+              credential_id: shapeCredentialId, credential_provider: provider, settings_config_json: {},
+              gateway_provider_binding: freezeGatewayProviderBinding(credential as never) })},now(),3600,now()+interval '1 hour')`;
+          const attempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, shapeJobId));
+          const grant = await gateway.mintJobToken({ jobId: shapeJobId, projectId, credentialId: shapeCredentialId, maxRequests: 0, maxTokens: 50 });
+          usageShapeBody = fixture.body;
+          const call = () => send(gatewayPort, "/gateway/v1/messages", "POST",
+            ["authorization", `Bearer ${grant.plaintext}`, "content-type", "application/json"],
+            [Buffer.from(JSON.stringify({ model: "fixture", messages: [], stream: true, max_tokens: 3 }))]);
+          try {
+            const before = captured.length;
+            const response = await call();
+            assert.equal(response.status, 200, `${provider}/${fixture.name}`);
+            assert.deepEqual(response.body, Buffer.from(fixture.body));
+            const [ledger] = await sql`SELECT l.*,e.status AS effect_status FROM job_usage_ledger l JOIN job_attempt_effects e
+              ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id WHERE l.job_id=${shapeJobId}`;
+            assert.equal(ledger.attempt_id, attempt.id);
+            assert.equal(ledger.job_token_id, grant.id);
+            assert.equal(ledger.settlement_status, fixture.known ? "settled" : "not_reported");
+            assert.equal(ledger.effect_status, "settled");
+            assert.equal(Number(ledger.total_tokens), fixture.known ? 7 : 0);
+            assert.equal(Number(ledger.cache_read_input_tokens), fixture.known ? 1 : 0);
+            assert.equal(Number(ledger.cache_creation_input_tokens), fixture.known ? 1 : 0);
+            const [counter] = await sql`SELECT used_tokens,used_requests FROM job_tokens WHERE id=${grant.id}`;
+            assert.equal(Number(counter.used_tokens), fixture.known ? 7 : 0);
+            assert.equal(counter.used_requests, 1);
+            const audit = await sql`SELECT after_json FROM audit_logs WHERE action='gateway.usage_unconfirmed' AND resource_id=${shapeJobId}`;
+            assert.equal(audit.length, fixture.known ? 0 : 1);
+            if (!fixture.known) {
+              assert.equal(audit[0].after_json.attempt_id, attempt.id);
+              assert.equal(audit[0].after_json.effect_id, ledger.effect_id);
+              assert.ok(Buffer.byteLength(JSON.stringify(audit[0].after_json)) <= 2048);
+              assert.doesNotMatch(JSON.stringify(audit), /SYNTHETIC_PRIVATE|synthetic-upstream-key/);
+              const next = await call();
+              assert.equal(next.status, 409);
+              assert.equal(JSON.parse(next.body.toString()).error.type, "JOB_TOKEN_USAGE_UNKNOWN");
+              assert.equal(captured.length, before + 1, "unknown usage cannot authorize another paid call");
+            }
+          } finally { usageShapeBody = undefined; }
+        }
+      }
+    });
 
     await t.test("raw encoded path, repeated query/headers, JSON extensions, binary and chunked bodies match direct HTTP", async () => {
       const cases = [

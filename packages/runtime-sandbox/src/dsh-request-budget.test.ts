@@ -1,3 +1,5 @@
+import { DSH_PRIVATE_CREDENTIALS_SOURCE } from "./private-credential-reader.js";
+import { privateJobFixture } from "./private-job-fixture.js";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -18,6 +20,7 @@ test("DSH image preflight rejects old, incomplete and mismatched governed plugin
   const manifest = { version: 1, vendorVersion: "0.2.2-rc.1", sdkVersion: "1.5.2",
     vendorSha256: hash(vendor), artifactSha256: hash(artifact), helperSha256: hash(DSH_REQUEST_BUDGET_SOURCE) };
   const valid = new Map([
+    ["/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-credentials/deepsonar-job-credentials.mjs", DSH_PRIVATE_CREDENTIALS_SOURCE],
     [root + "/package.json", JSON.stringify({ name: "@deepseek-ai/dsh-llm-pi-ai", version: "0.2.2-rc.1" })],
     [manifestPath, JSON.stringify(manifest)],
     [root + "/lib/index.js", vendor], [root + "/lib/deepsonar-index.js", artifact],
@@ -78,15 +81,40 @@ async function policyFixture() {
   return policy;
 }
 
+test("#1032 DSH projects ordinary credential-file text before SDK generation without changing history or auth", async context => {
+  const auth = privateJobFixture();
+  context.after(() => auth.close());
+  const policy = await policyFixture();
+  const secrets = Object.values(auth.environment).map(file => readFileSync(file, "utf8"));
+  const history = { messages: [{ role: "toolResult", toolCallId: "read-private-files", toolName: "bash",
+    content: [{ type: "text", text: `ordinary output\n${secrets.join("\n")}\nretained result` }],
+    isError: false, timestamp: 1 }] };
+  const original = structuredClone(history);
+  const identity = { token: secrets[0] };
+  const projected = policy.redactDshContext(history, identity, auth.environment);
+  assert.deepEqual(history, original);
+  assert.deepEqual(identity, { token: secrets[0] });
+  assert.equal(projected.messages[0].toolCallId, "read-private-files");
+  assert.equal(projected.messages[0].content[0].text,
+    "ordinary output\n[REDACTED]\n[REDACTED]\n[REDACTED]\nretained result");
+  for (const secret of secrets) assert.ok(!JSON.stringify(projected).includes(secret));
+  assert.throws(() => policy.redactDshContext(history, identity, {
+    ...auth.environment, DEEPSONAR_CONTROL_TOKEN_FILE: auth.environment.DEEPSONAR_CONTROL_TOKEN_FILE + ".missing",
+  }), /PRIVATE_CREDENTIAL_REJECTED/u);
+});
+
 test("#1083 raw TypeScript policy loads through DSH installer and OM data-module boundaries", async () => {
   const dataModule = (source: string) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
   // Match the installer's raw source -> strip -> data import chain. A regular
   // TypeScript import resolves sibling modules and conceals broken image inputs.
   const mainSource = readFileSync(new URL("./pi-main-request-budget.ts", import.meta.url), "utf8");
-  const mainUrl = dataModule(stripTypeScriptTypes(mainSource));
+  const readerUrl = dataModule(stripTypeScriptTypes(readFileSync(new URL("./private-credential-reader.ts", import.meta.url), "utf8")));
+  const mainUrl = dataModule(stripTypeScriptTypes(mainSource).replace('"./private-credential-reader.js"', JSON.stringify(readerUrl)));
   const dshSource = stripTypeScriptTypes(readFileSync(new URL("./dsh-request-budget.ts", import.meta.url), "utf8"))
     .replace('"./pi-main-request-budget.js"', JSON.stringify(mainUrl));
   const generated = await import(dataModule(dshSource));
+  assert.equal(generated.DSH_REQUEST_BUDGET_SOURCE, DSH_REQUEST_BUDGET_SOURCE,
+    "raw-image and compiled-Scheduler loaders must produce the same complete helper bytes");
   const policy = await import(dataModule(generated.DSH_REQUEST_BUDGET_SOURCE));
   const model = { provider: "fixture", id: "model", api: "openai-completions", maxTokens: 256,
     baseUrl: "http://127.0.0.1:3100/gateway" };

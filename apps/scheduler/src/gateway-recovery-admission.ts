@@ -2,6 +2,7 @@ import type { sql } from "./db.js";
 import { readNoEffectReceipt } from "./gateway-admission-receipt.js";
 import { GatewayWorkloadPolicyError } from "./gateway-om-budget.js";
 import { GATEWAY_MODEL_RECOVERY_LIMIT } from "./runtime-knobs.js";
+import { continuationBudgetScope } from "./domains/job-control/continuation-budget.js";
 
 type Database = typeof sql;
 
@@ -29,9 +30,10 @@ export async function assertGatewayRecoveryAllowed(db: Database, input: {
     reject("gateway_recovery_owner_inactive");
   }
   // Counts span token generations and Attempts. A different key/owner cannot reset them.
+  const { jobIds } = await continuationBudgetScope(db, input.jobId);
   const [history] = await db`SELECT count(*) FILTER (WHERE intent_json ? 'gateway_retry_of') AS spent,
     count(*) FILTER (WHERE intent_json->>'recovery_policy_version' IS DISTINCT FROM '1') AS unversioned
-    FROM job_attempt_effects WHERE job_id=${input.jobId} AND effect_kind='gateway_model_request'`;
+    FROM job_attempt_effects WHERE job_id=ANY(${jobIds}::uuid[]) AND effect_kind='gateway_model_request'`;
   if (Number(history?.unversioned) !== 0) reject("gateway_recovery_history_unproven");
   if (!Number.isSafeInteger(Number(history?.spent)) || Number(history?.spent) < 0) reject("gateway_recovery_budget_missing");
   if (Number(history?.spent) >= (limit as number)) reject("gateway_recovery_budget_exhausted");

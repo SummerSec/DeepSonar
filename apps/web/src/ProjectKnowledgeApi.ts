@@ -65,6 +65,12 @@ export interface KnowledgeActivityWork {
 }
 
 export interface KnowledgeActivity extends Page<KnowledgeActivityWork> {
+  collection: {
+    state: "idle" | "busy" | "accumulating" | "cooldown" | "ready" | "halted";
+    pending_sources: number;
+    consecutive_failures: number;
+    next_collection_at: string | null;
+  };
   summary: {
     registered_sources: number;
     collected_sources: number;

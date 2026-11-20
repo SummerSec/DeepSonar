@@ -4,10 +4,12 @@
  * RoleConfig.role_credentials is gone — no dual-read / fallback.
  */
 import { buildRepairFeedback, isCurrentAgentCli, type RepairFeedback } from "@deepsonar/shared-types";
-import { credentialConcurrencyPolicy, validateCredentialCompatibility } from "../../credentials.js";
-import { extractModelsFromSettings, resolveEffectiveModel, resolvePiCliModelSelection } from "../../provider-settings.js";
+import { validateCredentialCompatibility } from "../../credentials.js";
+import { extractModelsFromSettings, resolveEffectiveModel, resolvePiCliModelSelection, resolveRequestedModel } from "../../provider-settings.js";
 import type { ProjectAgentAllowlist } from "../project-agent-allowlist/policy.js";
+import { readCredentialCapacities, type CredentialCapacity } from "./credential-capacity.js";
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
+import { bareUpstreamModelId, ModelCatalogMismatchError } from "../../provider-effective-model.js";
 
 export type ResolveProviderCredentialInput = {
   db: RoleRuntimeSnapshotTransaction;
@@ -23,9 +25,32 @@ export type ResolveProviderCredentialInput = {
   allowPassthrough?: boolean;
   /** Kernel-only existing Job identity; never an Agent account selector. */
   existingCredentialId?: string | null;
+  /** Kernel-only current Job, excluded only from its own recovery capacity read. */
+  existingJobId?: string | null;
+  /** Snapshot creation may persist a waiting decision; strict/readiness callers receive the capacity error. */
+  allowCapacityWait?: boolean;
+  /** Snapshot-owned model selection, including governed fallback/capability rules. */
+  selectModel?: (credential: ResolvedProviderCredential) => string | null;
+};
+
+export type CredentialSelection = {
+  schema: "deepsonar.credential-selection/v1";
+  observed_at: string;
+  selected_credential_id: string;
+  /** A creation-time observation, not a waiting clock or execution budget. */
+  reason: "existing" | "default" | "capacity" | "single" | "capacity_wait";
+  error_code: "provider_credential_all_at_capacity" | null;
+  candidates: Array<{
+    credential_id: string;
+    health: string | null;
+    health_error_category: string | null;
+    skipped: "health_error" | "model_incompatible" | "identity_not_selected" | "at_capacity" | null;
+    capacity: CredentialCapacity | null;
+  }>;
 };
 
 export type ResolvedProviderCredential = {
+  selection?: CredentialSelection;
   id: string;
   name: string;
   provider: string;
@@ -38,7 +63,13 @@ export type ResolvedProviderCredential = {
   model_catalog_json: unknown;
   model_catalog_fetched_at: unknown;
   health_status: string | null;
+  health_error_category?: string | null;
 };
+
+/** A catalog/probe limitation (unknown) does not prove inference is unavailable (#491). */
+export function credentialHealthUnavailable(row: { health_status?: unknown; health_error_category?: unknown }): boolean {
+  return row.health_status === "error" && row.health_error_category !== "unknown";
+}
 
 export class ProviderCredentialResolveError extends Error {
   readonly code: string;
@@ -60,7 +91,7 @@ function throwResolve(
     expected: unknown;
     observed: unknown;
     next_action: string;
-    category?: "model_correctable" | "permanent_failure";
+    category?: "model_correctable" | "permanent_failure" | "transient_retryable";
   },
 ): never {
   const repair = buildRepairFeedback({
@@ -122,7 +153,7 @@ export async function resolveProviderCredentialForJob(
   const rows = await input.db`
     SELECT c.id, c.name, c.provider, c.status, c.project_id,
            c.agent_cli, c.settings_config_json, c.public_metadata_json, c.meta_json,
-           c.model_catalog_json, c.model_catalog_fetched_at, c.health_status
+           c.model_catalog_json, c.model_catalog_fetched_at, c.health_status, c.health_error_category
     FROM credentials c
     WHERE c.kind = 'llm_provider'
       AND c.status = 'active'
@@ -141,6 +172,7 @@ export async function resolveProviderCredentialForJob(
     model_catalog_json: unknown;
     model_catalog_fetched_at: unknown;
     health_status: string | null;
+    health_error_category: string | null;
   }>;
 
   // A stale explicit restriction must be repaired by an administrator, never widened.
@@ -266,99 +298,138 @@ export async function resolveProviderCredentialForJob(
     if (preferred.length > 0) pool = preferred;
   }
 
-  // #707/#1078: default_credential_id 只在 pool 内查找，不再侧路回退到 candidates；
-  // 它是同条件下的优先项，不是一票决定 —— 达到自身并发上限时让位给仍有余量的同身份候选。
-  const defaultId = input.allowlist.default_credential_id;
-  const preferred = defaultId ? pool.find((row) => row.id === defaultId) : undefined;
-
-  if (pool.length === 1) return pool[0]!;
-
-  // Recovery does not rotate keys because another Job changed the load. The
-  // old identity is only a preference within current authorization/model/CLI
-  // constraints; an explicit configured default still takes precedence.
-  const existing = input.existingCredentialId ? pool.find(row => row.id === input.existingCredentialId) : undefined;
-
-  const identities = pool.map(row => {
-    const models = extractModelsFromSettings(row.settings_config_json, row.agent_cli!);
-    const model = modelNeed ? resolveCredentialModelRef(row.settings_config_json, row.agent_cli!, modelNeed)
-      : models.length === 1 ? models[0] : null;
-    return model ? JSON.stringify([row.provider, row.agent_cli, model]) : null;
+  const beforeHealth = pool;
+  // An unprobed account remains usable under the existing configuration contract.
+  // A completed failed probe is a temporary candidate exclusion, never permission repair.
+  pool = pool.filter(row => !credentialHealthUnavailable(row));
+  const frozenUnhealthy = beforeHealth.some(row => row.id === input.existingCredentialId && credentialHealthUnavailable(row));
+  if (pool.length === 0 || frozenUnhealthy) throwResolve("provider_credential_health_unavailable", {
+    message: frozenUnhealthy ? "原冻结账号的健康检查失败；请修复连接后重试" : "当前授权候选的健康检查均失败；请检查连接后重试",
+    path: "credential", expected: { kind: "credential_without_failed_health_probe" },
+    observed: { unavailable_count: beforeHealth.filter(credentialHealthUnavailable).length }, next_action: "check_provider_health_and_retry",
+    category: "transient_retryable",
   });
-  if (input.projectId && input.allowlist.credential_ids_configured && identities.every(identity => identity !== null)
-    && new Set(identities).size === 1) {
-    // Readiness does not consume a turn or mutate an allocation ledger. Each
-    // creation freezes its selected identity; load is a projection of the
-    // existing same-project Jobs, not credential quota or a retry permission.
-    const loads = await input.db`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
-      count(*) FILTER (WHERE status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_jobs,
-      count(*) AS total_jobs FROM jobs WHERE project_id=${input.projectId}
-      AND agent_snapshot_json->>'credential_id'=ANY(${pool.map(row => row.id)}::text[])
-      GROUP BY agent_snapshot_json->>'credential_id'` as Array<{ credential_id: string; active_jobs: unknown; total_jobs: unknown }>;
-    const counts = new Map<string, { active: number; total: number }>();
-    for (const load of loads) {
-      const active = Number(load.active_jobs), total = Number(load.total_jobs);
-      if (!Number.isSafeInteger(active) || !Number.isSafeInteger(total) || active < 0 || total < active) {
-        throwResolve("provider_credential_load_unknown", { message: "凭据 Job 负载无法确认；请重试或核对当前账本",
-          path: "credential", expected: { kind: "known_same_project_job_counts" }, observed: { kind: "invalid_counts" },
-          next_action: "inspect_current_job_history", category: "permanent_failure" });
+  const selectedModels = new Map<string, string | null>();
+  const modelErrors = new Map<string, ModelCatalogMismatchError>();
+  if (input.selectModel) {
+    for (const row of pool) {
+      try {
+        selectedModels.set(row.id, input.selectModel(row));
+      } catch (error) {
+        if (!(error instanceof ModelCatalogMismatchError)) throw error;
+        modelErrors.set(row.id, error);
       }
-      counts.set(load.credential_id, { active, total });
     }
-    // #1078 切片 1：并发余量来自 metadata.max_concurrent 与同一负载投影，
-    // 只用于偏好排序：先余量比例、后在途数、再历史总量，缺省与凭据 ID 只作并列裁决；
-    // 不占位、不放宽授权，也不改变准入判定（未设置视为不限）。
-    const score = (row: (typeof pool)[number]): { room: number; active: number; total: number } => {
-      const limit = credentialConcurrencyPolicy(row.meta_json).maxConcurrent;
-      const active = counts.get(row.id)?.active ?? 0;
-      const total = counts.get(row.id)?.total ?? 0;
-      const room = limit === null ? Number.POSITIVE_INFINITY : Math.max(0, limit - active);
-      return { room, active, total };
-    };
-    const ratio = (row: (typeof pool)[number]): number => {
-      const limit = credentialConcurrencyPolicy(row.meta_json).maxConcurrent;
-      const { room } = score(row);
-      if (limit === null) return 1;
-      return limit === 0 ? 0 : room / limit;
-    };
-    // 并列裁决顺序：显式缺省先于无余量的恢复身份，再退回 ID 稳定序（两者都无余量时）。
-    const tieBreak = (a: (typeof pool)[number], b: (typeof pool)[number]): number =>
-      Number(b.id === preferred?.id) - Number(a.id === preferred?.id)
-        || Number(b.id === existing?.id) - Number(a.id === existing?.id);
-    const byCapacity = (a: (typeof pool)[number], b: (typeof pool)[number]): number =>
-      ratio(b) - ratio(a) || tieBreak(a, b)
-        || score(a).active - score(b).active || score(a).total - score(b).total || a.id.localeCompare(b.id);
-    // #1078/#1096：仍有余量的冻结恢复身份先于显式缺省，否则「缺省满额时选了同伴并冻结、缺省之后
-    // 腾出容量」会让恢复 Job 被换回缺省并触发 SNAPSHOT_STALE；缺省与余量比例只服务没有恢复身份的池，
-    // 恢复身份自身满额或已不在授权池内时仍让位（授权与并发准入不因偏好排序放宽）。
-    if (existing && score(existing).room > 0) return existing;
-    if (preferred && score(preferred).room > 0) return preferred;
-    const withRoom = pool.filter((row) => score(row).room > 0);
-    const best = [...withRoom].sort(byCapacity)[0];
-    if (best) return best;
-    // 全部满额时保持既有行为：缺省优先，其次恢复身份，最后沿用容量排序，不新增失败码。
-    if (preferred) return preferred;
-    if (existing) return existing;
-    return [...pool].sort(byCapacity)[0];
+    const frozenModelError = modelErrors.get(input.existingCredentialId ?? "");
+    if (frozenModelError) throw frozenModelError;
+    pool = pool.filter(row => !modelErrors.has(row.id));
+    if (pool.length === 0) throw modelErrors.values().next().value!;
+  }
+  const defaultId = input.allowlist.default_credential_id;
+  const preferred = pool.find(row => row.id === defaultId);
+  const existing = pool.find(row => row.id === input.existingCredentialId);
+  const models = new Map(pool.map(row => {
+    const selectedModel = input.selectModel ? selectedModels.get(row.id) : modelNeed;
+    const requested = resolveRequestedModel({ roleModel: selectedModel, agentCli: row.agent_cli!,
+      settingsConfig: row.settings_config_json, includeCliDefault: true });
+    const cliModel = requested && row.agent_cli === "pi"
+      ? resolveCredentialModelRef(row.settings_config_json, row.agent_cli, requested) : requested;
+    return [row.id, cliModel ? bareUpstreamModelId(resolveEffectiveModel({
+      roleModel: cliModel, agentCli: row.agent_cli!, settingsConfig: row.settings_config_json,
+    })) : null];
+  }));
+  const identities = pool.map(row => models.get(row.id)
+    ? JSON.stringify([row.provider, row.agent_cli, models.get(row.id)]) : null);
+  const homogeneous = input.projectId && input.allowlist.credential_ids_configured
+    && identities.every(identity => identity !== null) && new Set(identities).size === 1;
+  if (pool.length > 1 && !homogeneous && !preferred && !existing) {
+    throwResolve("provider_credential_multi_match", {
+      message: `项目授权目录内有 ${pool.length} 个匹配 Provider 凭据，无法唯一解析；请设置项目缺省凭据或收窄白名单`,
+      path: "provider",
+      expected: { kind: "unique_or_default_credential", match_count: 1 },
+      observed: {
+        match_count: pool.length,
+        providers: candidates.map((row) => ({
+          provider: row.provider,
+          name: row.name,
+          health_status: row.health_status,
+        })),
+        default_credential_configured: Boolean(defaultId),
+      },
+      next_action: "set_project_default_credential_or_narrow_enabled_credential_ids",
+    });
   }
 
-  // 非单一身份（含跨 provider）与未显式授权白名单的场景保持原语义；跨 provider 候选等价
-  // 判据仍待 #1078 的明确决策，不在本切片内放开。
-  if (preferred) return preferred;
-  if (existing) return existing;
-
-  throwResolve("provider_credential_multi_match", {
-    message: `项目授权目录内有 ${pool.length} 个匹配 Provider 凭据，无法唯一解析；请设置项目缺省凭据或收窄白名单`,
-    path: "provider",
-    expected: { kind: "unique_or_default_credential", match_count: 1 },
-    observed: {
-      match_count: pool.length,
-      providers: candidates.map((row) => ({
-        provider: row.provider,
-        name: row.name,
-        health_status: row.health_status,
-      })),
-      default_credential_configured: Boolean(defaultId),
+  let capacities: Map<string, CredentialCapacity>;
+  try {
+    capacities = await readCredentialCapacities(input.db, pool.map(row => ({ ...row, model: models.get(row.id) ?? null })), input.existingJobId);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "provider_credential_occupancy_unknown") throw error;
+    throwResolve("provider_credential_load_unknown", { message: "凭据运行占用无法确认；请核对当前账本",
+      path: "credential", expected: { kind: "known_running_occupancy" }, observed: { kind: "invalid_counts" },
+      next_action: "inspect_current_job_history", category: "permanent_failure" });
+  }
+  // Recovery must wait for its own identity. Only an explicit homogeneous pool rotates new Jobs.
+  let selectable = pool;
+  if (existing) selectable = [existing];
+  else if (!homogeneous && preferred) selectable = [preferred];
+  const select = (row: ResolvedProviderCredential, reason: CredentialSelection["reason"]): ResolvedProviderCredential => ({
+    ...row, selection: { schema: "deepsonar.credential-selection/v1", observed_at: new Date().toISOString(),
+      selected_credential_id: row.id, reason,
+      error_code: reason === "capacity_wait" ? "provider_credential_all_at_capacity" : null,
+      candidates: beforeHealth.map(candidate => ({ credential_id: candidate.id, health: candidate.health_status,
+        health_error_category: candidate.health_error_category ?? null,
+        skipped: credentialHealthUnavailable(candidate) ? "health_error"
+          : modelErrors.has(candidate.id) ? "model_incompatible"
+          : !selectable.some(allowed => allowed.id === candidate.id) ? "identity_not_selected"
+          : capacities.get(candidate.id)?.blocked_by.length ? "at_capacity" : null,
+        capacity: capacities.get(candidate.id) ?? null })),
     },
-    next_action: "set_project_default_credential_or_narrow_enabled_credential_ids",
+  });
+  const withRoom = selectable.filter(row => capacities.get(row.id)!.blocked_by.length === 0);
+  if (existing && withRoom.includes(existing)) return select(existing, "existing");
+  if (withRoom.length === 1) {
+    const chosen = withRoom[0]!;
+    return select(chosen, chosen.id === preferred?.id ? "default" : pool.length === 1 ? "single" : "capacity");
+  }
+  const loads = withRoom.length > 1 ? await input.db`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
+    count(*) FILTER (WHERE status IN ('pending','claimed','provisioning','running','waiting_human')) AS assigned_jobs,
+    count(*) AS total_jobs FROM jobs WHERE project_id=${input.projectId}
+    AND agent_snapshot_json->>'credential_id'=ANY(${pool.map(row => row.id)}::text[])
+    GROUP BY agent_snapshot_json->>'credential_id'` as Array<{ credential_id: string; assigned_jobs: unknown; total_jobs: unknown }> : [];
+  const counts = new Map<string, { assigned: number; total: number }>();
+  for (const load of loads) {
+    const assigned = Number(load.assigned_jobs), total = Number(load.total_jobs);
+    if (![assigned, total].every(value => Number.isSafeInteger(value) && value >= 0) || total < assigned) {
+      throwResolve("provider_credential_load_unknown", { message: "凭据分配负载无法确认；请重试或核对当前账本",
+        path: "credential", expected: { kind: "known_project_job_counts" }, observed: { kind: "invalid_counts" },
+        next_action: "inspect_current_job_history", category: "permanent_failure" });
+    }
+    counts.set(load.credential_id, { assigned, total });
+  }
+  const ranked = [...withRoom].sort((a, b) => capacities.get(b.id)!.room_ratio - capacities.get(a.id)!.room_ratio
+    || capacities.get(a.id)!.credential.in_use - capacities.get(b.id)!.credential.in_use
+    || (counts.get(a.id)?.total ?? 0) - (counts.get(b.id)?.total ?? 0)
+    || (counts.get(a.id)?.assigned ?? 0) - (counts.get(b.id)?.assigned ?? 0)
+    || Number(b.id === defaultId) - Number(a.id === defaultId)
+    || a.id.localeCompare(b.id));
+  if (ranked[0]) return select(ranked[0], ranked[0].id === defaultId ? "default" : "capacity");
+  if (input.allowCapacityWait) {
+    // A zero quota cannot clear by releasing occupancy. Prefer a temporarily
+    // full peer for a new Job, without rotating frozen or heterogeneous identities.
+    const canWait = !existing && homogeneous ? selectable.filter(row => {
+      const { credential, model, provider } = capacities.get(row.id)!;
+      return credential.limit !== 0 && model.limit !== 0 && provider.limit !== 0;
+    }) : [];
+    const waitingPool = canWait.length > 0 ? canWait : selectable;
+    const waiting = existing ?? waitingPool.find(row => row.id === defaultId)
+      ?? [...waitingPool].sort((a, b) => a.id.localeCompare(b.id))[0]!;
+    return select(waiting, "capacity_wait");
+  }
+  throwResolve("provider_credential_all_at_capacity", {
+    message: "所有符合当前要求的授权凭据都已达到并发上限；请等待运行名额释放",
+    path: "credential", expected: { kind: "available_provider_credential_model_capacity" },
+    observed: { candidate_count: selectable.length }, next_action: "wait_for_provider_capacity",
+    category: "transient_retryable",
   });
 }

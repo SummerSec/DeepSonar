@@ -9,11 +9,28 @@ Independent SDK provenance (historical): sibling worktree `DeepSonar-opensandbox
 
 ## 创建熔断与鉴权管理探测（#1119 / #1046）
 
-Dispatcher 在真实 provision 的失败出口独立记录服务故障。受控诊断中的 `stage=create`、未取消的 HTTP 5xx，以及 `Failed to create directory /opt/opensandbox in sandbox: 500 ...` 错误形状会计入现有 create 熔断。目录故障和结构化服务故障分别投影为固定码 `SANDBOX_CREATE_DIRECTORY_FAILED`、`SANDBOX_CREATE_SERVER_ERROR`，状态、指标与暂停日志只保存固定分类。窗口阈值、冷却和 claim 时绑定的 canary/episode 沿用现有实现。
+Dispatcher 在真实 provision 的失败出口独立记录服务故障。受控诊断中的 `stage=create`、未取消的 HTTP 5xx，以及 `Failed to create directory /opt/opensandbox in sandbox: 500 ...` 错误形状会计入现有 create 熔断。目录故障和结构化服务故障分别投影为固定码 `SANDBOX_CREATE_DIRECTORY_FAILED`、`SANDBOX_CREATE_SERVER_ERROR`，状态、指标与暂停日志只保存固定分类。正常 Job 错误和既有诊断审计继续通过原入口读取。
 
-核对固定 main `de13b9f7709547e392c9fbcaf274c05b856b1b5d` 后，半开恢复由观察到半开的进程在 claim 数据库锁内按全部 claimed/provisioning 工作计数，独立限制一个创建名额，全局配额不限时仍生效。出站创建前再次核验 episode，过期准入使用 `provision_admission_deferred` 重新等待，并保留原效果的 `never_started` 证明及真实创建失败重试额度。当前 episode 的成功探针才关闭熔断，失败探针重新打开。进程内状态的多副本与重启边界见[运行时视图](architecture/06-runtime-view.md#默认不限的调度配额1123)。本次目录 500 回归还核对单名额、失败后及下一轮半开的旧 episode 出站拒绝，最终整合 SHA 的 Actions 待验。
+核对并合入固定主集成 `d6997ce3b13a65b6c000316da83bad9fef5d71a0` 后，半开恢复由观察到半开的进程在 claim 数据库锁内按全部 claimed/provisioning 工作计数，独立限制一个创建名额，全局配额不限时仍生效。出站创建前再次核验 episode，过期准入使用 `provision_admission_deferred` 重新等待，并保留原效果的 `never_started` 证明及真实创建失败重试额度。当前 episode 的成功探针关闭熔断并恢复初始冷却。当前半开探针失败时重新打开，下一次冷却翻倍至配置上限，默认依次等待 30、60、120、240、300 秒，随后维持 300 秒。普通失败与旧 episode 的迟到结果计入窗口，但不触发半开冷却倍增。进程内状态的多副本与重启边界见[运行时视图](architecture/06-runtime-view.md#默认不限的调度配额1123)。
+
+熔断策略由 Scheduler 的 `config.ts` 在启动时读取环境变量。空值采用默认值，其余值必须是范围内的正整数，最大冷却须大于等于初始冷却。非法显式输入阻止正常启动，报错只含字段名和范围。离线升级预检使用正值兜底并将字段加入现有 `configInputErrors`，由原预检入口报告阻塞错误。配置生效需要重新启动 Scheduler，进程状态随重启重建。
+
+| 环境变量 | 默认值 | 允许范围 |
+| --- | --- | --- |
+| `OPENSANDBOX_CREATE_CIRCUIT_FAILURES` | 2 次 | 1–100 次 |
+| `OPENSANDBOX_CREATE_CIRCUIT_WINDOW_SECS` | 300 秒 | 1–3600 秒 |
+| `OPENSANDBOX_CREATE_CIRCUIT_COOLDOWN_SECS` | 30 秒 | 1–300 秒 |
+| `OPENSANDBOX_CREATE_CIRCUIT_MAX_COOLDOWN_SECS` | 300 秒 | 1–300 秒，且不小于初始冷却 |
+
+零值按非法配置拒绝。部署者通过现有 Scheduler 进程环境注入这些参数。
+
+`opensandbox-create-circuit.test.ts` 覆盖连续失败退避上限、旧 episode、恢复后重置，以及既有单名额与出站拒绝。`usage-limit-config.test.ts` 覆盖默认/显式正值、零/负数/小数/越界输入、离线预检与冷却关系校验。`job-rerun.integration.test.ts` 在隔离 PostgreSQL 内调用 `dispatch-create-circuit.fixture.ts` 的组合回归，以真实 Dispatcher → 真实 OpenSandboxRunner → 受控 client create 500 → 原 callback/审计/Attempt 引用/失败计数 → 停止后续 claim 的路径验证普通窗口和失败半开的退避，并核对健康 List 不关闭熔断、pending Job 无 Attempt、已尝试 create 的效果保持 `unknown` / `never`。该组合路径只替换上游 client 和既有 runner 实例的 provision 方法，失败通过实际出口记录。
+
+Actions 实际调用 `pnpm ci:unit:runtime-cleanup`（`gate-runtime`）、`pnpm ci:unit:finding-protocol`（`gate-contract`，含 `usage-limit-config.test.ts`）和 `pnpm ci:integration:recovery`（`gate-db-core`）。配置回归也收录在现有 `pnpm ci:unit:dispatch-limits` 入口，另验文档、既有 dispatch-limits PG 组合与适用运行时专项。本轮本地仅静态核对和 `git diff --check`，最终整合 SHA 的 Actions 待验。
 
 熔断计数与重放权限分别判断。无会话、无句柄和 HTTP 500 均不构成无副作用证明。调用过 runner 的不确定结果继续记 `unknown`，自动重试仍要求当前 owner 和原有的显式 `never_started` / `external_effect=false` 证据。取消和普通配置错误不进入新增服务故障分类。
+
+#1119 本轮落实 A 的平台工程缺口。P1-3 要求的 OpenSandbox/execd 上游现场原始日志仍属外部 TODO，当前可读来源为正常 Job 错误及 `scheduler_audit` 的固定宿主诊断，现场根因仍待上游证据。B 的 gateway 迁移尚未被用户选定。C/#1121 的诊断推断无效果与自动重放提案已被用户拒绝，后续由主 Agent 关闭该危险提案，未知效果继续按内核规则处理。这些范围与外部证据分别记录，A 的工程 Actions 不能证明上游根因已解决。
 
 生产、远程 Worker 与外置 Kubernetes Compose 共用只读挂载的 `deploy/opensandbox/management-health.py`，由容器内固定 Python 路径执行。它与 Scheduler 探测同用 `GET /v1/sandboxes?page=1&pageSize=1` 和 `OPEN-SANDBOX-API-KEY`，只接受 HTTP 200 且包含 `items` 数组的有界 JSON。探针从 `OPENSANDBOX_PROBE_PORT` 读取端口并核验合法范围，缺省端口及超时/字节上限以脚本为准；三份 Compose 显式绑定各自 server TOML 的监听端口。超时、缺 key、非法端口、认证失败、重定向与坏响应按固定码拒绝，错误正文和 key 不输出。管理 List 成功仅表示鉴权管理接口可用，实际 create 故障仍可独立暂停 claim，List 成功不会关闭 create 熔断。Podman 的 `service_started` overlay 与部署入口最终 readiness 检查继续按既有流程执行。
 

@@ -1,4 +1,5 @@
 import type { KnowledgeDb } from "./types.js";
+import { readProjectCollectionStatus } from "./collection-policy.js";
 
 // Work reasons may originate in a model request. Only scheduler-owned codes belong
 // in this metadata projection; arbitrary prompts, source text and feedback stay private.
@@ -41,7 +42,7 @@ interface ActivityWork {
   source_count: number;
 }
 
-/** One statement keeps the counters and page on the same database snapshot. */
+/** Counters and work page share one statement snapshot; collection reads the current admission policy. */
 export async function readKnowledgeActivity(db: KnowledgeDb, projectId: string, page: { limit: number; offset: number }) {
   const [result] = await db<{ summary: Record<string, number>; items: ActivityWork[];
     skipped_sources: Array<{ job_id: string; reason: string; at: string }> }[]>`
@@ -113,6 +114,7 @@ export async function readKnowledgeActivity(db: KnowledgeDb, projectId: string, 
   const skippedSources = result.skipped_sources.map(source => ({ ...source,
     reason: safeSkipReasons.has(source.reason) ? source.reason : "details_unavailable",
   }));
-  return { summary: result.summary, items, skipped_sources: skippedSources,
+  const collection = await readProjectCollectionStatus(db, projectId);
+  return { summary: result.summary, collection, items, skipped_sources: skippedSources,
     next_offset: result.items.length > page.limit ? page.offset + page.limit : null };
 }

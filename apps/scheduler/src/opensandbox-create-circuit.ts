@@ -20,16 +20,18 @@
  * dispatcher error text: that text can contain provider bodies, headers or a credential.
  */
 import { inc, setGauge } from "./metrics.js";
+import { config } from "./config.js";
 import type { ProvisionFailureDiagnostic } from "@deepsonar/runtime-sandbox";
 
 export const OPENSANDBOX_CREATE_CIRCUIT_OPEN = "opensandbox_create_circuit_open";
 
 /** Dispatcher-observed provision failures inside the window required to trip. */
-export const CREATE_CIRCUIT_FAILURES_TO_TRIP = 2;
+export const CREATE_CIRCUIT_FAILURES_TO_TRIP = config.runtime.openSandbox.createCircuit.failuresToTrip;
 /** Sliding window for the failure count (ms). */
-export const CREATE_CIRCUIT_WINDOW_MS = 5 * 60 * 1000;
+export const CREATE_CIRCUIT_WINDOW_MS = config.runtime.openSandbox.createCircuit.windowMs;
 /** Minimum time to stay open before admitting a half-open creation probe (ms). */
-export const CREATE_CIRCUIT_COOLDOWN_MS = 90 * 1000;
+export const CREATE_CIRCUIT_COOLDOWN_MS = config.runtime.openSandbox.createCircuit.cooldownMs;
+export const CREATE_CIRCUIT_MAX_COOLDOWN_MS = config.runtime.openSandbox.createCircuit.maxCooldownMs;
 
 export type OpenSandboxCreateCircuitState = "closed" | "open" | "half_open";
 
@@ -77,6 +79,7 @@ let episode = 0;
 let openedAtMs: number | null = null;
 let lastTripReason: string | null = null;
 let failureTimes: number[] = [];
+let cooldownMs = CREATE_CIRCUIT_COOLDOWN_MS;
 let clock: () => number = () => Date.now();
 
 function prune(now: number): void {
@@ -107,7 +110,7 @@ export function openSandboxCreateCircuitAllowsClaim(
   // single creation seat under its DB advisory lock, including unlimited quotas.
   if (status.state === "half_open") return { allowed: true, canary: true, episode };
   const openedAt = openedAtMs;
-  if (openedAt != null && clock() - openedAt >= CREATE_CIRCUIT_COOLDOWN_MS) {
+  if (openedAt != null && clock() - openedAt >= cooldownMs) {
     state = "half_open";
     setGauge("deepsonar_opensandbox_create_circuit", 1);
     return { allowed: true, canary: true, episode };
@@ -129,7 +132,8 @@ export function recordOpenSandboxProvisionFailure(
   inc("deepsonar_opensandbox_create_failures_total");
   // Only the probe admitted in the current episode can prove the backend is still
   // unstable on its own; an outcome from an earlier claim is ordinary window evidence.
-  if (probe?.canary === true && probe.episode != null && probe.episode === episode) {
+  if (state === "half_open" && probe?.canary === true && probe.episode != null && probe.episode === episode) {
+    cooldownMs = Math.min(CREATE_CIRCUIT_MAX_COOLDOWN_MS, cooldownMs * 2);
     reTrip(now, code);
   } else if (failureTimes.length >= CREATE_CIRCUIT_FAILURES_TO_TRIP) {
     reTrip(now, code);
@@ -172,6 +176,7 @@ export function recordOpenSandboxProvisionSuccess(probe: CreateCircuitProbe | nu
   openedAtMs = null;
   lastTripReason = null;
   failureTimes = [];
+  cooldownMs = CREATE_CIRCUIT_COOLDOWN_MS;
   setGauge("deepsonar_opensandbox_create_circuit", 0);
 }
 
@@ -240,6 +245,7 @@ export function resetOpenSandboxCreateCircuitForTests(clockOverride?: () => numb
   openedAtMs = null;
   lastTripReason = null;
   failureTimes = [];
+  cooldownMs = CREATE_CIRCUIT_COOLDOWN_MS;
   lastPauseLogAtMs = null;
   clock = clockOverride ?? (() => Date.now());
 }

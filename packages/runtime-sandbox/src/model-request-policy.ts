@@ -1,4 +1,5 @@
 import { shellQuote } from "./runtime-host.js";
+import { CLAUDE_PRIVATE_HELPER_PATH, PRIVATE_CREDENTIAL_READER_SOURCE } from "./private-credential-reader.js";
 
 export const MODEL_REQUEST_POLICY_BASE_URL = "http://127.0.0.1:38127/gateway";
 export const MODEL_REQUEST_POLICY_PATH = "/workspace/.deepsonar/model-request-policy.mjs";
@@ -6,7 +7,7 @@ export const MODEL_REQUEST_POLICY_PATH = "/workspace/.deepsonar/model-request-po
 /** Explicit client admission policy; formed HTTP requests are never rewritten. */
 export function modelRequestPolicyCommand(command: string, env: Record<string, string>, cli?: "claude-code"): string {
   if (!env.DEEPSONAR_REQUEST_POLICY_UPSTREAM) return command;
-  if (!env.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
+  if (!env.DEEPSONAR_GATEWAY_TOKEN_FILE) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
   return `node ${shellQuote(MODEL_REQUEST_POLICY_PATH)}${cli ? " --claude-launch-budget" : ""} -- ${shellQuote(command)}`;
 }
 
@@ -21,6 +22,7 @@ import { pathToFileURL } from 'node:url';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+${PRIVATE_CREDENTIAL_READER_SOURCE}
 const LIMIT = 16 * 1024 * 1024;
 const AUTH = new Set(['authorization','x-api-key','anthropic-api-key','proxy-authorization']);
 const HOP = new Set(['connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade']);
@@ -171,10 +173,11 @@ export function prepareModelRequestBytes(bytes, route, allowance) {
   return bytes;
 }
 
-export async function startModelRequestPolicy({ upstream, token, port = 38127 }) {
+export async function startModelRequestPolicy({ upstream, token, secretValues = [], port = 38127 }) {
   const base = new URL(upstream);
   if (!['http:','https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash || !token) fail('MODEL_REQUEST_POLICY_CONFIGURATION');
   const prefix = base.pathname.replace(/\/+$/, '');
+  const secrets = [...new Set([token, ...secretValues].filter(value => typeof value === 'string' && value.length > 0))];
   const controllers = new Set();
   const server = http.createServer(async (req, res) => {
     const controller = new AbortController(); controllers.add(controller);
@@ -187,12 +190,18 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
         const name = req.rawHeaders[i].toLowerCase();
         if (AUTH.has(name)) presented.push(name === 'authorization' ? req.rawHeaders[i + 1].replace(/^Bearer\s+/i,'') : req.rawHeaders[i + 1]);
       }
-      if (!presented.length || presented.some(value => value !== token)) fail('MODEL_REQUEST_POLICY_AUTH', 401);
       if (!req.url.startsWith('/gateway/') || /[\x00-\x20\x7f#\\]/.test(req.url)) fail('MODEL_REQUEST_POLICY_TARGET', 400);
       const relative = req.url.slice('/gateway'.length);
       if (relative.startsWith('//')) fail('MODEL_REQUEST_POLICY_TARGET', 400);
       const route = relative.split('?')[0];
+      // Claude's OTLP exporter has no file credential hook. The Job-owned loopback
+      // process authenticates only these fixed telemetry routes on its behalf.
+      const telemetry = req.method === 'POST' && /^\/otel\/v1\/(logs|metrics|traces)$/.test(relative);
+      if ((!presented.length && !telemetry) || presented.some(value => value !== token)) fail('MODEL_REQUEST_POLICY_AUTH', 401);
       let bytes = await collect(req);
+      // Exact ordinary-text matches only, including auxiliary count_tokens calls.
+      // Refuse before any upstream IO and never rewrite a formed request.
+      if (secrets.some(secret => bytes.includes(secret))) fail('MODEL_REQUEST_POLICY_CREDENTIAL_IN_CONTEXT', 400);
       const modelRequest = req.method === 'POST' && /^\/(?:v1\/)?(?:messages|chat\/completions|responses|completions)$/.test(route);
       if (modelRequest) {
         const allowanceSignal = AbortSignal.any([signal, AbortSignal.timeout(ALLOWANCE_TIMEOUT_MS)]);
@@ -234,18 +243,21 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
       if (res.headersSent || res.destroyed) res.destroy();
       else {
         const code = /^MODEL_REQUEST_POLICY_/.test(error.message) ? error.message : 'MODEL_REQUEST_POLICY_FAILED';
-        const hint = code === 'MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED'
+        const credentialRefusal = code === 'MODEL_REQUEST_POLICY_CREDENTIAL_IN_CONTEXT';
+        const hint = credentialRefusal
+          ? 'Job credential in body: credential_in_business_data. This request was not sent; stop this execution and inspect its credential-file output.'
+          : code === 'MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED'
           ? 'Request output or usage options do not satisfy the current budget. Configure supported CLI options before generating a new request; the formed request was not rewritten or sent.'
           : code === 'MODEL_REQUEST_POLICY_EXHAUSTED'
             ? 'The current token budget is exhausted. This request was not sent; operator action must preserve cumulative usage.' : undefined;
         // Deterministic local budget rejection is not a transient provider
         // conflict/quota response. Claude's SDK and outer loop retry 409/429;
         // both honor x-should-retry:false and render error.message, not hint.
-        const terminalBudget = hint !== undefined;
-        res.writeHead(terminalBudget ? 400 : Number.isInteger(error.status) ? error.status : 502,
-          {'content-type':'application/json', ...(terminalBudget ? {'x-should-retry':'false'} : {})});
-        res.end(JSON.stringify({error:{type:terminalBudget ? 'invalid_request_error' : 'request_admission_policy',
-          code, message:hint ? code + ': ' + hint : code, ...(hint ? {hint} : {})}}));
+        const terminalRefusal = hint !== undefined;
+        res.writeHead(terminalRefusal ? 400 : Number.isInteger(error.status) ? error.status : 502,
+          {'content-type':'application/json', ...(terminalRefusal ? {'x-should-retry':'false'} : {})});
+        res.end(JSON.stringify({error:{type:credentialRefusal ? 'credential_in_business_data' : terminalRefusal ? 'invalid_request_error' : 'request_admission_policy',
+          code, message:credentialRefusal ? hint : hint ? code + ': ' + hint : code, ...(hint ? {hint} : {})}}));
       }
     } finally { controllers.delete(controller); res.off('close',disconnected); }
   });
@@ -295,19 +307,26 @@ export function claudeOutputCap(allowance, ceilings = []) {
 // live process would require rewriting the body or restarting the CLI mid-turn, which
 // the accepted 2026-11-06 scope excludes; session resume is the supported boundary.
 export async function prepareClaudeLaunch(command, environment, settings = []) {
-  const allowance = await readLaunchAllowance(new URL(environment.DEEPSONAR_REQUEST_POLICY_UPSTREAM), environment.DEEPSONAR_GATEWAY_TOKEN);
+  const allowance = await readLaunchAllowance(new URL(environment.DEEPSONAR_REQUEST_POLICY_UPSTREAM), readPrivateCredential(environment.DEEPSONAR_GATEWAY_TOKEN_FILE));
   const cap = claudeOutputCap(allowance, [environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...settings.map(setting => setting?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)]);
-  if (cap === null) return { command, env: environment };
-  const configuration = JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } });
-  // Only generated numeric settings are appended, never user-controlled shell text.
+  const configuration = JSON.stringify({
+    apiKeyHelper: ${JSON.stringify("node " + CLAUDE_PRIVATE_HELPER_PATH)},
+    ...(cap === null ? {} : { env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } }),
+  });
+  // The CLI keeps only the final --settings argument. Keep the trusted file
+  // helper in the same generated override as the numeric launch cap.
+  // Neither value contains business-controlled shell text.
   return { command: command + " --settings '" + configuration + "'",
-    env: { ...environment, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } };
+    env: cap === null ? environment : { ...environment, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } };
 }
 
 async function launch() {
   const delimiter = process.argv.indexOf('--');
   if (delimiter < 0 || !process.argv[delimiter + 1]) fail('MODEL_REQUEST_POLICY_COMMAND');
-  const policy = await startModelRequestPolicy({ upstream: process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: process.env.DEEPSONAR_GATEWAY_TOKEN });
+  const token = readPrivateCredential(process.env.DEEPSONAR_GATEWAY_TOKEN_FILE);
+  const secretValues = [token, readPrivateCredential(process.env.DEEPSONAR_CONTROL_TOKEN_FILE, true),
+    readPrivateCredential(process.env.DEEPSONAR_OM_GATEWAY_TOKEN_FILE, true)];
+  const policy = await startModelRequestPolicy({ upstream: process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token, secretValues });
   let launchCommand = process.argv.slice(delimiter+1).join(' '), launchEnv = process.env;
   if (process.argv.slice(2,delimiter).includes('--claude-launch-budget')) {
     try {

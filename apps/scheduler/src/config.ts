@@ -68,6 +68,15 @@ function boundedInt(name: string, dflt: number, max: number): number {
   recordConfigInput(name, Number.isSafeInteger(v) && v > 0 && v <= max);
   return Number.isSafeInteger(v) && v > 0 && v <= max ? v : dflt;
 }
+/** Safety controls reject invalid explicit values; offline preflight keeps a positive fallback. */
+function strictBoundedInt(name: string, dflt: number, max: number): number {
+  if (process.env[name] === undefined || process.env[name]!.trim() === "") return dflt;
+  const value = boundedInt(name, dflt, max);
+  if (configInputErrors.has(name) && process.env.DEEPSONAR_OFFLINE_PREFLIGHT !== "1") {
+    throw new Error(`[config] ${name} must be an integer between 1 and ${max}`);
+  }
+  return value;
+}
 function boundedNonNegativeInt(
   name: string,
   dflt: number,
@@ -144,6 +153,15 @@ const hostDiskErrorPercent =
   configuredDiskWarningPercent < configuredDiskErrorPercent
     ? configuredDiskErrorPercent
     : 90;
+
+const createCircuitCooldownSec = strictBoundedInt("OPENSANDBOX_CREATE_CIRCUIT_COOLDOWN_SECS", 30, 300);
+const createCircuitMaxCooldownSec = strictBoundedInt("OPENSANDBOX_CREATE_CIRCUIT_MAX_COOLDOWN_SECS", 300, 300);
+if (createCircuitMaxCooldownSec < createCircuitCooldownSec) {
+  configInputErrors.add("OPENSANDBOX_CREATE_CIRCUIT_MAX_COOLDOWN_SECS");
+  if (process.env.DEEPSONAR_OFFLINE_PREFLIGHT !== "1") {
+    throw new Error("[config] OPENSANDBOX_CREATE_CIRCUIT_MAX_COOLDOWN_SECS must be at least OPENSANDBOX_CREATE_CIRCUIT_COOLDOWN_SECS");
+  }
+}
 
 export const config = {
   databaseUrl: str(
@@ -341,6 +359,12 @@ export const config = {
       ),
     },
     openSandbox: {
+      createCircuit: {
+        failuresToTrip: strictBoundedInt("OPENSANDBOX_CREATE_CIRCUIT_FAILURES", 2, 100),
+        windowMs: strictBoundedInt("OPENSANDBOX_CREATE_CIRCUIT_WINDOW_SECS", 300, 3600) * 1000,
+        cooldownMs: createCircuitCooldownSec * 1000,
+        maxCooldownMs: Math.max(createCircuitCooldownSec, createCircuitMaxCooldownSec) * 1000,
+      },
       domain: str("OPEN_SANDBOX_DOMAIN", "127.0.0.1:18081"),
       apiKey: str("OPEN_SANDBOX_API_KEY", ""),
       protocol: (str("OPEN_SANDBOX_PROTOCOL", "http") === "https"

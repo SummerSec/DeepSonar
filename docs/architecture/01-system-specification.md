@@ -173,7 +173,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Scheduler 必须在持久化 claim、全局/项目并发和 lease 约束内领取 Job；#1123 三项全局并发配额缺省且未配环境变量时为 null（不限），显式 null 覆盖环境变量，显式数字保留，0 拒绝；项目 null 继承，0 暂停新领取。Lease 续期必须绑定有效 Job/Attempt，过期或迟到回调不得重新取得执行权。
 - **决策来源**：多 Scheduler 副本、重试和迟到网络回调不能造成双执行或跨项目资源占用。
-- **实现状态**：as-built；claim 使用持久状态和锁，Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
+- **实现状态**：as-built；claim 使用持久状态和锁，跨项目按持久服务序号公平轮转，项目内沿持久游标按优先级循环扫描，前页资格变化在回绕后重新核验；有界扫描位置跨 Scheduler 与重启推进，拒绝资格不消耗服务轮次（#1118）。Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
 - **代码入口**：[Dispatch 控制](../../apps/scheduler/src/task-execution-control.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[全局设置](../../apps/scheduler/src/config.ts)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:integration:dispatch-limits`；人工并发抢同一 Job 并核对最多一个 Attempt。
 
@@ -215,7 +215,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-008 Reaper 与终态幂等
 
-- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。stall 的在飞 `tool.call` 豁免不是无上限：豁免仅持续到同一 per-image floor 派生的 in-flight 预算（`max(floor×2, 3600)`，#1086；数值入口仍为 [stall policy](../../apps/scheduler/src/domains/job-lifecycle/stall-policy.ts)），超龄按稳定原因 `reaper_inflight_tool_stalled` 收口。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
+#1074 历史 failed 的显式新 Job 续做以合法检查点和完整原账本准入，Plan 另耗派发名额，跨 Job 原预算与绝对修正期限持续累计。详见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)，最终组合 SHA Actions 待验。
+
+- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。stall 的在飞 `tool.call` 豁免不是无上限：豁免仅持续到同一 per-image floor 派生的 in-flight 预算（`max(floor×2, 3600)`，#1086；数值入口仍为 [stall policy](../../apps/scheduler/src/domains/job-lifecycle/stall-policy.ts)），超龄按稳定原因 `reaper_inflight_tool_stalled` 收口。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。业务文件清单 v2 必填最小权限 mode（0600/0700），仅保留源所有者执行位，安全恢复失败阻断启动；旧清单不改写且拒绝恢复。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
@@ -391,13 +393,13 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-KNOW-001 项目知识的受治理生命周期
 
-成功来源登记和历史资格预览只保留有界元数据，预览不创建 work/Job。本轮用户授权的自动项目批次由 [ADR 0023](adr/0023-project-knowledge-collection.md) 取代 [0021](adr/0021-knowledge-source-preview.md) 的项目批处理暂缓限制；不新增 schema 或整链 token 预算，旧 knowledge:auto work 仍禁用自动推进。
+成功来源登记和历史资格预览只保留有界元数据，预览不创建 work/Job。本轮用户授权的自动项目批次由 [ADR 0023](adr/0023-project-knowledge-collection.md) 取代 [0021](adr/0021-knowledge-source-preview.md) 的项目批处理暂缓限制；不新增 schema 或整链 token 预算，旧 knowledge:auto work 仍禁用自动推进。本轮 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量及自动准入，扩展事务重验和只读状态投影。
 
-- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理来自当前 Job 的合法有源请求，或 Scheduler 对成功业务 Job 持久登记的有界批量采集；必须复核最新成功 Attempt、冻结整理权限、来源/hash 和未结算效果，不复活原 Job token。collector 每批至多4个来源Job、19个原始inputs及可选governor，项目已有非旧自动pending/running work时不得再准入批次。失败来源持久跳过、不热重试。非reuse提案经maker、完整六类×两个arm独立trial、evaluator/reviewer后才可原子激活；target comparator fail可以保留为对照，目标arm及全部安全组必须pass，unexecuted/缺证/未知效果不得晋升，旧active保留。每例共同材料显式选择冻结task_inputs，trial不得读取rubric或其他arm，所有trial及自动批次快照收紧工具/网络和角色预加载能力。累计预算为后两阶段预留2个Job，治理hash变化阻断旧work，不重置历史。只读activity分别呈现登记/采集/跳过、候选、生效、拉取与模型反馈；实际使用保留usage/provenance和receipt，反馈不得冒充质量结论。
-- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；用户本轮明确授权自动项目整理，见 [ADR 0023](adr/0023-project-knowledge-collection.md) 与[专题](../PROJECT_KNOWLEDGE.md)。
-- **实现状态**：#752 生命周期保持既有实现；本轮collector、隔离试验、真实资产版本回执及activity已接入共享工作树，无schema变更。source_collected保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，assignment.source_mode标识批次；评分输入绑定proposal/revision/input_digest且trial不可读。合成Job/Attempt/Evidence及behavior-policy独立回归已接Actions入口，但本轮尚未执行；未合并、未部署，真实模型及注意力/质量收益未验证。
-- **代码入口**：[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)；[工作链](../../apps/scheduler/src/domains/project-knowledge/work.ts)；[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)；[评测/结算](../../apps/scheduler/src/domains/project-knowledge/settlement.ts)；[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
-- **验证证据**：Actions的`pnpm ci:unit:project-knowledge`、独立`TEST_DATABASE_URL`下`pnpm ci:integration:project-knowledge`和`pnpm ci:unit:web-facts`已接collector/closed-loop/activity、Job隔离及唤醒回归，本轮尚未运行。全部测试/构建/typecheck仅Actions执行；#777真实模型收益仍需独立证据，不改变#752历史验收范围。
+- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理来自当前 Job 的合法有源请求，或 Scheduler 对成功业务 Job 持久登记的有界批量采集；必须复核最新成功 Attempt、冻结整理权限、来源/hash 和未结算效果，不复活原 Job token。record_knowledge_feedback 必须仅保存 usage 反馈并返回 {usage_ref,state:"recorded"}，不得返回 work_ref 或逐反馈创建 work；成功 Job 的已接受反馈只能经普通来源登记进入 collector，冻结精确反馈/target 基线与 evidence refs，仍受自动准入约束。没有原 Job 冻结整理权限不得扩权；显式 request_project_knowledge 保留原授权、预算和幂等语义，不被自动策略替代。反馈记录、源 Job 登记、采集 work 和知识生效必须分层。collector 必须在项目积累至少 4 个未处理来源或最老来源等待满 24 小时，且距上次自动批次创建满 24 小时后准入；项目已有非旧自动 pending/running work 时等待。有界扫描 32 个候选，保持 19 个原始 inputs 及可选 governor，放不下者保留并继续扫描，不永久消费。连续 2 个自动批次 blocked/cancelled 或 completed 但无 active/retired 提案产出即停发；持久 work/proposal 历史跨重启推导，成功自动批次或成功显式整理可截断失败链，时间和治理 hash 变化不得清零。collector 选项目、项目锁事务重验、durable wake 和 activity 必须共用数据库准入规则，忙碌/停发不生成立即过期采集 wake，未来 retry 不热循环。来源永久拒绝及瞬态准备失败耗尽才持久跳过，不热重试。非reuse提案经maker、完整六类×两个arm独立trial、evaluator/reviewer后才可原子激活；target comparator fail可以保留为对照，目标arm及全部安全组必须pass，unexecuted/缺证/未知效果不得晋升，旧active保留。每例共同材料显式选择冻结task_inputs，trial不得读取rubric或其他arm，所有trial及自动批次快照收紧工具/网络和角色预加载能力。累计预算为后两阶段预留2个Job，治理hash变化阻断旧work，不重置历史。只读activity分别呈现登记/采集/跳过、候选、生效、拉取与模型反馈；实际使用保留usage/provenance和receipt，反馈不得冒充质量结论。activity 新增 collection 的六态、待处理数、连续无产出数和下次时间是只读投影，现有知识页展示，不新增恢复按钮或配置。
+- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；用户本轮明确授权自动项目整理，见 [ADR 0023](adr/0023-project-knowledge-collection.md)、[ADR 0024](adr/0024-project-knowledge-batching-admission.md) 与[专题](../PROJECT_KNOWLEDGE.md)。
+- **实现状态**：#752 生命周期、来源审计、独立评测/审查及最小 Job 预算拦截保留。本轮合批、节流、停发与 collection 投影按上述目标在共享工作树整合，无新 schema 或持久计数；历史 Job/Attempt、work、快照、回执和预算不改写。决策采纳不等于代码/最终 SHA Actions 验收通过，不表示运行实例已修复；不部署、不重跑历史生产任务，真实模型与注意力/质量收益未验证。
+- **代码入口**：[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)；[准入查询](../../apps/scheduler/src/domains/project-knowledge/collection-policy.ts)；[调度唤醒](../../apps/scheduler/src/knowledge-wake.ts)；[工作链](../../apps/scheduler/src/domains/project-knowledge/work.ts)；[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)；[评测/结算](../../apps/scheduler/src/domains/project-knowledge/settlement.ts)；[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)；[反馈记录](../../apps/scheduler/src/domains/project-knowledge/feedback.ts)；[来源登记](../../apps/scheduler/src/domains/project-knowledge/automatic.ts)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
+- **验证证据**：Actions 的 `pnpm ci:unit:project-knowledge`、独立 `TEST_DATABASE_URL` 下 `pnpm ci:integration:project-knowledge` 和 `pnpm ci:unit:web-facts` 为既有入口；本轮待验来源门槛/间隔、32 候选装箱保留、跨项目、两次无产出、跨重启与治理变更、显式成功恢复、CAS 期间准入变化、未来 retry 与 activity/Web 投影。反馈修正须覆盖 recorded 无 work_ref/无新 work、feedback-only 成功来源、精确输入冻结、自动门不可绕过、原权限及显式请求隔离；原去重/未知提交、6×2 评测及预算硬门继续保留。全部测试/build/typecheck 仅 Actions，最终 SHA 未验；#777 模型收益仍需独立证据，不改变 #752 历史验收。
 
 ### FR-KNOW-002 跨项目 Skill 精确授权
 
@@ -582,7 +584,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Verify 必须将通过、否定、冲突、证据不足、不可判定和需人工映射为明确终态/缺项；否定 evidence 只能在完整结构化证据和成功来源 Job 下进入 refuted，冲突进入 inconclusive，不得用 needs_human 混淆。
 - **决策来源**：终态决定 Hub、Report 和人工动作，错误映射会产生虚假确认或无限循环。
-- **实现状态**：as-built；无进展护栏与默认值见[配置](../../apps/scheduler/src/config.ts)中的 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS`。#1133 后，Verify 补证回弹另有独立刹车：连续 `VERIFY_NO_PROGRESS_LIMIT`（2）次回弹的缺失证据集合完全相同即收口 `needs_human`，round error 与结算 reason 落稳定码 `verify_no_progress`（`apps/scheduler/src/verify-no-progress.ts`）。
+- **实现状态**：as-built；无进展护栏与默认值见[配置](../../apps/scheduler/src/config.ts)中的 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS`。#1133 后，Verify 补证回弹另有独立刹车：有效项目规则 `maxNoProgressRounds=0` 时关闭，正值仍按独立 `VERIFY_NO_PROGRESS_LIMIT`（2）判断，连续回弹的缺失证据集合完全相同即收口 `needs_human`，结算 reason 落稳定码 `verify_no_progress`。项目 → 全局 → env 的规则解析复用现有入口；真实 SQL 回归及待验边界见[运行时规则](06-runtime-view.md#verify-补证无进展开关1133)。
 - **代码入口**：[Fact-first follow-up](../../apps/scheduler/src/verify-fact-gate.ts)、[Finding state matrix](../../apps/scheduler/src/finding-state-matrix.ts)、[Verify terminal](../../apps/scheduler/src/verify-terminal.ts)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:convergence-recovery`。
 
@@ -697,13 +699,17 @@ OCI 扫描创建与凭据删除共用凭据行锁；导入事务内重验 active
 - **决策来源**：凭据、模型、CLI 和镜像是组合约束，不能由 prompt 绕过目录。
 - **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。#914 的引用保护切片在设置事务内重验所有保留/新增凭据，并与 DELETE 共用凭据行锁；项目 impact 按 actor scope 过滤，删除独立检查全局引用，拒绝时不自动修复白名单。此处为 #925 服务端切片；#929 已交付默认账号显式选择与修复导航，详见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[限制发现](../../apps/scheduler/src/domains/provider-adapter/model-discovery.ts)、[预算冻结](../../apps/scheduler/src/domains/provider-adapter/model-budget.ts)。
-- **#1002 P1-8、#1078 与 #1096 的凭据选择契约**。显式授权且 Provider/CLI/解析模型一致的多账号池，先保留仍有余量的冻结恢复身份，再选择仍有余量的显式默认账号，其余按现有 Job 负载计算的余量比例及稳定并列规则选择并冻结新 Job。readiness 读取负载投影，恢复继续核验当前授权、模型/CLI、冻结身份、累计预算与未知效果。精确排序、计数范围、满额及其他候选组合见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)，恢复优先顺序的修正已由 [#1103](https://github.com/SummerSec/DeepSonar/pull/1103) 采纳并合入。最终 SHA Actions 待验。
+- **#1002 P1-8 补充契约**：显式授权且 Provider/CLI/解析模型一致的多账号池，新 Job 按余量比例降序、真实在途数升序、历史分配数升序、当前分配数升序、默认平局优先、稳定 ID 选择并冻结。readiness 只读，不消耗轮次；已有 Job 重新核对当前授权、模型/CLI 后，合法原冻结账号优先于默认账号，满额时等待原账号，身份漂移/累计预算及未知效果门保留。恢复身份优先顺序沿用已合入的 #1103。#1078 的凭据/模型/Provider 容量使用管理 metadata、全局规则与所有项目活动占用，本项目排队和人工等待只作分配排序。明确健康失败临时排除，失效引用整次拒绝。全满返回稳定错误，创建路径冻结无秘密的等待审计并保持 pending，合并间隔重读，不用执行 timeout 取消排队；实际领取仍由现有并发准入控制。不同模型或 Provider 不自动任选；实现/回归见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)，最终 SHA Actions 待验。
 - **#958 补充契约**：发现限制逐字段保存 provider_declared 来源与 declared/missing/invalid 状态；发现不扩大账号配置模型名单。显式预算优先于声明，运行观测不改冻结；非法显式值拒绝，未知/非法发现值不猜容量。配置/投影回归沿用下列 credential-compatibility / provider-settings，实际锁版本 SDK 输出参数回归接 `pnpm ci:integration:request-budget-sdk`；最终 SHA Actions 待验，详见[专题](../PI_MODEL_BUDGET_RECOVERY.md)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
 Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；仅列出 active、项目可见且在启用范围内的候选。#966 补齐同一账号下的显式默认模型选择/清除，模型候选只取账号已配置名单；账号变更不沿用旧模型，加载失败不清配置，普通保存保留未编辑选择，保存采用服务端结果。CLI 启用范围不等于模型默认值；解析继续采用显式任务/Hub 提案 → 项目默认模型 → 全局角色模型，不自动任选。任务创建在提交区保留结构化模型冲突及修复导航，不回显原始 Provider 错误、不自动重试；新回归入口为 `pnpm ci:unit:task-intent` 与既有 credential-compatibility，最终 SHA Actions 待验。单 Job 重跑错误只按结构化原因导向配置入口，不自动执行。代码见[面板](../../apps/web/src/components/ProjectCliProviderAllowlistPanel.tsx)与[错误导航](../../apps/web/src/useJobRerun.tsx)。Web 回归随 `pnpm ci:unit:credential-compatibility`，resolver/rerun 回归随 `pnpm ci:unit:capability-pack` / `pnpm ci:integration:recovery`；main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 
 ### FR-CRED-003 Model Gateway 唯一出口
+
+#1082 的模型用量看板按 Provider、模型与 workload 独立呈现已结算、未上报、待对账请求数，单列未确认请求最多的 8 项以覆盖零 Token 模型。现有账本权限和时间过滤沿用，聚合/Web 回归接 `pnpm ci:unit:dashboard-overview`，最终 SHA Actions 待验。
+
+#1082 的[保守最终用量确认](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)继续要求 Anthropic 有效累计 usage delta 和 stop，任何 Provider 的 start-only 均不确认为 settled。缺省 usage delta 不产生新证据，真实 HTTP/PG main/OM 回归接 `pnpm ci:integration:platform-api`，scanner 单测接 `pnpm ci:unit:executor-real`，最终 SHA Actions 待验。
 
 - **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则准入，不得把长期 Provider key 注入 Sandbox。放行后保持业务请求/响应原始字节与端到端头；仅处理认证、绑定目标和必要 HTTP 边界，不隐式重试/重定向或静默改写模型/输出参数。
 - **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销；#923 及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)要求透明数据面与准入/结算分离。
@@ -864,8 +870,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **规范要求**：日志、events、audit_logs、Evidence 和 usage ledger 不得保存 Authorization/Cookie/Provider key/Job token 或完整 prompt/completion；可见错误只能返回脱敏摘要和形状。模型请求上下文不得携带已知运行时凭据，证据层事后脱敏不能替代模型出口防护。
 - **决策来源**：审计可见性不能以复制长期秘密和客户源码为代价。
 - **实现状态**：audit_logs append-only，Gateway usage 只保存计费/workload 维度和受控计数。OM wrapper、新导出/RPC 副本及历史 Session HTTP preview/download 均在截断或发送前按 Pi header/manifest 结构脱敏；immutable archive metadata 保持不变，projection bytes/SHA/ContentDigest 单独报告。历史 HTTP 出口已有定向集成证据，本地实际镜像 RPC 与生产内容守卫另有直接证据，集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)；不推导质量或成本收益。
-- **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)、[Pi SDK context projection](../../packages/runtime-sandbox/src/pi-main-request-budget.ts)。
-- **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:authz`、`pnpm ci:unit:credential-compatibility`；人工抽查日志与 evidence。
+- **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)、[Pi SDK context projection](../../packages/runtime-sandbox/src/pi-main-request-budget.ts)、[DSH SDK context projection](../../packages/runtime-sandbox/src/dsh-request-budget.ts)、[Claude 本地准入](../../packages/runtime-sandbox/src/model-request-policy.ts)。
+- **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:authz`、`pnpm ci:unit:credential-compatibility`；人工抽查日志与 evidence。#1032 普通文本文件读取覆盖 DSH 生成前精确投影和 Claude 原字节命中的本地拒绝，新增回归接 `pnpm ci:unit:runtime-sandbox`、`pnpm ci:integration:request-budget-sdk` 与 `pnpm ci:integration:claude-request-budget`，具体范围见[出口契约](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)。最终 SHA Actions 待验，A2 不作为本轮强制验收。
 
 ### NFR-SEC-004 镜像与模块供应链
 
@@ -989,6 +995,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### NFR-OBS-001 审计、指标和状态可查询
 
+#1082 的 `gateway.usage_unconfirmed` 系统审计关联原 Job/Attempt/effect，只保存总计不超过 2048 字节的固定非秘密形态与其 SHA-256。未知键、event/type 值及业务原文不进入摘要或哈希。复用原审计权限，尽力写入与账本独立，字段及证据见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)。
+
 - **规范要求**：所有安全相关配置、权限决定、Job/Attempt 状态、Control 事件、外部效果和设备/镜像动作必须有可查询审计或指标；audit_logs 必须 append-only，指标不得包含秘密或客户原文。
 - **决策来源**：发生故障或争议时必须能区分提案、接受、执行、结算和终态。
 - **实现状态**：as-built；管理面提供 audit/metrics/Job 详情查询。#1002 provision 失败诊断追加到现有审计，关联 Job/Attempt，只保留固定非秘密信号；不证明远端未启动或授予重试。
@@ -1039,7 +1047,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Scheduler 必须区分 liveness、readiness 和 runtime-image warmup；镜像/依赖未准备好时服务可保持 live 但不得启用 Dispatcher，错误必须可查询并有界退避。
 - **决策来源**：容器存活不等于可安全执行，错误就绪会把资源问题扩大为 Job 失败。
-- **实现状态**：as-built；启动 gate、健康端点和 image readiness 分层。#1119/#1046 的创建熔断独立计入真实 create 阶段服务故障与目录创建 500，计数不授权重放。生产、Worker、外置 Kubernetes 共用鉴权 List 探针并核验端口，Scheduler 使用同一管理接口契约；试运行包与隔离 smoke 携带所需脚本。List 成功与 create 成功分别观测，见 [OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)。
+- **实现状态**：as-built；启动 gate、健康端点和 image readiness 分层。#1119/#1046 的创建熔断独立计入真实 create 阶段服务故障与目录创建 500，半开失败冷却指数递增至有界上限，策略经环境正整数校验，计数不授权重放。配置与真实 Dispatcher/受控 runner 到 PG 暂停认领组合回归已接现有 Actions，最终 SHA 待验。生产、Worker、外置 Kubernetes 共用鉴权 List 探针并核验端口，Scheduler 使用同一管理接口契约；试运行包与隔离 smoke 携带所需脚本。List 成功与 create 成功分别观测，见 [OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)。
 - **代码入口**：[readiness](../../apps/scheduler/src/readiness.ts)、[image warmup](../../apps/scheduler/src/runtime-image-warmup.ts)、[readiness tests](../../apps/scheduler/src/readiness.test.ts)。
 - **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-prod`。
 
@@ -1167,6 +1175,14 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **实现状态**：策略、签名验证和既有维护状态机已完成隔离验收；正式 tag 的生产 keyless 发布已接线，仅签名 job 新增 id-token:write，验签成功才发布。每版正例以 Release 证据为准，宿主调度仍默认未启用。签名信任根和验证器由宿主显式钉死，不从待验证清单取信任设置。
 - **代码入口**：[自动策略](../../deploy/platform-upgrade-auto-policy.mjs)、[自动状态机](../../deploy/platform-upgrade-auto.mjs)、[宿主接线](../../deploy/platform-upgrade-auto-host.mjs)、[签名验证](../../deploy/platform-upgrade-signature.mjs)、[签名运维](../../deploy/UPGRADE_AUTOMATION.md)。
 - **验证证据**：`pnpm ci:unit:platform-upgrade-maintenance`；临时密钥验签与生产 Fulcio/Rekor 身份验收分别记录，不能互相替代。同目标恢复依赖持久授权和实际激活回执；回滚及结果不明不自动开启新一代。
+
+### IR-013 显式历史候选库回收
+
+- **规范要求**：默认预览，显式 apply 和匹配审批 hash 才能删除，复用升级锁。保留当前库、最近完成当前升级的真实 source 和未结束操作引用。operation/source/backup marker、cluster、OID 与存储绑定共同证明归属，未知权限/会话/引用拒绝。删除前持久意图和审计，响应丢失按原 OID 对账，同名新 OID 拒绝。
+- **决策来源**：#1124 owner 选择 B，恢复源取 saved.source.database。
+- **实现状态**：显式宿主入口与回归接线，最终 SHA Actions 待验。
+- **代码入口**：[回收器](../../deploy/platform-upgrade-prune.mjs)、[宿主](../../deploy/platform-upgrade-prune-host.mjs)、[操作说明](../../deploy/GENERATION_GC.md)。
+- **验证证据**：`pnpm ci:unit:platform-upgrade-maintenance`、`pnpm ci:integration:platform-upgrade`，两 shell 与隔离 PostgreSQL 由既有 Actions 调用。
 
 ## 5. 设计约束
 

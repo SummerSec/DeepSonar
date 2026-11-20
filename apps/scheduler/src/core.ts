@@ -26,7 +26,7 @@ import {
   mergeRoleRuntimeKnobOverrides,
   resolveRuntimeKnobs,
 } from "./runtime-knobs.js";
-import { isProviderKnown } from "./credentials.js";
+import { isProviderKnown, providerConcurrencyLimits } from "./credentials.js";
 import { sql } from "./db.js";
 import { scrubPostgresText } from "./domains/event-ingestion/pg-text-safety.js";
 import { inc } from "./metrics.js";
@@ -333,17 +333,6 @@ export function projectJobQuotaFromConfig(
     ? (cfg.rules as Record<string, unknown>)
     : {};
   return effectiveProjectJobLimit(globalMaxJobsPerProject, rules.maxConcurrentJobs);
-}
-
-function asProviderLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
-  if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
-  const out: Record<string, number> = {};
-  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
-    if (!isProviderKnown(key) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000)
-      return fallback;
-    out[key] = value;
-  }
-  return out;
 }
 
 /** ≥ min 的全部 severity（自动验 / Hub 等待 / 停自驱 共用） */
@@ -670,7 +659,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     maxConcurrentJobs: maxJobsPerProject,
     maxConcurrentJobsSource: "global",
     maxConcurrentProvisioning,
-    maxConcurrentByProvider: asProviderLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
+    maxConcurrentByProvider: providerConcurrencyLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
     maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
   };
 }
@@ -1678,7 +1667,7 @@ export async function resolveAgentSnapshotForJob(
   projectId: string,
   jobType: string,
   findingIds: string[] = [],
-  options?: { existingCredentialId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
+  options?: { existingCredentialId?: string | null; existingJobId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<AgentRuntimeSnapshot> {
   const snapshot = (await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(
     db as never,

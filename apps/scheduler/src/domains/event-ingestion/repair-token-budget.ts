@@ -1,3 +1,4 @@
+import { continuationBudgetScope } from "../job-control/continuation-budget.js";
 import { config } from "../../config.js";
 import { sql } from "../../db.js";
 import { readRepairGenerationOwner } from "../job-attempt/repair-generation.js";
@@ -51,21 +52,25 @@ function composeRepairTokenBudget(
   }
   const cap = typeof limit === "number" && Number.isSafeInteger(limit) && limit >= 0 ? limit : null;
   return { receipt_ref: String(receipt.event_id), attempt_id: owner.attempt_id ?? "",
-    generation_ref: owner.generation_ref, deadline: owner.deadline ?? payload.execution_deadline ?? null, limit_tokens: cap, known_tokens: known,
+    generation_ref: owner.generation_ref,
+    deadline: owner.deadline && payload.execution_deadline
+      ? new Date(Math.min(Date.parse(owner.deadline), Date.parse(payload.execution_deadline))).toISOString()
+      : owner.deadline ?? payload.execution_deadline ?? null, limit_tokens: cap, known_tokens: known,
     remaining_tokens: state === "known" && cap !== null && cap > 0 ? Math.max(0, cap - known) : null, usage_status: state };
 }
 
 /** Caller holds the Job lock. Costs are a projection of the existing ledger, never a second balance. */
 export async function readRepairTokenBudget(db: typeof sql, jobId: string): Promise<RepairTokenBudget | null> {
-  const [first] = await db<BudgetReceipt[]>`SELECT event_id,payload_json FROM events WHERE job_id=${jobId}
+  const { jobIds, rootId } = await continuationBudgetScope(db, jobId);
+  const [first] = await db<BudgetReceipt[]>`SELECT event_id,payload_json FROM events WHERE job_id=ANY(${jobIds}::uuid[])
     AND type='control_receipt' AND payload_json->>'operation'='mark_job_done'
-    AND payload_json->>'status'='rejected' ORDER BY job_seq LIMIT 1`;
+    AND payload_json->>'status'='rejected' ORDER BY created_at,id LIMIT 1`;
   if (!first) return null;
   const rows = await db<BudgetUsageRow[]>`SELECT e.status,l.settlement_status,l.total_tokens FROM job_attempt_effects e
     LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
-    WHERE e.job_id=${jobId} AND e.effect_kind='gateway_model_request'
+    WHERE e.job_id=ANY(${jobIds}::uuid[]) AND e.effect_kind='gateway_model_request'
     AND e.intent_json->>'repair_receipt_ref'=${String(first.event_id)}`;
-  const owner = await readRepairGenerationOwner(db, jobId, String(first.payload_json.attempt_id));
+  const owner = await readRepairGenerationOwner(db, rootId, String(first.payload_json.attempt_id));
   return composeRepairTokenBudget(first, rows, owner);
 }
 
@@ -75,41 +80,47 @@ export async function readRepairTokenBudget(db: typeof sql, jobId: string): Prom
  * are absent from the map, exactly like the single read returning null.
  */
 export async function readRepairTokenBudgets(db: typeof sql, jobIds: readonly string[]): Promise<Map<string, RepairTokenBudget>> {
-  const ids = [...new Set(jobIds)];
   const budgets = new Map<string, RepairTokenBudget>();
+  const ids = [...new Set(jobIds)];
   if (!ids.length) return budgets;
-  const firsts = await db<Array<BudgetReceipt & { job_id: string }>>`SELECT DISTINCT ON (job_id)
-      job_id::text AS job_id, event_id, payload_json FROM events
-    WHERE job_id = ANY(${ids}::uuid[]) AND type='control_receipt'
-      AND payload_json->>'operation'='mark_job_done' AND payload_json->>'status'='rejected'
-    ORDER BY job_id, job_seq`;
-  if (!firsts.length) return budgets;
-  const receiptRefs = firsts.map((row) => String(row.event_id));
-  const usages = await db<Array<BudgetUsageRow & { job_id: string; receipt_ref: string }>>`SELECT
-      e.job_id::text AS job_id, e.intent_json->>'repair_receipt_ref' AS receipt_ref,
-      e.status, l.settlement_status, l.total_tokens FROM job_attempt_effects e
-    LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
-    WHERE e.job_id = ANY(${ids}::uuid[]) AND e.effect_kind='gateway_model_request'
-      AND e.intent_json->>'repair_receipt_ref' = ANY(${receiptRefs}::text[])`;
-  const owners = await db<Array<{ job_id: string; attempt_id: string | null; generation_ref: string; deadline: string }>>`
-    SELECT DISTINCT ON (e.job_id) e.job_id::text AS job_id, a.id AS attempt_id, e.event_id AS generation_ref,
-      e.payload_json->>'deadline' AS deadline FROM events e
-    LEFT JOIN job_attempts a ON a.job_id=e.job_id
-      AND a.attempt_no=(e.payload_json->>'target_attempt_no')::int
-    WHERE e.job_id = ANY(${ids}::uuid[]) AND e.type='control_receipt'
-      AND e.payload_json->>'authority'='scheduler' AND e.payload_json->>'subtype'='repair_generation'
-    ORDER BY e.job_id, e.job_seq DESC`;
-  const ownerByJob = new Map(owners.map((row) => [String(row.job_id), row] as const));
-  for (const receipt of firsts) {
-    const jobId = String(receipt.job_id);
-    const ownerRow = ownerByJob.get(jobId);
-    const owner: BudgetOwner = ownerRow
-      ? { attempt_id: ownerRow.attempt_id ? String(ownerRow.attempt_id) : null,
-          generation_ref: String(ownerRow.generation_ref), deadline: String(ownerRow.deadline) }
-      : { attempt_id: String(receipt.payload_json.attempt_id ?? ""), generation_ref: null, deadline: null };
-    const receiptRef = String(receipt.event_id);
-    const usageRows = usages.filter((row) => row.receipt_ref === receiptRef).map((row) => row);
-    budgets.set(jobId, composeRepairTokenBudget(receipt, usageRows, owner));
+  const members = await db<Array<{ requested_id: string; root_id: string; member_id: string }>>`
+    SELECT requested.id AS requested_id,COALESCE(requested.budget_owner_job_id,requested.id) AS root_id,
+      member.id AS member_id FROM jobs requested JOIN jobs member
+      ON COALESCE(member.budget_owner_job_id,member.id)=COALESCE(requested.budget_owner_job_id,requested.id)
+    WHERE requested.id=ANY(${ids}::uuid[])`;
+  const roots = [...new Set(members.map(row => String(row.root_id)))];
+  const allIds = [...new Set(members.map(row => String(row.member_id)))];
+  const receipts = await db<Array<BudgetReceipt & { root_id: string; owner_attempt_id: string | null;
+    generation_ref: string | null; generation_deadline: string | null }>>`
+    SELECT DISTINCT ON (COALESCE(j.budget_owner_job_id,j.id))
+      COALESCE(j.budget_owner_job_id,j.id) AS root_id,e.event_id,e.payload_json,
+      generation.owner_attempt_id,generation.generation_ref,generation.generation_deadline
+    FROM events e JOIN jobs j ON j.id=e.job_id
+    LEFT JOIN LATERAL (SELECT a.id AS owner_attempt_id,g.event_id AS generation_ref,
+        g.payload_json->>'deadline' AS generation_deadline
+      FROM events g JOIN jobs gj ON gj.id=g.job_id
+      LEFT JOIN job_attempts a ON a.job_id=COALESCE((g.payload_json->>'target_job_id')::uuid,g.job_id)
+        AND a.attempt_no=(g.payload_json->>'target_attempt_no')::int
+      WHERE COALESCE(gj.budget_owner_job_id,gj.id)=COALESCE(j.budget_owner_job_id,j.id)
+        AND g.type='control_receipt' AND g.payload_json->>'authority'='scheduler'
+        AND g.payload_json->>'subtype'='repair_generation'
+      ORDER BY g.created_at DESC,g.id DESC LIMIT 1) generation ON true
+    WHERE COALESCE(j.budget_owner_job_id,j.id)=ANY(${roots}::uuid[]) AND e.type='control_receipt'
+      AND e.payload_json->>'operation'='mark_job_done' AND e.payload_json->>'status'='rejected'
+    ORDER BY COALESCE(j.budget_owner_job_id,j.id),e.created_at,e.id`;
+  const usages = await db<Array<BudgetUsageRow & { receipt_ref: string }>>`
+    SELECT e.status,l.settlement_status,l.total_tokens,e.intent_json->>'repair_receipt_ref' AS receipt_ref
+    FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
+    WHERE e.job_id=ANY(${allIds}::uuid[]) AND e.effect_kind='gateway_model_request'
+      AND e.intent_json->>'repair_receipt_ref'=ANY(${receipts.map(row => String(row.event_id))}::text[])`;
+  const byRoot = new Map(receipts.map(receipt => [String(receipt.root_id), composeRepairTokenBudget(receipt,
+    usages.filter(row => row.receipt_ref === receipt.event_id), {
+      attempt_id: receipt.generation_ref ? receipt.owner_attempt_id : receipt.payload_json.attempt_id ?? null,
+      generation_ref: receipt.generation_ref, deadline: receipt.generation_deadline,
+    })]));
+  for (const member of members) {
+    const budget = byRoot.get(String(member.root_id));
+    if (budget) budgets.set(String(member.requested_id), budget);
   }
   return budgets;
 }
@@ -191,14 +202,15 @@ export async function admitGatewayRepair(db: typeof sql, jobId: string, attemptI
 
 /** Caller holds the Job lock; an explicit total ceiling covers every model request and token rotation. */
 export async function readJobTokenAllowance(db: typeof sql, jobId: string, budget?: RepairTokenBudget): Promise<number | null> {
-  const [totalLimit] = await db`SELECT MIN(max_tokens) AS cap FROM job_tokens WHERE job_id=${jobId} AND max_tokens IS NOT NULL`;
+  const { jobIds } = await continuationBudgetScope(db, jobId);
+  const [totalLimit] = await db`SELECT MIN(max_tokens) AS cap FROM job_tokens WHERE job_id=ANY(${jobIds}::uuid[]) AND max_tokens IS NOT NULL`;
   if (totalLimit?.cap != null) {
     const [usage] = await db`SELECT COALESCE(SUM(l.total_tokens) FILTER (WHERE l.settlement_status='settled'),0) AS total,
       COUNT(*) FILTER (WHERE e.status='effect_pending' AND l.id IS NULL) AS pending,
       COUNT(*) FILTER (WHERE (e.status<>'settled' OR l.settlement_status IS DISTINCT FROM 'settled')
         AND NOT (e.status='effect_pending' AND l.id IS NULL)) AS unresolved
       FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
-      WHERE e.job_id=${jobId} AND e.effect_kind='gateway_model_request'`;
+      WHERE e.job_id=ANY(${jobIds}::uuid[]) AND e.effect_kind='gateway_model_request'`;
     const total = Number(usage.total), cap = Number(totalLimit.cap);
     if (Number(usage.unresolved) > 0 || !Number.isSafeInteger(total) || !Number.isSafeInteger(cap)) {
       throw new RepairTokenBudgetError("JOB_TOKEN_USAGE_UNKNOWN", "Job token usage requires reconciliation", budget);

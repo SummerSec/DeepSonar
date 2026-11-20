@@ -4,9 +4,10 @@
  * by agent_snapshot credential_id / upstream_model (via snapshotUpstreamModel).
  */
 import { credentialConcurrencyPolicy } from "./credentials.js";
-import { PLATFORM_DEFAULT_AGENT_CLI } from "./domains/role-runtime-snapshot/index.js";
+import { PLATFORM_DEFAULT_AGENT_CLI } from "./domains/role-runtime-snapshot/default-cli.js";
 import { snapshotUpstreamModel } from "./provider-effective-model.js";
-import { sql } from "./db.js";
+import type { sql } from "./db.js";
+import type { ProjectRules } from "./core.js";
 
 export const ACTIVE_DISPATCH_JOB_STATUSES = ["claimed", "provisioning", "running"] as const;
 
@@ -16,6 +17,24 @@ export type DispatchCounts = {
   credential: Map<string, number>;
   model: Map<string, number>;
   cli: Map<string, number>;
+};
+
+export type DispatchCandidate = {
+  id?: unknown;
+  project_id: unknown;
+  canvas_id?: unknown;
+  finding_id?: unknown;
+  type?: unknown;
+  payload_json?: unknown;
+  canvas_target_json?: unknown;
+  project_config_json?: unknown;
+  agent_cli: unknown;
+  credential_provider: unknown;
+  credential_id: unknown;
+  model: unknown;
+  upstream_model?: unknown;
+  credential_metadata: unknown;
+  agent_snapshot_json?: unknown;
 };
 
 export type ActiveDispatchRow = {
@@ -74,12 +93,45 @@ export function accumulateDispatchCounts(
 }
 
 /**
+ * Return the first resource gate that blocks a pending candidate, or null if
+ * the candidate can be claimed. Kept pure so the quota ordering is unit
+ * testable without a live Postgres/Scheduler process.
+ */
+export function dispatchSkipReason(
+  job: DispatchCandidate,
+  counts: DispatchCounts,
+  rules: Pick<ProjectRules, "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
+  projectJobLimit: number | null,
+): string | null {
+  const projectId = String(job.project_id);
+  // Historical snapshots may omit agent_cli; use the platform default in quota accounting.
+  const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
+  const provider = String(job.credential_provider ?? "");
+  const credentialId = String(job.credential_id ?? "");
+  const model = snapshotUpstreamModel(job) ?? "";
+  if (projectJobLimit !== null && (counts.project.get(projectId) ?? 0) >= projectJobLimit) return "project";
+  const providerLimit = provider ? rules.maxConcurrentByProvider[provider] : undefined;
+  if (providerLimit !== undefined && (counts.provider.get(provider) ?? 0) >= providerLimit) return "provider";
+  const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
+  if (credentialId && credentialPolicy.maxConcurrent !== null && (counts.credential.get(credentialId) ?? 0) >= credentialPolicy.maxConcurrent) {
+    return "credential";
+  }
+  const modelLimit = model ? credentialPolicy.modelConcurrency[model] : undefined;
+  if (credentialId && model && modelLimit !== undefined && (counts.model.get(dispatchModelKey(credentialId, model)) ?? 0) >= modelLimit) {
+    return "model";
+  }
+  const cliLimit = rules.maxConcurrentByAgentCli[cli];
+  if (cliLimit !== undefined && (counts.cli.get(cli) ?? 0) >= cliLimit) return "agent_cli";
+  return null;
+}
+
+/**
  * Active jobs grouped the same way as dispatcher claim aggregation.
  * Optional projectId scopes observability for project-scoped actors.
  */
 export async function queryActiveDispatchRows(
   query: typeof sql,
-  opts: { projectId?: string | null } = {},
+  opts: { projectId?: string | null; excludeJobId?: string | null } = {},
 ): Promise<ActiveDispatchRow[]> {
   const projectId = opts.projectId ?? null;
   return query`
@@ -93,6 +145,7 @@ export async function queryActiveDispatchRows(
     FROM jobs
     WHERE status IN ('claimed','provisioning','running')
       AND (${projectId}::uuid IS NULL OR project_id = ${projectId})
+      AND id IS DISTINCT FROM ${opts.excludeJobId ?? null}::uuid
     GROUP BY status, project_id,
              agent_snapshot_json->>'agent_cli',
              agent_snapshot_json->>'credential_id',

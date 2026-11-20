@@ -498,7 +498,7 @@ jobs:
       - name: Runtime resource cleanup and disk pressure unit
         run: pnpm ci:unit:runtime-cleanup
       - name: OpenSandbox authenticated management probe regression
-        run: python3 deploy/opensandbox/management-health.test.py
+        run: pnpm ci:unit:opensandbox-management-probe
       - name: Image admission registry selection unit
         run: pnpm ci:unit:image-admission
       - name: Runtime image destination evidence unit

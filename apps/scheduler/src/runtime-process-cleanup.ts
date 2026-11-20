@@ -6,6 +6,7 @@ import { revokeOldRuntimeGrants } from "./domains/job-control/rerun.js";
 import { pauseHumanExecutionClock } from "./domains/job-control/human-continuation-clock.js";
 import { readRuntimeProcessEvidence } from "./runtime-process-evidence.js";
 import { inc } from "./metrics.js";
+import { lockContinuationBudget } from "./domains/job-control/continuation-budget.js";
 
 type Owner = { jobId: string; attemptId: string; sandboxId: string };
 const TERMINAL = ["succeeded", "failed", "timeout", "cancelled", "orphan"];
@@ -14,6 +15,7 @@ export const PROCESS_DESTROY_TIMEOUT_MS = 25_000;
 async function lockOwner(tx: typeof sql, owner: Owner) {
   const [locator] = await tx`SELECT canvas_id FROM jobs WHERE id=${owner.jobId}`;
   if (!locator || !await lockCanvasForConvergence(tx, locator.canvas_id)) return null;
+  await lockContinuationBudget(tx, owner.jobId, false);
   const [job] = await tx`SELECT project_id,status,canvas_id,sandbox_id FROM jobs WHERE id=${owner.jobId} FOR UPDATE`;
   if (!job || job.canvas_id !== locator.canvas_id || !TERMINAL.includes(String(job.status))
     || job.sandbox_id !== owner.sandboxId) return null;

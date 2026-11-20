@@ -1,3 +1,4 @@
+import { continuationBudgetScope } from "./domains/job-control/continuation-budget.js";
 import { createHash } from "node:crypto";
 import type { sql } from "./db.js";
 import { observationalMemoryConfig, parseFrozenPiExtensions } from "./pi-extensions.js";
@@ -75,17 +76,18 @@ function eventIdentity(jobId: string, policy: GatewayRequestBudget): string {
 /** Validate historical authority independently of snapshot completeness. */
 async function inspectPolicyHistory(db: Database, jobId: string, initial: GatewayRequestBudget) {
   let policy = initial;
-  const receipts = await db`SELECT event_id,payload_json FROM events WHERE job_id=${jobId}
+  const { jobIds } = await continuationBudgetScope(db, jobId);
+  const receipts = await db`SELECT job_id,event_id,payload_json FROM events WHERE job_id=ANY(${jobIds}::uuid[])
     AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq`;
   for (const receipt of receipts) {
     const payload = record(receipt.payload_json);
     if (payload.v !== 1 || payload.authority !== "kernel") throw invalid();
     const stored = parsePolicy(payload.policy);
-    if (receipt.event_id !== eventIdentity(jobId, stored)) throw invalid();
+    if (receipt.event_id !== eventIdentity(String(receipt.job_id), stored)) throw invalid();
     policy = intersect(policy, stored);
   }
   // All historical tokens constrain recovery, including expired/revoked ones.
-  const tokens = await db`SELECT workload,max_requests,request_total_limit FROM job_tokens WHERE job_id=${jobId}`;
+  const tokens = await db`SELECT workload,max_requests,request_total_limit FROM job_tokens WHERE job_id=ANY(${jobIds}::uuid[])`;
   for (const token of tokens) {
     if (token.workload !== "main" && token.workload !== "observational_memory") throw invalid();
     const limit = cap(token.max_requests), total = cap(token.request_total_limit);
@@ -135,7 +137,8 @@ export async function inspectRerunGatewayRequestBudget(db: Database, jobId: stri
       policy = intersect(policy, { version: 1, total_requests: limit, main_requests: limit, background_requests: 0 });
     }
   }
-  const usages = await db`SELECT workload,used_requests FROM job_tokens WHERE job_id=${jobId}`;
+  const { jobIds } = await continuationBudgetScope(db, jobId);
+  const usages = await db`SELECT workload,used_requests FROM job_tokens WHERE job_id=ANY(${jobIds}::uuid[])`;
   let total = 0, main = 0;
   for (const row of usages) {
     if (!Number.isSafeInteger(row.used_requests) || row.used_requests < 0) throw invalid();

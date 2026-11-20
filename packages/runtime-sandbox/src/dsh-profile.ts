@@ -18,6 +18,8 @@ export function buildDshProfilePatch(options: {
   cwd: string;
   home?: string;
   governedRequestBudget?: boolean;
+  privateCredentialPath?: string;
+  credentialProvider?: string;
 }): string {
   const home = options.home ?? DSH_HOME;
   const rows: Plugin[] = [];
@@ -39,6 +41,11 @@ export function buildDshProfilePatch(options: {
   add("tools");
   add(options.taskMode === "ptc" ? "ptc-tool-executor" : "native-tool-executor", options.taskMode === "ptc" ? "tool-executor-ptc" : "tool-executor-native");
   add("agent-loop", "agent-loop", { agents: [] });
+  if (options.privateCredentialPath) rows.push({
+    id: "job-credentials", name: "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-credentials/deepsonar-job-credentials.mjs",
+    config: { provider: options.credentialProvider,
+      reference: "DEEPSONAR_JOB_GATEWAY", path: options.privateCredentialPath },
+  });
   add("llm-pi-ai", "llm-pi-ai", options.providerConfig);
   if (options.governedRequestBudget) rows[rows.length - 1]!.name = DSH_REQUEST_BUDGET_PLUGIN;
   add("sandbox", "sandbox-local");

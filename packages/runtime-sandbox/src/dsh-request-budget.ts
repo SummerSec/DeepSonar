@@ -1,4 +1,5 @@
-import { PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
+import { PI_MAIN_REQUEST_BUDGET_SOURCE, redactPiContextSecrets } from "./pi-main-request-budget.js";
+import { stripTypeScriptTypes } from "node:module";
 
 export const DSH_REQUEST_BUDGET_PLUGIN = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/deepsonar-index.js";
 export const DSH_REQUEST_BUDGET_VENDOR_SHA256 = "1a3ae58f9b4493e15459cc5000ec80f21b5d3f4a9dea6ffb6bc28e5b8817ae8a";
@@ -8,14 +9,22 @@ export const DSH_REQUEST_BUDGET_VENDOR_SHA256 = "1a3ae58f9b4493e15459cc5000ec80f
 const shared = PI_MAIN_REQUEST_BUDGET_SOURCE
   .replace(/^import .* from '@earendil-works\/pi-ai\/compat';\n/mu, "")
   .split("export function createPiMainRequestBudgetExtension")[0];
-export const DSH_REQUEST_BUDGET_SOURCE = shared + String.raw`
+// The image installer strips raw TS while Scheduler imports compiled JS.
+// Print the shared function consistently before hashing the generated helper.
+const contextProjection = stripTypeScriptTypes(redactPiContextSecrets.toString(), { mode: "transform" });
+export const DSH_REQUEST_BUDGET_SOURCE = shared + "\n" + contextProjection + String.raw`
 let launchIdentity;
+export function redactDshContext(context, identity, env = process.env) {
+  const secrets = [identity.token, readPrivateCredential(env.DEEPSONAR_CONTROL_TOKEN_FILE, true),
+    readPrivateCredential(env.DEEPSONAR_OM_GATEWAY_TOKEN_FILE, true)].filter(Boolean);
+  return redactPiContextSecrets(context, secrets);
+}
 export function frozenDshIdentity(env = process.env) {
   if (launchIdentity) return launchIdentity;
   let identity;
   try { identity = JSON.parse(env.DEEPSONAR_DSH_FROZEN_IDENTITY); } catch { fail('DSH_BUDGET_IDENTITY_MISSING'); }
   if (!identity || !['provider','id','api','baseUrl'].every(key => typeof identity[key] === 'string' && identity[key])) fail('DSH_BUDGET_IDENTITY_INVALID');
-  return launchIdentity = Object.freeze({ ...identity, baseUrl: endpoint(identity.baseUrl), gatewayRoot: endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM), token: env.DEEPSONAR_GATEWAY_TOKEN });
+  return launchIdentity = Object.freeze({ ...identity, baseUrl: endpoint(identity.baseUrl), gatewayRoot: endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM), token: readPrivateCredential(env.DEEPSONAR_GATEWAY_TOKEN_FILE) });
 }
 export function assertDshSdkIdentity(model, options, identity) {
   if (!identity || model.provider !== identity.provider || model.id !== identity.id || model.api !== identity.api

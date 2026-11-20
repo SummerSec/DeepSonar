@@ -22,7 +22,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   propose_project_knowledge: { summary: "Propose a knowledge change", description: "Assigned maker only. Creates immutable candidate content and a durable receipt.", readOnly: false, eventType: "knowledge" },
   submit_knowledge_evaluation: { summary: "Submit isolated trial evaluation", description: "Assigned evaluator only; results bind exact case, arm, Job, Attempt and evidence.", readOnly: false, eventType: "knowledge" },
   review_project_knowledge: { summary: "Review and settle a proposal", description: "Independent assigned reviewer; activation requires complete evaluations and stable baseline.", readOnly: false, eventType: "knowledge" },
-  record_knowledge_feedback: { summary: "Record feedback on an actual usage", description: "Bind feedback to this Job's persistent usage reference and enqueue bounded work.", readOnly: false, eventType: "knowledge" },
+  record_knowledge_feedback: { summary: "Record feedback on an actual usage", description: "Persist feedback on this Job's usage without creating work. Authorized successful sources later join project collection under its accumulation, cooldown and failure gates.", readOnly: false, eventType: "knowledge" },
   get_knowledge_receipt: { summary: "Read a durable knowledge receipt", description: "Read only this Job's receipts; terminal-history access uses project management authentication.", readOnly: true, eventType: null },
   list_available_roles: {
     summary: "List roles available to the current Hub Job",

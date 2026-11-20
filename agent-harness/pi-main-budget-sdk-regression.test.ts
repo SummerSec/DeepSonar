@@ -1,3 +1,5 @@
+import { after } from "node:test";
+import { privateJobFixture } from "../packages/runtime-sandbox/src/private-job-fixture.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import http from "node:http";
@@ -7,6 +9,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { PI_MAIN_REQUEST_BUDGET_SOURCE } from "../packages/runtime-sandbox/src/pi-main-request-budget.js";
 
+const privateAuth = privateJobFixture();
+after(() => privateAuth.close());
 // Actions installs the existing dsh-runtime lockfile; no credentials or external model calls.
 const root = path.resolve(process.env.PI_MAIN_BUDGET_SDK_ROOT ?? fileURLToPath(new URL("./base-cli-runtime/node_modules/@earendil-works/pi-ai", import.meta.url)));
 async function loadRealSdkExtension() {
@@ -49,8 +53,7 @@ async function fixture(compat: Record<string, unknown> = {}) {
     reasoning: true, input: ["text"], maxTokens: 8192, contextWindow: 1000000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat };
   let start: any, wrapped: any;
-  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token",
-    DEEPSONAR_API_TOKEN: "synthetic-control-token" })({
+  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", ...privateAuth.environment })({
     on(name: string, handler: any) { assert.equal(name, "session_start"); start = handler; },
     registerProvider(_name: string, config: any) { wrapped = config.streamSimple; },
   });
@@ -137,7 +140,7 @@ test("#958 real pi-ai preserves both OpenAI output fields and exposes the one-to
       baseUrl: base + "/v1", reasoning: false, input: ["text"], contextWindow: 1_000_000, maxTokens: 64_000,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: { maxTokensField: field } };
     let start: any, wrapped: any;
-    module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" })({
+    module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", ...privateAuth.environment })({
       on(_name: string, handler: any) { start = handler; },
       registerProvider(_name: string, config: any) { wrapped = config.streamSimple; },
     });

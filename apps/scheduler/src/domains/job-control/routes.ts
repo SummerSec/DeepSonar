@@ -1,3 +1,5 @@
+import { registerHistoricalContinuationRoutes } from "./historical-continuation-routes.js";
+
 import { observe } from "../../metrics.js";
 import { readCompletionExecutionState } from "../platform-api/completion-state.js";
 import { withWaitingExecutionStates } from "./list-execution-state.js";
@@ -130,6 +132,7 @@ export function isPublicJobTypeAllowed(
 }
 
 export function registerJobControlRoutes(app: FastifyInstance): void {
+  registerHistoricalContinuationRoutes(app);
   registerRuntimeEvidenceRoutes(app);
   registerEffectSettlementRoutes(app);
   registerRecoveryDiagnosticsRoutes(app);

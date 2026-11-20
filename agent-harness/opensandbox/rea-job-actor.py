@@ -26,7 +26,7 @@ def invoke(operation, payload, accepted=True):
         os.environ['DEEPSONAR_API_BASE_URL'] + '/operations/' + operation,
         data=json.dumps(payload).encode(), method='POST',
         headers={'Content-Type': 'application/json',
-                 'Authorization': 'Bearer ' + os.environ['DEEPSONAR_API_TOKEN'],
+                 'Authorization': 'Bearer ' + Path(os.environ['DEEPSONAR_CONTROL_TOKEN_FILE']).read_text(),
                  'Idempotency-Key': str(uuid.uuid4())})
     if operation == 'mark_job_done':
         request.add_header('X-DeepSonar-Proposal-Revision', '0')
@@ -165,8 +165,8 @@ def checkpoint(exit_code=None):
     stdout = output.read_bytes()
     stderr = error_output.read_bytes()
     # Never archive our short-lived runtime authentication tokens.
-    for name in ['DEEPSONAR_API_TOKEN', 'DEEPSONAR_GATEWAY_TOKEN']:
-        secret = os.environ.get(name, '').encode()
+    for name in ['DEEPSONAR_CONTROL_TOKEN_FILE', 'DEEPSONAR_GATEWAY_TOKEN_FILE']:
+        secret = Path(os.environ[name]).read_bytes() if os.environ.get(name) else b''
         if secret:
             stdout = stdout.replace(secret, b'[REDACTED]')
             stderr = stderr.replace(secret, b'[REDACTED]')

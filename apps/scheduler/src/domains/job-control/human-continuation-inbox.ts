@@ -1,3 +1,4 @@
+import { continuationBudgetScope } from "./continuation-budget.js";
 import { createHash } from "node:crypto";
 import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
 import { sql } from "../../db.js";
@@ -5,11 +6,12 @@ import { readSharedAssetBlob } from "../shared-assets/index.js";
 
 /** Rebuild cumulative known inputs; never deliver an acknowledged message again. */
 export async function readAcknowledgedHumanAttachments(jobId:string,db:typeof sql=sql):Promise<Array<{path:string;bytes:Buffer}>> {
+  const { jobIds } = await continuationBudgetScope(db, jobId);
   const files=await db`SELECT m.id AS message_id,a.workspace_path,a.content_sha256,a.bytes,b.blob_uri FROM human_messages m
     JOIN human_message_attachments a ON a.message_id=m.id
     JOIN shared_asset_versions v ON v.id=a.version_id
     JOIN shared_asset_blobs b ON b.content_sha256=v.content_sha256
-    WHERE m.target_job_id=${jobId} AND m.delivery_status='acknowledged'
+    WHERE m.target_job_id=ANY(${jobIds}::uuid[]) AND m.delivery_status='acknowledged'
     ORDER BY m.planned_at,m.id,a.workspace_path LIMIT 257`;
   if(files.length>256||files.some(file=>Number(file.bytes)>8*1024*1024)
     ||files.reduce((sum,file)=>sum+Number(file.bytes),0)>64*1024*1024) throw new Error('HUMAN_CHECKPOINT_INBOX_LIMIT');

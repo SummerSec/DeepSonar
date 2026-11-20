@@ -108,3 +108,7 @@ Compose 测试保证业务服务只加入 `deepsonar`、共享网关 socket 不�
 源库保全与候选目录需要额外存储。恢复 journal 绑定 Compose 内容、Docker 目标、固定镜像、plan hash 和 generation；秘密放独立私有文件，SQL/CLI连接参数经 stdin 传递。备份切点后的业务写入只应在激活代发生；激活后失败不再自动切旧库。显式回滚恢复领取及多节点编排已接线，最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，最终运行命令以 [部署说明](../../deploy/README.md) 为准。
 
 宿主 P2 自动入口默认关闭，独立受管策略限制维护窗口及同 schema 的补丁上升；每次启动或续做都需要固定信任根的官方 workflow 签名。调度模板只输出禁用文件，不替管理员安装或启用任务。现有维护状态机仍负责排空、写入隔离和激活回执；版本发现域不取得宿主执行权。配置与证据边界见 [自动升级说明](../../deploy/UPGRADE_AUTOMATION.md)，对应需求 IR-012。
+
+## 显式历史候选库回收（#1124）
+
+IR-013 的[宿主回收](../../deploy/GENERATION_GC.md)复用 upgrade.lock 和独立管理员，两个 deploy 脚本路由同一实现。默认预览保存 cluster/部署/OID 计划，显式 apply 与 hash 才删除。保留配置当前库、绑定项目运行中和已停止容器实际引用的数据库、最近完成当前升级的 saved.source.database、所有未决操作 source/candidate。旧完成归档只证明归属，source 不永久全保留。大小为估算，生产收益未测，最终 SHA Actions 待验。

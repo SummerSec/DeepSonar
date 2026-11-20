@@ -203,7 +203,10 @@ export interface DashboardUsage {
     project_name: string;
     jobs: number;
   }>;
-  models: Array<UsageTokenCounts & { provider: string; model: string; workload: UsageWorkload }>;
+  models: Array<UsageTokenCounts & Pick<UsageTokenTotals, "settled" | "unknown" | "not_reported"> & {
+    provider: string; model: string; workload: UsageWorkload;
+  }>;
+  unconfirmed_models: DashboardUsage["models"];
 }
 
 export interface Project {
@@ -671,6 +674,7 @@ export interface HumanContinuation {
   resumed_at: string | null;
   mode: "structured";
   remaining_execution_ms: number | null;
+  reply_message_id?: string | null;
 }
 
 export interface JobDetail {
@@ -2486,6 +2490,12 @@ export const api = {
       attachments: Array.isArray(created.attachments) ? created.attachments : [],
     };
   },
+  createHistoricalContinuation: (jobId: string, input: {
+    mutation_id: string; request_id: string; expected_revision: number;
+    reply?: { message_id: string; body: string; attachment_version_ids: string[] };
+    saved_reply_message_id?: string;
+  }) => send<{ job_id: string; source_job_id: string; execution_state: "queued" }>(
+    "POST", `/jobs/${jobId}/continuations`, input),
   ignoreHumanIntervention: (canvasId: string, nodeId: string) =>
     send<{
       node_id: string;

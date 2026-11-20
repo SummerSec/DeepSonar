@@ -1,9 +1,11 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-20
 
 ## 人工等待断点与累计时钟（#1074）
+
+原生会话受限导入的精确绑定与能力结果保存在原 job_attempts.state_json.human_session，过滤内容保存于同 request 的 checkpoint CAS，复用原过期删除。无 schema 变更，字段契约见[人工续做](../HUMAN_CONTINUATION.md)。
 
 schema 74 仅新增列表索引 `jobs_project_created_idx (project_id, created_at DESC, id DESC)`，服务不带 `status` 的 Job 列表（#1136）。schema 73 新增 human_requests（原 human 事件/Attempt、revision、断点 manifest、退出/回收、回复与唯一 successor）和 job_execution_clocks（冻结时间预算、累计 active 毫秒和精确 owner）。human_messages 用请求与版本关联回复；accepted 事件、回复已保存、注入、ACK、完成分别记账。文件使用现有 BLOB_DIR 下有界 CAS，30 天到期先持久阻断再删除；不可见/缺失/hash 不符不视为空文件。请求表是管理当前状态，不覆盖历史事件。见[人工续做](../HUMAN_CONTINUATION.md)。
 
@@ -25,7 +27,11 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 ## Schema 基线纪律
 
+#1082 未确认用量诊断沿用 `audit_logs.after_json`。宿主绑定 Job/Attempt/token/effect，固定形态及形态哈希总计最多 2 KiB，权限复用原审计入口。诊断与账本独立、尽力写入，不作为用量证明或重试授权，数据边界见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)。最终 SHA Actions 待验。
+
 [`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v75 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
+
+[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v77 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
 
 ### 直接重建的授权保全（#1002 P2-13）
@@ -62,7 +68,8 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前 schema v75，#1074 增加人工请求与累计时钟；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+保鲜门禁的单处编号核对：当前 schema v77，#1074 增加人工请求与累计时钟；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+
 
 ### Canvas 节点引用索引（#1002 P1-6）
 
@@ -139,9 +146,13 @@ Artifact、Finding、Verify、Research 和 Report 不是同一张“结果表”
 
 ### 项目知识来源审计与只读投影
 
-本轮复用audit_logs与现有project_knowledge_*基线，无新表、schema bump或增量迁移。system/scheduler的source_registered成功审计仅存Job/Attempt/Canvas及来源存在标记，不存正文。collector事务外准备有界CAS，项目行锁下重验后原子写work及逐Job source_collected链接；after_json保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，摘要为单个来源冻结manifest的canonical SHA-256。source_collection_skipped记录error与安全原因，来源被collected/skipped持久消费后不再自动重建；坏源正文与Provider错误不进入原因投影。来源输入保留原verification_status，采集不等于验证。assignment.source_mode持久于Job冻结assignment；rubric为`evaluation:proposal:<id>`，绑定revision/input_digest/plan/base_refs，reviewer另获behavior记录，仅eval/review audience可读。事实入口见[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)、[来源准备](../../apps/scheduler/src/domains/project-knowledge/collector-sources.ts)与[work](../../apps/scheduler/src/domains/project-knowledge/work.ts)。
+本轮反馈评审修正：`project_knowledge_usages` 的反馈持久记录与 work 创建分离，`record_knowledge_feedback` 的新结果为 `{usage_ref,state:"recorded"}`，不含 work_ref、不另建 work。成功 Job 的已接受反馈只经原来源审计/collector 进入批次，按源 Job 去重而非按 usage 数增加来源；manifest 冻结精确反馈、usage/target 版本/hash 基线及 evidence refs，仍计入既有输入上限，原 Job 整理权限不扩展。usage/反馈记录、来源登记、source_collected、候选/生效及复用证据分别保留；显式 request_project_knowledge 仍独立按原契约准入。不改写旧 work/receipt/预算，也不由反馈记录重置连续失败。
 
-[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)同一SQL快照汇总并分页：登记按resource_id去重，采集按同项目work_ref关联，待采集排除collected/skipped并集；工作source_count按采集链接去重，没有链接的显式work仅在有origin_job_id时回退1。项目active版本仍要求非revoked；usage/feedback要求project_id和owner_project_id均为本项目，排除全局/跨项目记录。skipped元数据最多10个去重来源，原因脱敏，不返回正文。登记、采集、流程完成、激活及模型报告分层，不新增效果账本。trial证据仍需真实资产版本/hash与独立Attempt绑定；治理hash变化不重绑历史。当前源码、未运行Actions与真实模型收益未知分开，取舍见[ADR 0023](adr/0023-project-knowledge-collection.md)。
+[ADR 0024](adr/0024-project-knowledge-batching-admission.md) 将自动准入从来源数量限制改为项目级持久历史推导：未处理来源取登记减 collected/skipped 的去重并集，门槛为 4 来源或最老等待 24 小时；上次自动批次创建时间决定 24 小时间隔。连续失败只计 knowledge:project 自动 work 的 blocked/cancelled 或 completed 但无 active/retired 提案产出；成功自动或显式整理须 completed 且有该产出，才截断失败链。两次即停发；失败显式整理不改变计数，旧 knowledge:auto 不作为成功/恢复，重启、时间流逝和治理 hash 变化不清零。不新增表、持久计数或开关，不覆盖历史 work/proposal、预算和回执。collector、锁内重验、wake 与 activity 共用[准入查询](../../apps/scheduler/src/domains/project-knowledge/collection-policy.ts)。32 候选中本批放不下者保持未处理，不写 collected/skipped；retry 仍从原审计推导，不提前到期。
+
+本轮复用audit_logs与现有project_knowledge_*基线，无新表、schema bump或增量迁移。system/scheduler的source_registered成功审计仅存 Job/Attempt/Canvas 及 Fact/Evidence 或已接受反馈的来源存在标记，不存正文。collector事务外准备有界CAS，项目行锁下重验后原子写work及逐Job source_collected链接；after_json保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，摘要为单个来源冻结manifest的canonical SHA-256。source_collection_skipped记录error与安全原因，来源被collected/skipped持久消费后不再自动重建；坏源正文与Provider错误不进入原因投影。来源输入保留原verification_status，采集不等于验证。assignment.source_mode持久于Job冻结assignment；rubric为`evaluation:proposal:<id>`，绑定revision/input_digest/plan/base_refs，reviewer另获behavior记录，仅eval/review audience可读。事实入口见[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)、[来源准备](../../apps/scheduler/src/domains/project-knowledge/collector-sources.ts)与[work](../../apps/scheduler/src/domains/project-knowledge/work.ts)。
+
+[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)的 summary 与工作分页保持同一语句快照；collection 另作一次只读查询，从共用准入规则派生 state/pending_sources/consecutive_failures/next_collection_at，不能宣称整个响应来自同一快照。collection.pending_sources 按可信源登记审计去重并排除已处理；summary 的采集审计还核验 work 存在。正常数据下口径一致，并发变更可能漂移，异常损坏数据不保证同值。六态及时间只作读投影，不是持久状态机，不由分页 items 或进程缓存推导连续失败。summary 登记按resource_id去重，采集按同项目work_ref关联，待采集排除collected/skipped并集；工作source_count按采集链接去重，没有链接的显式work仅在有origin_job_id时回退1。项目active版本仍要求非revoked；usage/feedback要求project_id和owner_project_id均为本项目，排除全局/跨项目记录。skipped元数据最多10个去重来源，原因脱敏，不返回正文。登记、采集、流程完成、激活及模型报告分层，不新增效果账本。trial证据仍需真实资产版本/hash与独立Attempt绑定；治理hash变化不重绑历史。当前源码、未运行Actions与真实模型收益未知分开，取舍见[ADR 0023](adr/0023-project-knowledge-collection.md)。
 
 ## 关键状态机
 
@@ -288,6 +299,10 @@ OM 客户端请求 UUID 保存在现有 `job_attempt_effects.intent_json.gateway
 
 schema 72 增加 project_task_queues 与 project_task_queue_items，保存项目级暂停、核查时间、单调序号、占位状态和时间戳。Canvas 复合唯一键与队列外键共同约束项目归属，active 部分唯一索引约束单占位。新任务的队列记录与首 pending Job 同事务，重排与结清追加审计。既有 Job/Attempt、效果和报告仍各自权威，冻结历史不改写。基线不匹配继续 fail closed，通过既有备份及列交集重建验证，最终 Actions 待验。
 
-## 人工等待让位持久身份（#1074）
+## 历史 failed 新 Job 与预算归属
 
-schema 75 增加 project_task_queue_yields，绑定 mutation_id、原条目、请求 revision、消费回复和返回条目。membership 增加 yielded 状态，不参与队首选择。回复保存事务只更新序号及 queued 状态，保留 created_at/started_at 的完成代际。原请求唯一约束防止重复决定，审计和状态同事务。重建仍沿唯一基线与备份流程。
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
+
+## 公平调度持久账（#1118）
+
+schema 77 完整保留 schema 76 的预算 owner 与 job_continuations。projects 新增 dispatch_last_served 和三列原子 keyset 游标，global_settings 新增单调服务计数器及项目扫描游标。服务序号使用 bigint，数据库内比较与更新，应用读取为字符串。游标仅用于候选扫描，不是 Job 授权或外键归属。新增 projects 公平顺序索引及 jobs 项目 pending 优先级覆盖索引，有界查询无需将项目全部候选载入应用。计数器和游标随既有数据库备份与列交集重建保留，旧空列由基线缺省初始化。最终 Actions 待验。

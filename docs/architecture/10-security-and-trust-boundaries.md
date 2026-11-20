@@ -1,9 +1,13 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-20
+
+#1082 的[用量形态诊断](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)只投影固定分类、字段类型和有界计数，未知键及 event/type 原值丢弃，SHA-256 仅计算该非秘密投影。原始帧、业务文本、header、URL、秘密及其原文哈希不得持久化。诊断不授予用量可信度或重放权限，main/OM 真实 SQL/HTTP 回归由最终 SHA Actions 验收。
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
+
+#1074 原生人工续做仅允许精确绑定原 request/Attempt/快照/归档摘要的主会话文字，经秘密投影和控制身份过滤后导入新沙箱。未知语义记录、扩展、压缩、分支与上下文编辑明确 structured，DSH unsupported；旧系统/配置/工具执行状态不授权新 Attempt，身份与权限重建。持久 Evidence 记录能力与方式原因，见[ADR 0025](adr/0025-restricted-human-session-import.md)及[人工续做](../HUMAN_CONTINUATION.md)。
 
 #1002 P1-9 的[同 Job 模型恢复](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)只接受 Kernel 的 scoped no-start 与严格零用量 settlement，不以 Provider 错误或 SDK 文本为 authority。原 Job 锁串行消费既有 effect intent 中的恢复记录，原 owner/lease/deadline/请求及修正额度仍准入；未知效果、旧许可/计数来源缺失、跨 token/Attempt 原引用与已消费引用拒绝。新调用不修改旧 effect 的 never replay policy、不重启 Agent，不退款或补造历史。最终 SHA SQL/SDK Actions 待验。
 
@@ -12,6 +16,10 @@ DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备�
 ## Kernel 门禁不等于模型分类（#1002 P0-3）
 
 [Reaper Hub 停止器](../../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)只使用当前同项目 Canvas、最新唯一活动/未取消 Attempt、完整 stopped objective 及原完成回执/已知修正用量/冻结期限；锁内重核 sandbox/lease 绑定。预算证明校验原回执版本/拒绝结果、Job-scoped ID、durable dedup 与 event/payload Attempt 归属，历史计数保留但原 repair owner 必须授权当前执行。只停止本 Hub；directed Hub、活动同伴和报告阶段共享 Canvas/root 不暂停或改写，停止事件不触发 Plan/Canvas 自动推进。普通无同伴且可运行 root 才允许整体暂停投影。不借 directed grant 操作 target，不改历史快照/额度/回执或其他效果；pending/unknown 仍按既有失败语义保留 unknown，销毁不是用量证据。accepted human/完成与人工等待不替换，Agent 的 platform_blocker/business_decision 标签或 reason 不能取得停止授权。详见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 Actions 待验，任意历史人工请求的自动分类未交付。
+
+## 人工断点业务文件权限
+
+[人工续做](../HUMAN_CONTINUATION.md)的 manifest v2 只允许 0600/0700，捕获舍弃组、其他用户与特殊权限位。恢复在新沙箱 Agent 启动前完成，路径逐层拒绝链接，全部预检后上传，再以安全打开的文件描述符核对内容并设置精确权限。秘密与平台目录被路径契约排除，权限失败阻断启动，旧清单保持历史原貌并拒绝恢复。
 
 ## 信任边界图
 
@@ -194,12 +202,24 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 
 ## 来源登记与历史预览边界（#1035）
 
-成功来源登记仅含Scheduler审计元数据；GET历史预览重新检查资格并限制项目和分页，不授予历史执行权限、不创建知识Job，也不保证保留正文。本轮用户授权的collector按[ADR 0023](adr/0023-project-knowledge-collection.md)取代0021对批量整理的暂缓：CAS准备在短事务外，项目行锁下重新核验冻结整理权限、最新成功Attempt、未结算效果、项目/来源/hash与已处理记录，work和逐来源采集链接原子提交。不复活来源Job token，不把旧knowledge:auto工作迁移为新批次。超大、失权、未知效果或准备失败留下持久skipped，不自动重放外部效果或坏源热重试。
+本轮评审封闭 usage 反馈旁路：record_knowledge_feedback 只记录反馈，不返回 work_ref 或另启自动 work，成功 Job 的已接受反馈必须经普通来源登记及 collector 重新准入。原 Job 无冻结 request_project_knowledge 权限时不得以反馈扩权；仍核验成功 Attempt、精确 usage/target 版本/hash 和 evidence refs 的项目/读取权限，不复制跨项目来源正文。collector 的积累、间隔、连续失败停发及预算不可被逐反馈建链绕过。显式 request_project_knowledge 仍是独立获授权的请求入口，不由自动策略取代，也不得将 recorded 解释为显式请求或成功恢复。
+
+成功来源登记仅含Scheduler审计元数据；GET历史预览重新检查资格并限制项目和分页，不授予历史执行权限、不创建知识Job，也不保证保留正文。本轮用户授权的collector按[ADR 0023](adr/0023-project-knowledge-collection.md)取代0021对批量整理的暂缓：CAS准备在短事务外，项目行锁下重新核验冻结整理权限、最新成功Attempt、未结算效果、项目/来源/hash与已处理记录，work和逐来源采集链接原子提交。本轮 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 进一步要求锁内以 collector/wake/activity 共用数据库规则重验 4 来源或 24 小时、自动间隔 24 小时、连续无产出停发及繁忙状态；CAS 准备期间的准入变化不得被旧 ready 结果绕过。连续失败从持久 work/proposal 历史推导，重启、时间或治理 hash 变化不得清零，成功显式整理恢复仍不扩大原权限和预算。不复活来源 Job token，不把旧 knowledge:auto 工作迁移为新批次。32 候选中仅因本批容量放不下者不消费；单源超大、失权、未知效果等永久拒绝，以及瞬态准备失败耗尽后才持久 skipped，不自动重放外部效果或坏源热重试。
 
 自动批次与全部trial经[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)收紧stage工具与原授权交集、关闭出网、清角色预加载skills/modules/MCP等内容及共享资产；trial再清空普通知识/全局Skill目录。assignment.source_mode只标识治理来源，不授予权限。共同task_inputs必须显式选冻结材料，不能自动复制全部来源或把原结论当共同答案；平台核验引用，maker/reviewer承担语义泄漏审查。trial只接收专用Skill与当前arm，rubric限定eval/review audience，不以沙箱隔离宣称模型独立性或质量已证明。完整6×2矩阵、真实资产版本/hash和独立Job/Attempt证据门保留；只有target comparator fail可作对照，目标arm及全部安全组须pass，unexecuted/缺项/重复/未知效果不能激活，治理hash变化阻断旧work且不改历史。
 
 activity读面同时要求项目scope和projects:read；计数仅来自本项目审计和知识，usage还要求owner_project_id为本项目。错误原因白名单化、来源正文/manifest/模型反馈正文不返回，Job/Canvas导航仍需原接口授权。登记、采集、候选、生效、拉取和模型反馈必须分层；不得用反馈success认证收益。本轮权限/隔离回归已接Actions入口但尚未执行，未合并、未部署，真实模型收益仍未知。实现与证据边界见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
 
+## 历史 failed 新 Job 与预算归属
+
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
+
 ## 人工等待队列让位（#1074）
 
 让位沿 jobs:control 和项目范围，客户端的条目/请求/revision 不构成权限或退出证明。宿主重验唯一等待、可信封存与回收、效果和费用、有效额度，统一 claim 锁内同事务审计。回复只重新排队，不授权扩额、切快照或抢占运行中任务。恢复仍实时核验授权，历史回复及旧 mutation 不复活取消的 Job。
+
+## 历史候选库回收（#1124）
+
+IR-013 的[归属与恢复契约](../../deploy/GENERATION_GC.md)要求 operation/source/backup marker、cluster、OID、owner、ACL、已封禁 runtime 和恢复引用一致。未知授权/会话/prepared transaction/slot/subscription 保留，无 FORCE 或会话终止。删除前写当前业务库审计与宿主 intent/dropping receipt，响应丢失仅对账原 OID，同名替换拒绝。凭据沿用 stdin 传输，不进入输出，schema 无变更。共享升级锁和单一特权管理员约束 managed DDL，外部越权管理员操作不在并发保证内。
+
+#1032 A1 的三 CLI 私有文件创建、认证读取、清理及现行 P0-1 / P1-3 / P1-4 覆盖边界见[凭据文件通道](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。[普通文本出口](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)在 DSH 注册后的 SDK 调用前精确替换当前 main/Control/OM 值，Claude 本地准入对正文原始字节的已知值命中作不可重试拒绝，干净请求保持原字节。认证和历史各自保留，不将已形成请求静默改写。缺失或不安全的声明凭据文件拒绝启动。同 UID 工具仍可读文件，A2 未交付且不作为本轮强制验收；编码、分片等不属于此普通文本保证。新增回归尚待最终 SHA Actions 验收。

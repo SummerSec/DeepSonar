@@ -1,4 +1,5 @@
 import type { UsageBreakdown } from "./gateway.js";
+import { createUsageShapeDiagnostic, type UsageScanReason } from "./gateway-usage-shape.js";
 
 const MAX_FRAME_BYTES = 1_048_576;
 const MAX_RESPONSE_BYTES = 16_777_216;
@@ -64,6 +65,7 @@ function anthropicStartUsage(value: unknown): { valid: boolean; pendingOutput: b
 export function createRepairUsageScanner(path: string, isSse: boolean): {
   push: (chunk: Uint8Array | string) => void;
   finish: () => UsageBreakdown | null;
+  diagnostic: () => ReturnType<ReturnType<typeof createUsageShapeDiagnostic>["snapshot"]>;
 } {
   const normalized = path.replace(/^\//u, "");
   const protocol = /^(?:v1\/)?(?:chat\/completions|completions)$/u.test(normalized) ? "chat"
@@ -72,66 +74,80 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
   const completionObject = normalized.endsWith("chat/completions") ? "chat.completion" : "text_completion";
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let failed = protocol === null, finished = false, ended = false, totalBytes = 0;
+  let reason: UsageScanReason = protocol === null ? "unsupported_protocol" : "complete";
+  const diagnostic = createUsageShapeDiagnostic(protocol, isSse);
+  const fail = (next: UsageScanReason): void => { if (!failed) reason = next; failed = true; };
   let buffer = "", eventName = "", data: string[] = [], frameBytes = 0;
   const chatChoices = new Map<number, boolean>();
   let observed: UsageBreakdown | null = null, anthropicStart: RecordValue | null = null, anthropicDelta = false;
   const observe = (next: UsageBreakdown | null): void => {
-    if (!next) { failed = true; return; }
-    if (observed && (next.input < observed.input || next.output < observed.output || next.cacheRead < observed.cacheRead || next.cacheWrite < observed.cacheWrite)) { failed = true; return; }
+    if (!next) { fail("invalid_usage"); return; }
+    if (observed && (next.input < observed.input || next.output < observed.output || next.cacheRead < observed.cacheRead || next.cacheWrite < observed.cacheWrite)) { fail("usage_regression"); return; }
     observed = next;
   };
   const parse = (text: string): RecordValue | null => {
     try { return record(JSON.parse(text)); } catch { return null; }
   };
   const frame = (): void => {
-    if (!data.length) { if (eventName === "error") failed = true; eventName = ""; frameBytes = 0; return; }
+    if (!data.length) { if (eventName === "error") { diagnostic.frame(null, eventName); fail("upstream_error"); } eventName = ""; frameBytes = 0; return; }
     const text = data.join("\n");
     data = []; frameBytes = 0;
     const name = eventName; eventName = "";
-    if (ended) { failed = true; return; }
+    if (ended) { fail("invalid_sequence"); return; }
     if (text === "[DONE]") {
-      if (protocol !== "chat" || !observed || !chatChoices.size || [...chatChoices.values()].some(done => !done)) failed = true;
-      else ended = true;
+      diagnostic.frame(null, name);
+      if (protocol !== "chat" || !chatChoices.size || [...chatChoices.values()].some(done => !done)) fail("invalid_sequence");
+      else if (!observed) fail("missing_final_usage");
+      else { ended = true; diagnostic.finalUsage(); }
       return;
     }
     const value = parse(text);
-    if (!value || value.error !== undefined || name === "error") { failed = true; return; }
+    diagnostic.frame(value, name);
+    if (!value) { fail("invalid_json"); return; }
+    if (value.error !== undefined || name === "error") { fail("upstream_error"); return; }
     if (protocol === "chat") {
-      if (value.object !== (completionObject === "chat.completion" ? "chat.completion.chunk" : "text_completion")) { failed = true; return; }
-      if (!Array.isArray(value.choices)) { failed = true; return; }
+      if (value.object !== (completionObject === "chat.completion" ? "chat.completion.chunk" : "text_completion")) { fail("invalid_envelope"); return; }
+      if (!Array.isArray(value.choices)) { fail("invalid_envelope"); return; }
       for (const item of value.choices) {
         const choice = record(item);
-        if (!choice || count(choice.index) === null || (choice.finish_reason != null && typeof choice.finish_reason !== "string")) { failed = true; return; }
+        if (!choice || count(choice.index) === null || (choice.finish_reason != null && typeof choice.finish_reason !== "string")) { fail("invalid_envelope"); return; }
         const index = choice.index as number;
         chatChoices.set(index, chatChoices.get(index) === true || typeof choice.finish_reason === "string");
       }
       if (value.usage !== undefined && value.usage !== null) observe(usage(value.usage, "chat"));
     } else if (protocol === "responses") {
-      if (typeof value.type !== "string" || !value.type.startsWith("response.") || (name && name !== value.type)) { failed = true; return; }
-      if (["response.failed", "response.incomplete", "response.cancelled", "response.error"].includes(value.type)) { failed = true; return; }
+      if (typeof value.type !== "string" || !value.type.startsWith("response.")) { fail("unknown_event"); return; }
+      if (name && name !== value.type) { fail("event_mismatch"); return; }
+      if (["response.failed", "response.incomplete", "response.cancelled", "response.error"].includes(value.type)) { fail("upstream_error"); return; }
       if (value.type === "response.completed") {
         const response = record(value.response);
-        if (!response || response.object !== "response" || response.status !== "completed" || response.error != null || response.incomplete_details != null) { failed = true; return; }
+        if (!response || response.object !== "response" || response.status !== "completed" || response.error != null || response.incomplete_details != null) { fail("invalid_envelope"); return; }
         observe(usage(response.usage, "responses")); ended = true;
+        if (!failed) diagnostic.finalUsage();
       }
     } else if (protocol === "anthropic") {
-      if (typeof value.type !== "string" || (name && name !== value.type)) { failed = true; return; }
+      if (typeof value.type !== "string") { fail("unknown_event"); return; }
+      if (name && name !== value.type) { fail("event_mismatch"); return; }
       if (value.type === "message_start") {
         const message = record(value.message);
-        if (anthropicStart || !message || message.type !== "message" || message.role !== "assistant") { failed = true; return; }
+        if (anthropicStart || !message || message.type !== "message" || message.role !== "assistant") { fail("invalid_sequence"); return; }
         anthropicStart = record(message.usage);
         // #1059: an aggregated start snapshot without output_tokens is the
         // documented compat shape, not a reason to distrust the whole stream;
         // supplied fields still validate here, and the delta must complete it.
         const start = anthropicStartUsage(anthropicStart);
-        if (!anthropicStart || !start.valid) { failed = true; return; }
+        if (!anthropicStart || !start.valid) { fail("invalid_usage"); return; }
         // A pending output is not final evidence, but the announced input/cache
         // already forms the monotonic baseline: observing it with output 0 keeps
         // `observe`'s undercount guard armed for the first delta.
         observe(usage(start.pendingOutput ? { ...anthropicStart, output_tokens: 0 } : anthropicStart, "anthropic"));
       } else if (value.type === "message_delta") {
+        if (!anthropicStart) { fail("invalid_sequence"); return; }
+        // An omitted usage contributes no evidence. A later/earlier valid delta
+        // is still required, even when the start contains integer output_tokens.
+        if (value.usage === undefined) return;
         const deltaUsage = record(value.usage);
-        if (!anthropicStart || !deltaUsage || count(deltaUsage.output_tokens) === null) { failed = true; return; }
+        if (!deltaUsage || count(deltaUsage.output_tokens) === null) { fail("invalid_usage"); return; }
         // Usage fields are cumulative snapshots. Preserve omitted fields from
         // the last snapshot, but validate every supplied input/cache update too:
         // ignoring them would undercount providers reporting revised totals.
@@ -139,59 +155,68 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
         observe(usage(nextUsage, "anthropic"));
         if (!failed) anthropicStart = nextUsage;
         anthropicDelta = true;
+        if (!failed) diagnostic.finalUsage();
       } else if (value.type === "message_stop") {
-        if (!anthropicStart || !anthropicDelta || !observed) failed = true;
+        if (!anthropicStart || !anthropicDelta || !observed) fail("missing_final_usage");
         ended = true;
-      } else if (value.type !== "ping" && (!anthropicStart || !["content_block_start", "content_block_delta", "content_block_stop"].includes(value.type))) failed = true;
+      } else if (value.type !== "ping") {
+        if (!["content_block_start", "content_block_delta", "content_block_stop"].includes(value.type)) fail("unknown_event");
+        else if (!anthropicStart || anthropicDelta) fail("invalid_sequence");
+      }
     }
   };
   const consume = (text: string): void => {
     buffer += text;
-    if (!isSse) { if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) failed = true; return; }
+    if (!isSse) { if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) fail("frame_limit"); return; }
     for (;;) {
       const newline = buffer.indexOf("\n");
       if (newline < 0) break;
       const line = buffer.slice(0, newline).replace(/\r$/u, "");
       buffer = buffer.slice(newline + 1);
       frameBytes += Buffer.byteLength(line) + 1;
-      if (frameBytes > MAX_FRAME_BYTES) { failed = true; break; }
+      if (frameBytes > MAX_FRAME_BYTES) { fail("frame_limit"); break; }
       if (!line) frame();
       else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /u, ""));
       else if (line.startsWith("event:")) eventName = line.slice(6).trim();
-      else if (!line.startsWith(":")) { failed = true; break; }
+      else if (!line.startsWith(":")) { fail("invalid_envelope"); break; }
       if (failed) break;
     }
-    if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) failed = true;
+    if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) fail("frame_limit");
   };
   return {
     push(chunk) {
-      if (finished) { failed = true; return; }
+      if (finished) { fail("push_after_finish"); return; }
       if (failed) return;
       const bytes = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
       totalBytes += bytes.byteLength;
-      if (totalBytes > MAX_RESPONSE_BYTES) { failed = true; buffer = ""; data = []; return; }
-      try { consume(decoder.decode(bytes, { stream: true })); } catch { failed = true; }
+      diagnostic.bytes(bytes.byteLength);
+      if (totalBytes > MAX_RESPONSE_BYTES) { fail("response_limit"); buffer = ""; data = []; return; }
+      try { consume(decoder.decode(bytes, { stream: true })); } catch { fail("invalid_utf8"); }
     },
     finish() {
       if (!finished && !failed) {
-        try { consume(decoder.decode()); } catch { failed = true; }
+        try { consume(decoder.decode()); } catch { fail("invalid_utf8"); }
         if (isSse) {
           // A partial SSE frame is not evidence of a completed response.
-          if (buffer.trim() || data.length || eventName || !ended) failed = true;
+          if (buffer.trim() || data.length || eventName || !ended) fail("truncated");
         } else {
           const value = parse(buffer);
-          if (!value || value.error != null) failed = true;
+          diagnostic.frame(value, "");
+          if (!value) fail("invalid_json");
+          else if (value.error != null) fail("upstream_error");
           else if (protocol === "chat" && value.object === completionObject) {
-            if (!Array.isArray(value.choices) || !value.choices.length || value.choices.some(item => typeof record(item)?.finish_reason !== "string")) failed = true;
+            if (!Array.isArray(value.choices) || !value.choices.length || value.choices.some(item => typeof record(item)?.finish_reason !== "string")) fail("invalid_envelope");
             else observe(usage(value.usage, "chat"));
           }
           else if (protocol === "responses" && value.object === "response" && value.status === "completed" && value.incomplete_details == null) observe(usage(value.usage, "responses"));
           else if (protocol === "anthropic" && value.type === "message" && value.role === "assistant" && typeof value.stop_reason === "string") observe(usage(value.usage, "anthropic"));
-          else failed = true;
+          else fail("invalid_envelope");
+          if (!failed && observed) diagnostic.finalUsage();
         }
       }
       finished = true;
       return failed || !observed ? null : { ...observed };
     },
+    diagnostic: () => diagnostic.snapshot(reason, failed),
   };
 }

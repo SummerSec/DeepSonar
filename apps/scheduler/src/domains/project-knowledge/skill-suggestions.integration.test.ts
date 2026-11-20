@@ -294,7 +294,7 @@ test("more than twenty local candidates fails closed instead of returning a part
   });
 });
 
-test("select then pull records usage only on pull and existing feedback keeps source evidence and work", options, async () => {
+test("select then pull records usage only on pull and feedback records once without bypassing a project halt", options, async () => {
   await isolated(async db => {
     const job = await seedKnowledgeJob(db), skill = await addSkill(db, job);
     await freeze(db, job, [...operations, "record_knowledge_feedback"]);
@@ -313,11 +313,19 @@ test("select then pull records usage only on pull and existing feedback keeps so
       VALUES(${fact},${job.canvasId},${job.jobId},'fact','fixture result',${db.json(body)},'unverified')`;
     const evidence = { kind: "fact", ref: fact,
       content_hash: sha256(canonical({ kind: "fact", id: fact, body, verification_status: "unverified" })) };
-    const feedback = await runtime(context(job, "record_knowledge_feedback", { usage_ref: pull!.usage_ref,
-      outcome: "failure", evidence_refs: [evidence], next_action: "revise", reason: "inspect fixture failure" }));
+    for (const index of [1, 2]) await db`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state)
+      VALUES(${job.projectId},${`knowledge:project:failed-${index}`},${skill.hash},'blocked')`;
+    const feedbackContext = context(job, "record_knowledge_feedback", { usage_ref: pull!.usage_ref,
+      outcome: "failure", evidence_refs: [evidence], next_action: "revise", reason: "inspect fixture failure" });
+    const feedback = await runtime(feedbackContext);
     assert.equal(feedback!.usage_ref, pull!.usage_ref);
-    const [work] = await db`SELECT * FROM project_knowledge_work WHERE id=${String(feedback!.work_ref)}`;
-    assert.equal(work.origin_job_id, job.jobId); assert.equal(work.state, "pending");
+    assert.equal(feedback!.state, "recorded");
+    assert.equal(Object.hasOwn(feedback!, "work_ref"), false);
+    assert.deepEqual(await runtime(feedbackContext), feedback);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 2, "only the two historical failures remain");
+    await assert.rejects(runtime({ ...feedbackContext, idempotencyKey: randomUUID(), input: {
+      ...(feedbackContext.input as Record<string, unknown>), reason: "replace accepted feedback",
+    } }), rejected("KNOWLEDGE_IDEMPOTENCY_CONFLICT"));
     const [updated] = await db`SELECT feedback_json FROM project_knowledge_usages WHERE id=${String(pull!.usage_ref)}`;
     assert.deepEqual(updated.feedback_json.evidence_refs, [evidence]);
     const [receipt] = await db`SELECT result_json FROM project_knowledge_receipts WHERE id=${String(selection!.receipt_ref)}`;

@@ -729,6 +729,16 @@ if (!testDatabaseUrl) {
         return scope;
       }
 
+      async function orderProjectVisits(...scopes: OrdinaryFixture[]) {
+        // Control the persistent fairness input independently of Job priority.
+        // Every Job still enters through the normal advisory-locked claim.
+        await sql`UPDATE global_settings SET dispatch_scan_served=NULL, dispatch_scan_project_id=NULL,
+          dispatch_service_sequence=greatest(dispatch_service_sequence,${scopes.length}::bigint) WHERE id='global'`;
+        for (const [index, scope] of scopes.entries()) {
+          await sql`UPDATE projects SET dispatch_last_served=${index} WHERE id=${scope.projectId}`;
+        }
+      }
+
       async function readOrdinary(scope: OrdinaryFixture) {
         const rows = await sql`SELECT j.status,j.claimed_at,j.finished_at,j.payload_json,
           n.status AS node_status,n.body_json,c.change_revision::text AS revision,
@@ -897,6 +907,7 @@ if (!testDatabaseUrl) {
         await t.test(`ordinary max-slot=1: busy A ${lock} does not starve B then C while the same lock stays held`, async () => {
           await resetClaimFixtures();
           const a = await ordinaryFixture(100), b = await ordinaryFixture(50), c = await ordinaryFixture(1);
+          await orderProjectVisits(a, b, c);
           assert.equal(new Set([a.projectId, b.projectId, c.projectId]).size, 3);
           assert.equal(new Set([a.canvasId, b.canvasId, c.canvasId]).size, 3);
           const beforeA = await assertOrdinary(a, "pending");
@@ -916,6 +927,7 @@ if (!testDatabaseUrl) {
       await t.test("one real claim call fills a hard slot from candidate 501 after all first 500 eligible ordinary Jobs stay locked", async () => {
         await resetClaimFixtures();
         const busy = await busyOrdinaryPage(500), ready = await ordinaryFixture(1);
+        await orderProjectVisits(busy, ready);
         assert.notEqual(busy.projectId, ready.projectId);
         assert.notEqual(busy.canvasId, ready.canvasId);
         const ordered = await sql`SELECT id FROM jobs WHERE status='pending' ORDER BY priority DESC,created_at ASC,id ASC`;
@@ -949,9 +961,10 @@ if (!testDatabaseUrl) {
         }
       }
 
-      await t.test("a first-page claim fault throws its PostgreSQL error and rolls back every Job/Attempt in that page", async () => {
+      await t.test("a first-visit claim fault throws its PostgreSQL error and leaves every Job/Attempt unclaimed", async () => {
         await resetClaimFixtures(2);
         const first = await ordinaryFixture(50), broken = await ordinaryFixture(1);
+        await orderProjectVisits(broken, first);
         const before = await Promise.all([readOrdinary(first), readOrdinary(broken)]);
         await withClaimFault(broken.jobId, async (message) => {
           const work = captureOutcome(claimPendingJobs(), () => {});
@@ -969,7 +982,7 @@ if (!testDatabaseUrl) {
         try {
           const result = await bounded(retry, "first-page rollback leaked its claim lock");
           if (result.status === "rejected") throw result.reason;
-          assert.deepEqual(result.value.map((job) => job.id), [first.jobId, broken.jobId]);
+          assert.deepEqual(result.value.map((job) => job.id), [broken.jobId, first.jobId]);
           await assertOrdinary(first, "claimed");
           await assertOrdinary(broken, "claimed");
         } finally { await Promise.allSettled([retry]); }
@@ -978,6 +991,7 @@ if (!testDatabaseUrl) {
       await t.test("a later-page claim fault returns committed earlier-page work and rolls back only the failing page", async () => {
         await resetClaimFixtures(2);
         const busy = await busyOrdinaryPage(499), first = await ordinaryFixture(50), broken = await ordinaryFixture(1);
+        await orderProjectVisits(busy, first, broken);
         const ordered = await sql`SELECT id FROM jobs WHERE status='pending' ORDER BY priority DESC,created_at ASC,id ASC`;
         assert.equal(ordered.length, 501);
         assert.equal(ordered[499]!.id, first.jobId);

@@ -5,6 +5,7 @@ import net from "node:net";
 import test from "node:test";
 import postgres from "postgres";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { anthropicUsageShapeCases } from "./gateway-usage-shape-fixture.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -68,6 +69,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
   let backgroundRelease: Promise<void> | undefined;
   let releaseBackground = () => {};
   let backgroundOutputLimit: unknown;
+  let usageShapeBody: string | undefined;
 
   const respond = async (request: FastifyRequest, reply: FastifyReply) => {
     upstreamCalls += 1;
@@ -87,6 +89,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       model: typeof body.model === "string" ? body.model : "memory-model",
       usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     };
+    if (usageShapeBody !== undefined) return reply.type("text/event-stream").send(usageShapeBody);
     if (upstreamMode === "redirect") {
       return reply.code(307).header("location", redirectTargetUrl).send();
     }
@@ -1369,6 +1372,46 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       assert.equal(protocolLedger.settlement_status, mode === "stream" ? "settled" : "unknown");
       assert.equal(protocolLedger.effect_status, mode === "stream" ? "settled" : "unknown");
     }
+
+    await t.test("#1082 OM confirms only final usage through the real HTTP scanner and scoped PG receipt", async () => {
+      for (const fixture of anthropicUsageShapeCases()) {
+        const job = await createJob("running", { provider: "anthropic", totalRequests: 0, backgroundMaxTokens: 50 }, anthropicCredentialId);
+        const token = await issue(job.jobId, "observational_memory", {}, anthropicCredentialId);
+        usageShapeBody = fixture.body;
+        const before = upstreamCalls;
+        try {
+          const response = await request(token.plaintext, { path: "v1/messages", maxTokens: 3 });
+          assert.equal(response.statusCode, 200, fixture.name);
+          assert.deepEqual(response.rawPayload, Buffer.from(fixture.body));
+          assert.equal((await receiptFor(response)).status, fixture.known ? "settled" : "unknown");
+          const [ledger] = await sql`SELECT l.*,e.status AS effect_status FROM job_usage_ledger l JOIN job_attempt_effects e
+            ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id WHERE l.job_id=${job.jobId}`;
+          assert.equal(ledger.attempt_id, job.attemptId);
+          assert.equal(ledger.job_token_id, token.id);
+          assert.equal(ledger.workload, "observational_memory");
+          assert.equal(ledger.settlement_status, fixture.known ? "settled" : "unknown");
+          assert.equal(ledger.effect_status, fixture.known ? "settled" : "unknown");
+          assert.equal(Number(ledger.total_tokens), fixture.known ? 7 : 0);
+          assert.equal(Number(ledger.cache_read_input_tokens), fixture.known ? 1 : 0);
+          assert.equal(Number(ledger.cache_creation_input_tokens), fixture.known ? 1 : 0);
+          const [counter] = await sql`SELECT used_requests,used_tokens FROM job_tokens WHERE id=${token.id}`;
+          assert.equal(counter.used_requests, 1);
+          assert.equal(Number(counter.used_tokens), fixture.known ? 7 : 0);
+          const audit = await sql`SELECT after_json FROM audit_logs WHERE action='gateway.usage_unconfirmed' AND resource_id=${job.jobId}`;
+          assert.equal(audit.length, fixture.known ? 0 : 1);
+          if (!fixture.known) {
+            assert.equal(audit[0].after_json.effect_id, ledger.effect_id);
+            assert.ok(Buffer.byteLength(JSON.stringify(audit[0].after_json)) <= 2048);
+            assert.doesNotMatch(JSON.stringify(audit), /SYNTHETIC_PRIVATE|offline-fixture-only/);
+            const nextToken = await issue(job.jobId, "observational_memory", {}, anthropicCredentialId);
+            const next = await request(nextToken.plaintext, { path: "v1/messages" });
+            assert.equal(next.statusCode, 409, next.body);
+            assert.equal(next.json().error.type, "workload_usage_unknown");
+            assert.equal(upstreamCalls, before + 1);
+          }
+        } finally { usageShapeBody = undefined; }
+      }
+    });
 
     // Anthropic's native refusal carrier is copied verbatim into Pi's
     // errorMessage. All bytes remain unchanged. The accounting observer marks

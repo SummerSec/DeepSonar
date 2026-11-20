@@ -842,7 +842,6 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       observationalMemoryGatewayToken = omToken.plaintext;
       registerJobEvidenceSecrets(jobId, [observationalMemoryGatewayToken]);
     }
-    env.DEEPSONAR_GATEWAY_TOKEN = gatewayToken;
     env.DEEPSONAR_REQUEST_POLICY_UPSTREAM = config.gateway.sandboxUrl;
     if (provider === "pi" && !materializedProviderConfig) {
       runtimeConfigFiles = materializeProviderSettings({
@@ -871,7 +870,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       runtimeGatewayRouted = true;
     }
     if (!materializedProviderConfig && provider !== "pi") {
-      for (const k of mapping.secretKeys) env[k] = jt.plaintext;
+      for (const k of mapping.secretKeys) delete env[k];
       if (mapping.baseUrlKey) {
         env[mapping.baseUrlKey] = MODEL_REQUEST_POLICY_BASE_URL;
       }
@@ -882,14 +881,12 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       runtimeGatewayRouted = true;
     }
     if (provider === "claude-code") {
-      const gatewayBase = config.gateway.sandboxUrl;
       env.CLAUDE_CODE_ENABLE_TELEMETRY = "1";
       env.OTEL_METRICS_EXPORTER = "otlp";
       env.OTEL_LOGS_EXPORTER = "otlp";
       env.OTEL_TRACES_EXPORTER = "otlp";
       env.OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
-      env.OTEL_EXPORTER_OTLP_ENDPOINT = `${gatewayBase.replace(/\/$/, "")}/otel`;
-      env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=Bearer ${jt.plaintext}`;
+      env.OTEL_EXPORTER_OTLP_ENDPOINT = `${MODEL_REQUEST_POLICY_BASE_URL}/otel`;
       env.OTEL_RESOURCE_ATTRIBUTES = [
         `deepsonar.job.id=${jobId}`,
         `deepsonar.project.id=${String(job.project_id)}`,
@@ -908,7 +905,10 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
-  if (platformApiDiscoveryUrl) Object.assign(env, platformCapability.env);
+  if (platformApiDiscoveryUrl) {
+    const { DEEPSONAR_API_TOKEN: _hostOnlyControlToken, ...controlEnvironment } = platformCapability.env;
+    Object.assign(env, controlEnvironment);
+  }
   // Verify Job 必须在 mark_job_done 中提交 verdict；通过 API 参数约束让
   // CLI 在宿主软失败循环前拒绝缺少 verdict 的请求。
   if (isVerify) env.DEEPSONAR_CONTROL_REQUIRE_DONE_VERDICT = "1";
@@ -1189,14 +1189,15 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     finding_protocol: effectiveFindingProtocol,
     env_names: [...new Set([
       ...Object.keys(env),
-      ...(platformApiEnabled ? ["DEEPSONAR_API_BASE_URL", "DEEPSONAR_API_TOKEN", "DEEPSONAR_JOB_ID"] : []),
+      ...(platformApiEnabled ? ["DEEPSONAR_API_BASE_URL", "DEEPSONAR_CONTROL_TOKEN_FILE", "DEEPSONAR_JOB_ID"] : []),
+      ...(gatewayToken ? ["DEEPSONAR_GATEWAY_TOKEN_FILE"] : []),
     ])].sort(),
     ...moduleEvidence,
     skills: { names: componentNames(runtimeSkills), count: runtimeSkills.length, sha256: jsonHash(runtimeSkills) },
     commands: { names: componentNames(snapshot.commands), count: snapshot.commands.length, sha256: jsonHash(snapshot.commands) },
     mcps: { names: componentNames(mcps), count: mcps.length, sha256: jsonHash(mcps) },
     subagents: { names: componentNames(snapshot.subagents), count: snapshot.subagents.length, sha256: jsonHash(snapshot.subagents) },
-    provider_files: runtimeConfigFiles.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
+    provider_files: runtimeConfigFiles.filter((file) => file.path !== ".pi/agent/auth.json").map((f) => ({ path: f.path, sha256: f.content_sha256 })),
     pi_extensions: piExtensionInjection.injected,
     pi_extensions_skipped: piExtensionInjection.skipped,
     ...(observationalMemory ? {
@@ -1757,12 +1758,20 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   try {
     const host = await runner.ensureHost({ sandboxId: job.sandbox_id as string });
     checkpointContext=await prepareHumanCheckpointContext({jobId,attemptNo:Number(activeAttempt.attempt_no),snapshot,host});
+    if(checkpointContext.nativeStatus) {
+      const diagnostic={type:"runtime.diagnostic",code:"HUMAN_CONTINUATION_SESSION_MODE",
+        mode:checkpointContext.nativeSession ? "restricted_native" : "structured",
+        status:checkpointContext.nativeStatus.status,reason:checkpointContext.nativeStatus.reason};
+      const sequence=await evidenceWriter.appendNormalized(diagnostic);
+      publishStream(jobId,diagnostic,evidenceAttemptId,sequence);
+    }
     if(checkpointContext.continuationInput) initialInput=`${checkpointContext.continuationInput}\n${initialInput}`;
     result = await runRealAgent(
     host,
     {
       provider,
       adapter: snapshot.agent_runtime,
+      humanSession: checkpointContext.nativeSession,
       agentRuntimeLaunch: snapshot.agent_runtime_launch,
       runtimeImageKey: snapshot.runtime_image.image_key,
       model: runtimeModel,
@@ -1815,6 +1824,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       piExtensions: piExtensionInjection.paths,
       workspaceFiles,
       secretValues: [platformToken, gatewayToken,observationalMemoryGatewayToken].filter((value): value is string => Boolean(value)),
+      privateCredentials: {
+        ...(platformToken ? { controlToken: platformToken } : {}),
+        ...(gatewayToken ? { gatewayToken } : {}),
+        ...(observationalMemoryGatewayToken ? { observationalMemoryToken: observationalMemoryGatewayToken } : {}),
+      },
       onRunReady: async ({ sendMessage, readWorkspaceFile, writeWorkspaceFile }) => {
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;
         if (platformApiEnabled) {

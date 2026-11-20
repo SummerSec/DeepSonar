@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -9,6 +10,10 @@ import { DSH_BIN, DSH_PROFILE, DSH_PROFILE_MANIFEST, DSH_SMOKE_MODEL, DSH_SMOKE_
 const bin = process.argv[2] ?? DSH_BIN;
 const root = mkdtempSync(path.join(os.tmpdir(), "deepsonar-dsh-sdk-"));
 const token = "offline-sdk-smoke";
+const credentialDirectory = path.join(root, `.deepsonar-credentials-${randomUUID()}`);
+mkdirSync(credentialDirectory, { mode: 0o700 });
+const tokenFile = path.join(credentialDirectory, "gateway-token");
+writeFileSync(tokenFile, token, { flag: "wx", mode: 0o600 });
 const records = [];
 const requests = [];
 let phase = "standard";
@@ -61,10 +66,13 @@ async function run(taskMode, home, sessionId) {
   const profile = path.join(home, "profiles", DSH_PROFILE);
   mkdirSync(profile, { recursive: true });
   writeFileSync(path.join(profile, "package.json"), DSH_PROFILE_MANIFEST);
-  writeFileSync(path.join(profile, "cordis.patch.yml"), buildDshCordisSmokeConfig({ cwd, home, taskMode, baseURL: `http://127.0.0.1:${server.address().port}/v1` }));
+  writeFileSync(path.join(profile, "cordis.patch.yml"), buildDshCordisSmokeConfig({ cwd, home, taskMode,
+    privateCredentialPath: tokenFile, baseURL: `http://127.0.0.1:${server.address().port}/v1` }));
   writeFileSync(path.join(home, "cordis.patch.yml"), "[]\n");
   const child = spawn(process.execPath, [bin, "--profile", DSH_PROFILE], {
-    cwd, env: { PATH: process.env.PATH, HOME: home, DSH_HOME: home, DSH_TELEMETRY_DISABLED: "1", DEEPSONAR_GATEWAY_TOKEN: token },
+    cwd, env: { PATH: process.env.PATH, HOME: home, DSH_HOME: home, DSH_TELEMETRY_DISABLED: "1",
+      DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile,
+      DEEPSONAR_DSH_FROZEN_IDENTITY: JSON.stringify({ provider: DSH_SMOKE_PROVIDER }) },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const pending = new Map();

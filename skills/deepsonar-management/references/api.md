@@ -592,3 +592,11 @@ goal_review 的 criterion_ids 可选择 `program_rule:<ruleid>`，但必须是 f
 ### Finding 证据完整性诊断
 
 `GET /findings/:id/evidence-trace` 及详情诊断只读核验来源与实际留存字节。逐 Fact 的 `execution_assurance:not_attested`、`runtime_claim_structured`、`retained_bytes_verified` 分开表示执行未认证、结构化声明与字节完整性；trace `runtime_proof=false`，`replay.kind=evidence_integrity_check`，不执行复现命令、不改变 Verify verdict/Plan/资格。精确来源与失败边界见[专题](../../../docs/EVIDENCE_TRACE.md)。
+
+### 历史失败任务断点续做
+
+| 方法 | 路径 | scope | 用途 |
+| --- | --- | --- | --- |
+| POST | /jobs/:id/continuations | jobs:control | 保存历史回复并受原额度约束创建续做运行 |
+
+`POST /jobs/:id/continuations` 使用 jobs:control，body 包含 mutation_id、request_id、expected_revision 及 reply（message_id、body、attachment_version_ids），或已有不可变回复的 saved_reply_message_id，两者互斥。先幂等保存回复，后校验完整原始预算、合法检查点和当前授权，202 返回新 job_id、原 budget_owner_job_id 及 execution_reply_id。409 的 error_code 是稳定 blocker，已保存回复可查询。相同 body/key/revision 重试重读原结果。原 failed 状态保留，新 Job 占 Plan 剩余派发名额。完整语义见 docs/HUMAN_CONTINUATION.md。

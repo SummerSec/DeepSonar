@@ -322,3 +322,5 @@ LLVM 14 对照 7/20 失败，匹配 LLVM 19 候选 20/20 通过，均保留原 f
 ## 正式版本签名发布门禁
 
 每轮版本来自新的、未使用的 `vX.Y.Z` tag，私有 package 版本不作为产品版本。正式 tag 必须指向已通过 CI 的 main；签名身份、目标 commit、CHANGELOG、schema 与最终平台镜像必须一致。`prepare-release` 的冻结产物经 `platform-signatures` 三张 GHCR index 签名及独立验证后，独立 `release-publish` / `release-writeback` 才能发布与回写。仅签名 job 新增 `id-token: write`，不创建持久凭据；信任根、签名 metadata 与默认关闭的宿主自动升级规则见 [签名运维](../deploy/UPGRADE_AUTOMATION.md)。生产正例以本版 Release 的公开回执和 workflow 为准；不能用测试密钥或 tag 存在代替。
+
+#1124 B 的[历史候选库维护入口](../deploy/GENERATION_GC.md)使用默认预览和显式审批，逐代保留最近当前完成升级的真实源库和未决引用，权限/OID 不明即保留。隔离 PG 和两 shell 回归接既有 Actions，最终 SHA 待验。

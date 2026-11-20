@@ -1,6 +1,7 @@
 // Unit doubles for the wrapper's boundary. These are NOT the real-plugin RPC
 // acceptance fixture (pi-om-real-rpc.mjs); no memory algorithm is reproduced.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
@@ -48,13 +49,19 @@ export default function plugin(pi) {
 
 export async function loadGovernedBoundary() {
   const doubleUrl = `data:text/javascript;base64,${Buffer.from(doubleSource).toString("base64")}`;
-  const contextSource = stripTypeScriptTypes(readFileSync(new URL("../../packages/runtime-sandbox/src/pi-main-request-budget.ts", import.meta.url), "utf8"));
+  const readerSource = stripTypeScriptTypes(readFileSync(new URL("../../packages/runtime-sandbox/src/private-credential-reader.ts", import.meta.url), "utf8"));
+  const readerUrl = `data:text/javascript;base64,${Buffer.from(readerSource).toString("base64")}`;
+  const { PRIVATE_CREDENTIAL_READER_SOURCE } = await import(readerUrl);
+  const runtimeReaderUrl = `data:text/javascript;base64,${Buffer.from(PRIVATE_CREDENTIAL_READER_SOURCE).toString("base64")}`;
+  const contextSource = stripTypeScriptTypes(readFileSync(new URL("../../packages/runtime-sandbox/src/pi-main-request-budget.ts", import.meta.url), "utf8"))
+    .replace('"./private-credential-reader.js"', JSON.stringify(readerUrl));
   const contextUrl = `data:text/javascript;base64,${Buffer.from(contextSource).toString("base64")}`;
   let source = readFileSync(new URL("../pi-observational-memory-governed.ts", import.meta.url), "utf8");
   source = source.replace('"/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/src/index.ts"', JSON.stringify(doubleUrl))
     .replace('"/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/src/runtime.js"', JSON.stringify(doubleUrl))
     .replace('"@earendil-works/pi-ai/compat"', JSON.stringify(doubleUrl))
-    .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(contextUrl));
+    .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(contextUrl))
+    .replace('"/opt/deepsonar/dsh/deepsonar-private-reader.mjs"', JSON.stringify(runtimeReaderUrl));
   const code = stripTypeScriptTypes(source, { mode: "transform", sourceUrl: "governed-om-unit.ts" });
   const { createGovernedObservationalMemoryExtension } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
   return { createGovernedObservationalMemoryExtension, config: structuredClone(FROZEN_CONFIG) };
@@ -72,8 +79,17 @@ export async function createFailureBoundary(errorMessage, receipt = { status: "u
   const token = options.token ?? "offline-unit";
   const bridgeErrors = [];
   const root = mkdtempSync(path.join(tmpdir(), "om-gateway-boundary-"));
-  const previous = Object.fromEntries(["TEMP", "TMPDIR", "PI_CODING_AGENT_DIR", "PI_OBSERVATIONAL_MEMORY_PASSIVE"]
+  const credentialDirectory = path.join(root, `.deepsonar-credentials-${randomUUID()}`);
+  mkdirSync(credentialDirectory, { mode: 0o700 });
+  const gatewayTokenFile = path.join(credentialDirectory, "gateway-token");
+  const controlTokenFile = path.join(credentialDirectory, "control-token");
+  writeFileSync(gatewayTokenFile, "offline-main", { flag: "wx", mode: 0o600 });
+  writeFileSync(controlTokenFile, "offline-control", { flag: "wx", mode: 0o600 });
+  const previous = Object.fromEntries(["TEMP", "TMPDIR", "PI_CODING_AGENT_DIR", "PI_OBSERVATIONAL_MEMORY_PASSIVE",
+    "DEEPSONAR_GATEWAY_TOKEN_FILE", "DEEPSONAR_CONTROL_TOKEN_FILE"]
     .map((key) => [key, process.env[key]]));
+  process.env.DEEPSONAR_GATEWAY_TOKEN_FILE = gatewayTokenFile;
+  process.env.DEEPSONAR_CONTROL_TOKEN_FILE = controlTokenFile;
   process.env.TEMP = root;
   process.env.TMPDIR = root;
   process.env.PI_CODING_AGENT_DIR = root;

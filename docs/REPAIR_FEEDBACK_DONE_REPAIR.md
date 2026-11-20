@@ -1,11 +1,13 @@
 # mark_job_done 持久修正回执（#776 B）
 
 > 状态：#776 B/C 为 as-built；#874 受治理恢复 v1 在当前修复分支实现，以最终 SHA 的 GitHub Actions 和评审为工程验收依据。真实模型理解质量未评测。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-19
 
 B 切片只处理 `mark_job_done`，复用 Control HTTP、语义 `events`、Job/Attempt 与既有效果边界。没有第二执行通道，没有新表或 schema bump，不自动重跑 Job。A 的冻结矩阵见 #776 对应 A PR；C0/C1 的限定扩展见下文，原 issue 收口范围见 [验收矩阵](REPAIR_FEEDBACK_ACCEPTANCE.md)。
 
 ## 协议
+
+#1082 保守 B 继续要求最终 Anthropic usage delta，缺省 usage delta 不增加证据，start-only 保留未确认。真实 main/OM HTTP、scanner/PG 账本、安全审计和下一次准入回归接 `pnpm ci:integration:platform-api`。诊断上限 2 KiB，SHA-256 只计算非秘密固定形态，详细边界见[最终用量与安全形态诊断](MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)。最终 SHA Actions 待验，不回填历史。
 
 POST 原 `operations/mark_job_done` 需要 UUID `Idempotency-Key` 与 `X-DeepSonar-Proposal-Revision`：首次 revision 为 0，修正使用反馈要求的下一 revision 和新 key。同一提交的传输重试保留 key、revision 和 payload；缺少 revision 明确拒绝，不静默补 0。显式事件 ID 必须等于 key。
 

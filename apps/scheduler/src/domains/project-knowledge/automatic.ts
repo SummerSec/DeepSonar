@@ -14,6 +14,7 @@ interface SourceInspection {
   attempt_id?: unknown;
   has_facts?: boolean;
   has_evidence?: boolean;
+  has_feedback?: boolean;
   registration?: Record<string, unknown> | null;
   existing_work?: Record<string, unknown> | null;
 }
@@ -34,7 +35,9 @@ export async function inspectAutomaticKnowledgeJob(db: KnowledgeDb, projectId: s
       EXISTS(SELECT 1 FROM canvas_nodes n WHERE n.job_id=j.id AND n.canvas_id=j.canvas_id
         AND n.node_type='fact') AS has_facts,
       EXISTS(SELECT 1 FROM artifact_evidence e JOIN artifacts a ON a.id=e.artifact_id
-        WHERE a.job_id=j.id AND a.project_id=j.project_id) AS has_evidence
+        WHERE a.job_id=j.id AND a.project_id=j.project_id) AS has_evidence,
+      EXISTS(SELECT 1 FROM project_knowledge_usages u WHERE u.project_id=j.project_id AND u.job_id=j.id
+        AND u.attempt_id=latest.id AND u.feedback_json IS NOT NULL) AS has_feedback
     FROM jobs j JOIN projects p ON p.id=j.project_id
     LEFT JOIN LATERAL (SELECT id,status FROM job_attempts WHERE job_id=j.id
       ORDER BY attempt_no DESC LIMIT 1) latest ON true
@@ -50,7 +53,7 @@ export async function inspectAutomaticKnowledgeJob(db: KnowledgeDb, projectId: s
   else if (!origin.attempt_id || origin.attempt_status !== "succeeded") reason = "latest_attempt_not_succeeded";
   else if (!Array.isArray(snapshot.platform_tools) || !snapshot.platform_tools.includes("request_project_knowledge")) reason = "request_not_allowed";
   else if (origin.unsettled === true) reason = "unsettled_effects";
-  else if (origin.has_facts !== true && origin.has_evidence !== true) reason = "no_sources";
+  else if (origin.has_facts !== true && origin.has_evidence !== true && origin.has_feedback !== true) reason = "no_sources";
   const [registration] = await db`SELECT id,at FROM audit_logs WHERE project_id=${projectId}
     AND action=${SOURCE_REGISTERED_ACTION} AND resource_type='job' AND resource_id=${jobId}
     AND actor_type='system' AND actor_id='scheduler' AND result='ok' ORDER BY id LIMIT 1`;
@@ -60,6 +63,7 @@ export async function inspectAutomaticKnowledgeJob(db: KnowledgeDb, projectId: s
     job_id: jobId, status: reason ? "skipped" : "eligible", ...(reason ? { reason } : {}),
     canvas_id: origin.canvas_id, attempt_id: origin.attempt_id,
     has_facts: origin.has_facts === true, has_evidence: origin.has_evidence === true,
+    has_feedback: origin.has_feedback === true,
     registration: registration ?? null, existing_work: work ?? null,
   };
 }
@@ -77,6 +81,7 @@ export async function registerKnowledgeSourceAfterTerminal(tx: Db, jobId: string
         resourceType: "job", resourceId: jobId, after: {
           version: 1, canvas_id: source.canvas_id, attempt_id: source.attempt_id,
           has_facts: source.has_facts, has_evidence: source.has_evidence,
+          has_feedback: source.has_feedback,
         } }, nested);
       await nested`SELECT pg_notify('deepsonar_jobs','knowledge_source')`;
     });
