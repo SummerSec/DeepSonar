@@ -1,3 +1,4 @@
+import { lockContinuationBudget } from "../job-control/continuation-budget.js";
 import { readControlReceiptByKey, controlInputDigest } from "./control-receipt.js";
 import { scrubPostgresJson } from "./pg-text-safety.js";
 import { createHash } from "node:crypto";
@@ -84,6 +85,7 @@ export async function recordCompletionProposal(input: {
   return db.begin(async transaction => {
     // SAFETY: postgres.js 事务回调的事务对象与 sql 标签函数同形，接收端只做结构化使用。
     const tx = transaction as unknown as typeof sql;
+    const { jobIds } = await lockContinuationBudget(tx, input.jobId, false);
     const [job] = await tx`SELECT id,project_id,canvas_id,status,agent_snapshot_json,started_at,timeout_sec,execution_deadline_at,
       lease_expires_at > clock_timestamp() AS leased,
       COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second') > clock_timestamp() AS within_time
@@ -113,8 +115,8 @@ export async function recordCompletionProposal(input: {
     if (knowledgeOwner) return reject("IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a knowledge operation");
     const [used] = await tx`SELECT event_id FROM events WHERE job_id=${input.jobId} AND event_id=${input.key}`;
     if (used) return reject("IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a semantic event");
-    const history = await tx`SELECT payload_json FROM events WHERE job_id=${input.jobId}
-      AND type='control_receipt' AND payload_json->>'operation'='mark_job_done' ORDER BY job_seq DESC LIMIT ${COMPLETION_REPAIR_LIMIT + 1}`;
+    const history = await tx`SELECT payload_json FROM events WHERE job_id=ANY(${jobIds}::uuid[])
+      AND type='control_receipt' AND payload_json->>'operation'='mark_job_done' ORDER BY created_at DESC,id DESC LIMIT ${COMPLETION_REPAIR_LIMIT + 1}`;
     const previous = history[0]?.payload_json as CompletionReceipt | undefined;
     if (history.some(row => row.payload_json.status === "persisted_deferred")) {
       return reject("COMPLETION_ALREADY_ACCEPTED", "A completion is already durably accepted; read its receipt");
@@ -139,8 +141,12 @@ export async function recordCompletionProposal(input: {
     const [reply]=await tx`SELECT r.reply_message_id,m.delivery_status FROM human_requests r
       LEFT JOIN human_messages m ON m.id=r.reply_message_id AND m.request_id=r.id
       WHERE r.job_id=${input.jobId} AND r.target_attempt_no=${attempt.attempt_no} AND r.resumed_at IS NOT NULL`;
-    if(reply) evidence.sha256=controlInputDigest({execution:evidence.sha256,human_reply_status:reply.delivery_status??'missing'});
-    const replyFailure=reply&&reply.delivery_status!=='acknowledged'?{statusCode:409,body:{...controlRuntimeRejection({
+    const [crossReply] = reply ? [] : await tx`SELECT m.delivery_status FROM job_continuations c
+      JOIN human_messages m ON m.id=c.execution_reply_id AND m.target_job_id=c.target_job_id
+      WHERE c.target_job_id=${input.jobId}`;
+    const currentReply = reply ?? crossReply;
+    if(currentReply) evidence.sha256=controlInputDigest({execution:evidence.sha256,human_reply_status:currentReply.delivery_status??'missing'});
+    const replyFailure=currentReply&&currentReply.delivery_status!=='acknowledged'?{statusCode:409,body:{...controlRuntimeRejection({
       operation:'mark_job_done',code:'HUMAN_REPLY_ACK_REQUIRED',message:'先读取并处理对应人工消息，再调用 ack_human_message；当前未确认处理，不可完成。',
       category:'model_correctable',retryable:true,idempotencyKey:input.key,next_action:'处理 inbox 消息并 ACK 后，以累计下一 revision 提交完成。',
     })}}:undefined;

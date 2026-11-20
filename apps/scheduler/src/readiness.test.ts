@@ -805,7 +805,7 @@ async function credentialFirstReadiness(
   const { resolveReadinessCredentials } = await import("./readiness-credentials.js");
   const input = baseInput();
   input.roles = input.roles.map((role) => ({ ...role, global_agent_cli: globalPreference, global_model: null }));
-  const db = async () => candidates;
+  const db = async (strings: TemplateStringsArray) => strings.join("?").includes("FROM credentials") ? candidates : [];
   const resolved = await resolveReadinessCredentials(db, projectId, projectConfig, input.roles, false);
   return evaluateReadiness({ ...input, credentials: resolved.credentials, credentialResolutions: resolved.resolutions });
 }
@@ -856,4 +856,24 @@ test("#757 readiness preserves explicit empty and stale credential restrictions"
 test("#757 a project credential can satisfy an inherited global RoleConfig within that project", async () => {
   const result = await credentialFirstReadiness([readinessCandidate(credentialId, "pi", projectId)]);
   assert.equal(result.checks.some((check) => check.code === "CREDENTIAL_SCOPE_MISMATCH"), false);
+});
+
+
+test("#1078 readiness treats capacity as waiting without reporting missing configuration", async () => {
+  const result = await credentialFirstReadiness([{ ...readinessCandidate(credentialId, "claude-code"),
+    public_metadata_json: { max_concurrent: 0 } }]);
+  const capacity = result.checks.find(check => check.code === "CREDENTIAL_AT_CAPACITY");
+  assert.equal(capacity?.state, "attention");
+  assert.equal(capacity?.repair?.code, "provider_credential_all_at_capacity");
+  assert.equal(capacity?.fix, null);
+  assert.equal(result.checks.some(check => check.code === "CREDENTIAL_MISSING"), false);
+});
+
+test("#1078 readiness exposes temporary health failure with its precise repair", async () => {
+  const result = await credentialFirstReadiness([{ ...readinessCandidate(credentialId, "claude-code"),
+    health_status: "error", health_error_category: "network" }]);
+  const health = result.checks.find(check => check.code === "CREDENTIAL_HEALTH_UNAVAILABLE");
+  assert.equal(health?.state, "fail");
+  assert.equal(health?.repair?.category, "transient_retryable");
+  assert.equal(result.checks.some(check => check.code === "CREDENTIAL_MISSING"), false);
 });

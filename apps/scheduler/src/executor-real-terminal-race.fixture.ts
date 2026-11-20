@@ -43,6 +43,10 @@ let publishedInputs: Array<Parameters<typeof import("./domains/shared-assets/ind
 let workspaceReads = 0;
 const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
   const query = strings.join("?").replace(/\s+/g, " ").trim();
+  if (query === "SELECT * FROM job_continuations WHERE target_job_id=?") {
+    assert.deepEqual(values, [jobId]);
+    return [];
+  }
   if (query.startsWith("SELECT * FROM jobs")) return [job];
   if (query === "SELECT c.target_json FROM jobs j JOIN canvases c ON c.id = j.canvas_id AND c.project_id = j.project_id WHERE j.id = ? AND j.canvas_id = ? AND c.id = ?") {
     assert.deepEqual(values, [jobId, canvasId, canvasId]);

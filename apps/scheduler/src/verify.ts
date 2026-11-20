@@ -1151,8 +1151,8 @@ export async function closeVerifyRound(
     final = "inconclusive";
   }
 
-  // #1133：连续无进展刹车 —— 最近回弹的「决策缺失集合」完全相同（第 2 次即收口）→ needs_human，不再派注定无用的补证。
-  const noProgress = final === "rework" && await shouldStopForNoProgress(tx, findingId, round.id as string, missing);
+  // #1133：maxNoProgressRounds=0 关闭补证无进展刹车；正值仍按独立阈值 2 判断相同决策缺项。
+  const noProgress = final === "rework" && rules.maxNoProgressRounds > 0 && await shouldStopForNoProgress(tx, findingId, round.id as string, missing);
   if (noProgress) final = "needs_human";
 
   const roundStatus =

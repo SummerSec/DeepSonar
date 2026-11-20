@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { JobUsageLedgerView } from "./UsageLedgerBoard";
-import type { JobUsageSummary } from "./api";
+import { JobUsageLedgerView, UnconfirmedModelUsage } from "./UsageLedgerBoard";
+import type { DashboardUsage, JobUsageSummary } from "./api";
 import {
   defaultCustomRange,
   formatCacheHitRate,
@@ -41,6 +41,21 @@ test("Job ledger renders memory cost and unknown usage separately from main cost
 
 test("Job ledger has no invented cost in the empty state", () => {
   assert.equal(renderToStaticMarkup(createElement(JobUsageLedgerView, { usage: [] })), "");
+});
+
+test("unconfirmed model table renders zero-token requests and separates memory attribution", () => {
+  const model: DashboardUsage["models"][number] = {
+    provider: "offline", model: "same-model", workload: "main", requests: 3,
+    input_tokens: 0, output_tokens: 0, total_tokens: 0, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, settled: 1, unknown: 0, not_reported: 2,
+  };
+  const html = renderToStaticMarkup(createElement(UnconfirmedModelUsage, {
+    rows: [model, { ...model, workload: "observational_memory", requests: 1, settled: 0, unknown: 1, not_reported: 0 }],
+  }));
+  assert.match(html, /用量待确认的模型/);
+  assert.match(html, /主任务 · 未上报 2 · 待对账 0 · 3 次请求/);
+  assert.match(html, /记忆后台 · 未上报 0 · 待对账 1 · 1 次请求/);
+  assert.equal(renderToStaticMarkup(createElement(UnconfirmedModelUsage, { rows: [] })), "");
 });
 
 test("Shanghai helpers keep custom defaults on a 7-day inclusive window", () => {

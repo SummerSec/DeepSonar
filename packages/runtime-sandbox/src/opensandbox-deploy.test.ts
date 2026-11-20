@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -152,6 +154,73 @@ test("isolated OpenSandbox production smoke stages the exact preflight reader in
   }
 });
 
+test("production, worker and external Kubernetes share authenticated List readiness and stage the script", () => {
+  for (const file of ["deploy/docker-compose.opensandbox.prod.yml", "deploy/docker-compose.worker.yml",
+    "deploy/docker-compose.opensandbox.k8s.yml"]) {
+    const compose = readFileSync(join(root, file), "utf8");
+    assert.match(compose, /management-health\.py:\/etc\/opensandbox\/management-health\.py:ro/);
+    assert.match(compose, /test: \["CMD", "\/app\/\.venv\/bin\/python3", "\/etc\/opensandbox\/management-health\.py"\]/);
+    assert.doesNotMatch(compose, /(?:8080|18084)\/health|readiness-probe\.py/);
+    assert.match(compose, /OPENSANDBOX_SERVER_API_KEY/);
+    assert.match(compose, /OPENSANDBOX_PROBE_PORT: "(?:8080|18084)"/);
+  }
+  const external = readFileSync(join(root, "deploy/opensandbox/config.k8s.external.toml"), "utf8");
+  const k8sCompose = readFileSync(join(root, "deploy/docker-compose.opensandbox.k8s.yml"), "utf8");
+  const port = external.match(/^port = (\d+)$/m)?.[1];
+  assert.ok(port, "external server configuration declares its management port");
+  assert.ok(k8sCompose.includes(`OPENSANDBOX_PROBE_PORT: "${port}"`));
+  const productionCompose = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
+  const mountedFiles = [...new Set([...productionCompose.matchAll(/\.\/(opensandbox\/[^:\s]+):/g)].map(match => match[1]!))];
+  assert.ok(mountedFiles.includes("opensandbox/dockerenv"));
+  for (const file of ["agent-harness/test-opensandbox-poc.ts", "agent-harness/opensandbox/opensandbox-prod-official.poc.ts"]) {
+    const source = readFileSync(join(root, file), "utf8");
+    const dir = mkdtempSync(join(tmpdir(), "opensandbox-health-input-"));
+    try {
+      mkdirSync(join(dir, "opensandbox"));
+      for (const mountedFile of mountedFiles) {
+        const copy = source.split("\n").find(line => line.includes(`writeFileSync(join(dir, "${mountedFile}")`));
+        assert.ok(copy, `${file} must stage mounted file ${mountedFile}`);
+        runInNewContext(copy, { dir, repoRoot: root, deployDir: join(root, "deploy"), join, readFileSync, writeFileSync }, { timeout: 1000 });
+        assert.deepEqual(readFileSync(join(dir, mountedFile)), readFileSync(join(root, "deploy", mountedFile)));
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const compat = readFileSync(join(root, "deploy/docker-compose.podman-compat.opensandbox.yml"), "utf8");
+  assert.match(compat, /condition: service_started/);
+  const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  assert.match(workflow, /run: pnpm ci:unit:opensandbox-management-probe/);
+  const scripts = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts;
+  assert.equal(scripts["ci:unit:opensandbox-management-probe"], "python3 deploy/opensandbox/management-health.test.py");
+});
+
+test("offline trial CLI packages and checksum-binds both mounted OpenSandbox readers", () => {
+  const dir = mkdtempSync(join(tmpdir(), "opensandbox-trial-readers-"));
+  try {
+    mkdirSync(join(dir, "images"));
+    for (const component of ["scheduler", "web", "image-admission"]) {
+      writeFileSync(join(dir, "images", `deepsonar-${component}.tar`), `offline-${component}`);
+      writeFileSync(join(dir, "images", `deepsonar-${component}.id`), `sha256:${"b".repeat(64)}\n`);
+    }
+    execFileSync(process.execPath, [join(root, "deploy/issue752-package-trial.mjs"),
+      "--out", dir, "--source-sha", "a".repeat(40)], { stdio: "pipe" });
+    const checksums = readFileSync(join(dir, "SHA256SUMS"), "utf8").split("\n");
+    for (const script of ["resource-preflight.py", "management-health.py"]) {
+      const relative = `deployment/deploy/opensandbox/${script}`;
+      const packaged = readFileSync(join(dir, relative));
+      assert.deepEqual(packaged, readFileSync(join(root, "deploy/opensandbox", script)));
+      const digest = createHash("sha256").update(packaged).digest("hex");
+      assert.ok(checksums.includes(`${digest}  ${relative}`), `${script} must be checksum-bound`);
+    }
+    const compose = readFileSync(join(dir, "deployment/deploy/docker-compose.opensandbox.prod.yml"), "utf8");
+    assert.match(compose, /management-health\.py:\/etc\/opensandbox\/management-health\.py:ro/);
+    assert.match(compose, /resource-preflight\.py:\/etc\/opensandbox\/resource-preflight\.py:ro/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("OpenSandbox production overlay is the default real deploy path", () => {
   const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
   const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
@@ -162,11 +231,7 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.match(deploySh, /network connect bridge/);
   assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18081/);
   assert.match(overlay, /condition: service_healthy/);
-  // #1046 P1-4：overlay 的 healthcheck 改为带鉴权的管理面 List 探针（脚本只读挂载），
-  // 不再用 /health 作为就绪条件。/health 仍是存活信号，不参与 compose readiness。
-  assert.match(overlay, /\/etc\/opensandbox\/readiness-probe\.py/);
-  assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
-  assert.doesNotMatch(overlay, /8080\/health/);
+  assert.match(overlay, /\/etc\/opensandbox\/management-health\.py/);
   assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
   // #685: business network only; the managed proxy reaches Scheduler over the
   // gateway_upstream socket volume. Full topology lint: compose-network-topology.test.ts.
@@ -288,10 +353,8 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(k8sCompose, /OPEN_SANDBOX_KUBECONFIG/);
   assert.match(k8sCompose, /OPEN_SANDBOX_KUBERNETES=1/);
   assert.match(k8sCompose, /deepsonar-opensandbox-k8s/);
-  // #1046 P1-4：k8s 服务的 healthcheck 同样改为带鉴权管理面 List（外置集群端口 18084）。
   assert.match(k8sCompose, /OPENSANDBOX_PROBE_PORT: "18084"/);
-  assert.match(k8sCompose, /\/etc\/opensandbox\/readiness-probe\.py/);
-  assert.doesNotMatch(k8sCompose, /18084\/health/);
+  assert.match(k8sCompose, /\/etc\/opensandbox\/management-health\.py/);
   assert.doesNotMatch(k8sCompose, /docker\.sock|:latest/);
   assert.doesNotMatch(k8sCompose, /container_name: deepsonar-opensandbox$/m);
   const assetsPoc = readFileSync(join(root, "packages/runtime-sandbox/poc/opensandbox-k8s-assets-poc.ts"), "utf8");
@@ -310,7 +373,9 @@ test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () =>
   assert.match(poc, /registerGateway/);
   assert.match(poc, /mintJobToken/);
   assert.match(poc, /encryptSecret/);
-  assert.match(poc, /DEEPSONAR_GATEWAY_TOKEN/);
+  assert.match(poc, /materializePrivateJobFiles\(host, \{/);
+  assert.match(poc, /"gateway-token": token\.plaintext/);
+  assert.match(poc, /privateCredentialEnvironment\(gatewayEnv, privateFiles\)/);
   assert.match(poc, /network: "restricted"/);
   assert.match(poc, /DEEPSONAR_ALLOW_EGRESS: "0"/);
   assert.doesNotMatch(poc, /network: "egress"/);

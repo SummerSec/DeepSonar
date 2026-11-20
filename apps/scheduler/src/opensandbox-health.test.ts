@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createServer } from "node:http";
 import {
   openSandboxAllowsDispatch,
   refreshOpenSandboxServerStatus,
   resetOpenSandboxServerStatusForTests,
   sanitizeOpenSandboxHealthError,
+  probeOpenSandboxManagement,
 } from "./opensandbox-health.js";
 
 const opensandboxRuntime = {
@@ -22,6 +24,33 @@ test("OpenSandbox health skips non-opensandbox runtimes", async () => {
   }, { ...opensandboxRuntime, provider: "local-docker" });
   assert.equal(status.level, "skipped");
   assert.equal(openSandboxAllowsDispatch(status), true);
+});
+
+test("management probe uses authenticated List and rejects errors without exposing server bodies", async (t) => {
+  let status = 200, body = JSON.stringify({ items: [], pagination: { hasNextPage: false } });
+  const seen: string[] = [];
+  const server = createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    assert.equal(req.headers["open-sandbox-api-key"], "fixture-secret");
+    res.writeHead(status, { "content-type": "application/json", location: "/secret-redirect" });
+    res.end(body);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const input = { domain: `127.0.0.1:${address.port}`, protocol: "http", apiKey: "fixture-secret" };
+  await probeOpenSandboxManagement(input);
+  for (status of [401, 500, 302]) {
+    body = "fixture-secret provider body";
+    await assert.rejects(probeOpenSandboxManagement(input), { message: "OPENSANDBOX_MANAGEMENT_UNAVAILABLE" });
+  }
+  status = 200; body = JSON.stringify({ status: "ok" });
+  await assert.rejects(probeOpenSandboxManagement(input), { message: "OPENSANDBOX_MANAGEMENT_UNAVAILABLE" });
+  body = "x".repeat(65537);
+  await assert.rejects(probeOpenSandboxManagement(input), { message: "OPENSANDBOX_MANAGEMENT_UNAVAILABLE" });
+  await assert.rejects(probeOpenSandboxManagement({ ...input, apiKey: "" }), { message: "OPENSANDBOX_MANAGEMENT_KEY_MISSING" });
+  assert.deepEqual(seen, Array(6).fill("GET /v1/sandboxes?page=1&pageSize=1"));
 });
 
 test("OpenSandbox health fails closed without API key", async () => {

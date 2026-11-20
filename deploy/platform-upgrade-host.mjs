@@ -392,9 +392,10 @@ export function hostAdapter(options = {}) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) void (async () => {
   const [action, ...args] = process.argv.slice(2), options = {};
   for (let i = 0; i < args.length; i += 2) {
+    if (args[i] === '--apply' && action === 'prune-generations') {options.pruneApply = true; i -= 1; continue;}
     if (args[i] === '--reset-role-identity') {options.resetRoleIdentity = true; i -= 1; continue;}
     const key = { '--version': 'version', '--to': 'version', '--api': 'api', '--web-url': 'webUrl', '--web': 'webUrl', '--compose-file': 'composeFiles', '--approve-plan-hash': 'approvedPlanHash', '--nodes': 'nodes', '--policy': 'policy', '--scheduler': 'scheduler', '--node-path': 'nodePath', '--catalog': 'catalog', '--registry-channel': 'registryChannel' }[args[i]];
-    if (!key || !args[i + 1]) throw new Error('usage: check|apply|rollback|resume-rollback|auto [--to vX.Y.Z] [--policy FILE] [--api URL] [--web-url URL] [--compose-file FILE ...] [--catalog FILE|URL] [--registry-channel CHANNEL]');
+    if (!key || !args[i + 1]) throw new Error('usage: check|apply|rollback|resume-rollback|auto|prune-generations [--apply --approve-plan-hash HASH] [--to vX.Y.Z] [--policy FILE] [--api URL] [--web-url URL] [--compose-file FILE ...] [--catalog FILE|URL] [--registry-channel CHANNEL]');
     if (key === 'composeFiles') (options[key] ??= []).push(args[i + 1]); else options[key] = args[i + 1];
   }
   // #842: changing registry is an explicit, CLI-only operator decision.

@@ -336,6 +336,58 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
       jobIds.length = 0;
       const { bindScheduleWake, unbindScheduleWake } = await import("./schedule-wake.js");
+      // Old pending time is not execution time. Each quota gate retries without cancelling.
+      for (const gate of ["provider", "credential", "model"] as const) {
+        await setRules({ maxGlobalJobs: 8, maxJobsPerProject: 8, maxConcurrentProvisioning: 8,
+          maxConcurrentByAgentCli: { "claude-code": 8 },
+          maxConcurrentByProvider: gate === "provider" ? { anthropic: 0 } : {} });
+        await sql`UPDATE credentials SET public_metadata_json=${sql.json(gate === "credential"
+          ? { max_concurrent: 0 } : gate === "model"
+            ? { model_concurrency: { "dispatch-limits-test-model": 0 } } : {})} WHERE id=${credentialId}`;
+        const pendingId = await insertJob(projectIds[0], { createdAt: new Date("2020-01-01T00:00:00Z") });
+        const decision = { schema: "deepsonar.credential-selection/v1", reason: "capacity_wait",
+          error_code: "provider_credential_all_at_capacity", selected_credential_id: credentialId };
+        await sql`UPDATE jobs SET timeout_sec=1,
+          agent_snapshot_json=agent_snapshot_json || ${sql.json({ credential_selection: decision })} WHERE id=${pendingId}`;
+        const retries: Promise<unknown>[] = [];
+        let awakened = false;
+        let retryError: unknown;
+        bindScheduleWake(() => {
+          retries.push(claimPendingJobs().then(rows => {
+            awakened ||= rows.some(row => row.id === pendingId);
+          }).catch(error => { retryError = error; }));
+        });
+        try {
+          assert.deepEqual(await claimPendingJobs(), [], `${gate} capacity blocks claim`);
+          const [waiting] = await sql`SELECT status,started_at,claimed_at,agent_snapshot_json FROM jobs WHERE id=${pendingId}`;
+          assert.equal(waiting.status, "pending");
+          assert.equal(waiting.started_at, null);
+          assert.equal(waiting.claimed_at, null);
+          assert.deepEqual(waiting.agent_snapshot_json.credential_selection, decision);
+          // No jobs UPDATE/NOTIFY: only the quota changes. The observed wait must re-read it.
+          await setRules({ maxGlobalJobs: 8, maxJobsPerProject: 8, maxConcurrentProvisioning: 8 });
+          await sql`UPDATE credentials SET public_metadata_json='{}'::jsonb WHERE id=${credentialId}`;
+          const deadline = Date.now() + 8_000;
+          while (!awakened && !retryError && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+          assert.ifError(retryError);
+          assert.ok(awakened, `${gate} release wakes the old pending Job without a jobs notification`);
+          const [claimed] = await sql`SELECT status,agent_snapshot_json FROM jobs WHERE id=${pendingId}`;
+          assert.equal(claimed.status, "claimed");
+          assert.deepEqual(claimed.agent_snapshot_json.credential_selection, decision, "claim preserves the historical observation");
+        } finally {
+          unbindScheduleWake();
+          await Promise.all(retries);
+          await sql`DELETE FROM jobs WHERE id=${pendingId}`;
+        }
+      }
+      // Two independent claim calls serialize on the existing advisory lock.
+      await setRules({ maxGlobalJobs: 8, maxJobsPerProject: 8, maxConcurrentProvisioning: 8,
+        maxConcurrentByProvider: { anthropic: 1 } });
+      const competingIds = await Promise.all([insertJob(projectIds[0]), insertJob(projectIds[1])]);
+      const competingClaims = await Promise.all([claimPendingJobs(), claimPendingJobs()]);
+      assert.equal(competingClaims.flat().length, 1, "Provider capacity cannot be oversubscribed by concurrent claimers");
+      await sql`DELETE FROM jobs WHERE id=ANY(${competingIds}::uuid[])`;
+      await setRules({ maxGlobalJobs: 8, maxJobsPerProject: 8, maxConcurrentProvisioning: 8 });
       for (const lockTarget of ["canvas", "job"] as const) {
         const lockedId = await insertJob(projectIds[0]);
         const unrelatedId = await insertJob(projectIds[1]);
@@ -381,6 +433,9 @@ if (!testDatabaseUrl) {
         }
       }
       await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
+      const { runDispatchFairnessFixture } = await import("./dispatch-fairness.fixture.js");
+      await runDispatchFairnessFixture(sql, claimPendingJobs, credentialId);
+
       await setRules({ maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null });
       const recoveryPending = await Promise.all(Array.from({ length: 6 }, () => insertJob(projectIds[0])));
       const { runUnlimitedCreateCircuitFixture } = await import("./dispatch-create-circuit.fixture.js");

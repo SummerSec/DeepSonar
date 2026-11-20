@@ -1,3 +1,4 @@
+import { materializePrivateJobFiles, privateCredentialEnvironment } from "../../packages/runtime-sandbox/src/private-job-files.js";
 /**
  * Live proof that OpenSandbox workers submit Fact/Finding/Hub/done only via Job Platform API.
  * Uses the scheduler singleton runner + preparePlatformCapability so tokens
@@ -182,7 +183,7 @@ print("ENV_JOB:" + os.environ.get("DEEPSONAR_JOB_ID", ""))
 print("ENV_TOKEN:" + ("1" if os.environ.get("DEEPSONAR_API_TOKEN") else "0"))
 print("ENV_OS_KEY:" + ("1" if os.environ.get("OPEN_SANDBOX_API_KEY") else "0"))
 if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
-    token = os.environ["DEEPSONAR_API_TOKEN"]
+    token = __import__("pathlib").Path(os.environ["DEEPSONAR_CONTROL_TOKEN_FILE"]).read_text()
     proxy = os.environ["DEEPSONAR_GATEWAY_PROXY_HOST"]
     for name, payload in OPS:
         print(f"CALL:{name}=" + str(post(name, payload, token)))
@@ -212,9 +213,11 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     });
     try {
       const host = await runner.ensureHost(handle);
+      const privateFiles = await materializePrivateJobFiles(host, { "control-token": capability.token });
+      Object.assign(env, privateCredentialEnvironment(env, privateFiles));
       await host.uploadFile(invokePy, "/workspace/poc-emit-fact.py");
       return await host.run("python3 /workspace/poc-emit-fact.py", {
-        timeoutMs: network === "none" ? 8_000 : 12_000,
+        timeoutMs: network === "none" ? 8_000 : 12_000, env,
       });
     } finally {
       await runner.destroy(handle).catch(() => {});
@@ -231,9 +234,9 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     DEEPSONAR_ALLOW_EGRESS: "0",
     DEEPSONAR_POC_MODE: "submit",
     DEEPSONAR_GATEWAY_PROXY_HOST,
-    ...capability.env,
+    ...privateCredentialEnvironment(capability.env, { paths: {} }),
   }, config.gateway.proxyUpstreamUrl);
-  const provisionedEnv = /ENV_TOKEN:1/.test(allowed.stdout)
+  const provisionedEnv = /ENV_TOKEN:0/.test(allowed.stdout)
     && allowed.stdout.includes(`ENV_BASE:${expectedBase}`)
     && allowed.stdout.includes(`ENV_JOB:${jobId}`)
     && /ENV_OS_KEY:0/.test(allowed.stdout);

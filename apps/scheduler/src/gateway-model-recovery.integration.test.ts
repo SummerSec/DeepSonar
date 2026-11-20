@@ -1,3 +1,4 @@
+import { privateJobFixture } from "./private-job.fixture.js";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -92,7 +93,9 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
       const ids: string[] = [];
       const context = { messages: [] };
       let sdkContext: unknown;
-      extension.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base, DEEPSONAR_GATEWAY_TOKEN: token },
+      const privateAuth = privateJobFixture({ gateway: token });
+      try {
+      extension.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base, ...privateAuth.environment },
         async function* (_model: unknown, ctx: unknown, options: any) {
           assert.deepEqual(ctx, context, "the safe projection preserves non-secret context");
           if (ids.length) assert.equal(ctx, sdkContext, "recovery reuses the same projection without restarting/replaying the session");
@@ -111,6 +114,7 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
       const events: any[] = [];
       for await (const event of stream(model, context, { maxTokens: 1 })) events.push(event);
       return { ids, events };
+      } finally { privateAuth.close(); }
     };
     const readEffects = (jobId: string) => sql`SELECT * FROM job_attempt_effects WHERE job_id=${jobId} ORDER BY created_at,effect_id`;
     const job = await createJob(), token = await issue(job.id);

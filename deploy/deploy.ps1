@@ -8,7 +8,7 @@ param(
   [string]$Action = "up",
 
   [Parameter(Position = 1)]
-  [ValidateSet("fake", "real", "worker-join", "check", "apply", "rollback", "resume-rollback", "auto", "auto-template")]
+  [ValidateSet("fake", "real", "worker-join", "check", "apply", "rollback", "resume-rollback", "auto", "auto-template", "prune-generations")]
   [string]$Mode = "real",
 
   [Parameter(Position = 2)]
@@ -30,13 +30,15 @@ param(
   [ValidateSet("github", "dockerhub", "aliyun-acr")]
   [string]$RegistryChannel,
   [switch]$ResetRoleIdentity,
+  [switch]$PruneApply,
 
   [switch]$NoBuild
 )
 
 $ErrorActionPreference = "Stop"
 if ($Action -eq "upgrade") {
-  if ($Mode -notin @("check", "apply", "rollback", "resume-rollback", "auto", "auto-template")) { throw "upgrade requires check, apply, rollback, resume-rollback or auto" }
+  if ($Mode -notin @("check", "apply", "rollback", "resume-rollback", "auto", "auto-template", "prune-generations")) { throw "invalid upgrade mode" }
+  if ($PruneApply -and $Mode -ne "prune-generations") { throw "PruneApply requires prune-generations" }
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "upgrade requires Node.js >=22" }
   $upgradeArgs = @((Join-Path $PSScriptRoot "platform-upgrade-host.mjs"), $Mode)
   if ($UpgradeVersion) { $upgradeArgs += @("--to", $UpgradeVersion) }
@@ -49,6 +51,7 @@ if ($Action -eq "upgrade") {
   if ($NodePath) { $upgradeArgs += @("--node-path", $NodePath) }
   if ($RegistryChannel) { $upgradeArgs += @("--registry-channel", $RegistryChannel) }
   if ($ResetRoleIdentity) { $upgradeArgs += "--reset-role-identity" }
+  if ($PruneApply) { $upgradeArgs += "--apply" }
   & node @upgradeArgs
   exit $LASTEXITCODE
 }

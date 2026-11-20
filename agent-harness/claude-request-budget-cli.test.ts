@@ -1,8 +1,8 @@
 /** Real pinned Claude CLI, synthetic provider only; not a Scheduler/launch acceptance. */
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID, createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile, readdir } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 const run = promisify(execFile);
 const token = "synthetic-claude-budget-token";
@@ -20,6 +21,111 @@ const keptReminderBeta = "mid-conversation-system-clear-at-2026-08-21";
 // Locked CLI's native total_tokens reminder: 15,000,000 minus the first
 // synthetic response's 100 input + 32 output tokens. This is not Gateway allowance.
 const expectedModelToolText = `${sentinel}\n\n<system-reminder>\n<total_tokens>14999868 tokens left</total_tokens>\n</system-reminder>`;
+
+test("Claude pinned native import retains filtered history in a fresh home", {timeout:120_000},async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),"claude-human-native-"));
+  const modulePath="/acceptance/human-session-import.mjs";
+  const {projectNativeHumanSession}=await import(modulePath);
+  const calls:any[]=[];
+  let acceptedWaits=0,acknowledgedReplies=0;
+  let acceptWait:()=>void;
+  const waitAccepted=new Promise<void>(resolve=>{acceptWait=resolve;});
+  const commandFor=(operation:string)=>{
+    const code=`import os,urllib.request; token=open(os.environ["DEEPSONAR_CONTROL_TOKEN_FILE"]).read(); r=urllib.request.Request("${url}/control/${operation}",data=b"{}",headers={"Authorization":"Bearer "+token}); print(urllib.request.urlopen(r).read().decode())`;
+    return `python3 -c '${code}'`;
+  };
+  const server=http.createServer((req,res)=>{void(async()=>{
+    if(req.url==='/control/request_human') {
+      assert.equal(req.headers.authorization,'Bearer old-control-identity');
+      acceptedWaits++;acceptWait!();return; // Accepted, but no tool result is returned.
+    }
+    if(req.url==='/control/ack_human_message') {
+      assert.equal(req.headers.authorization,'Bearer new-control-identity');
+      acknowledgedReplies++;res.writeHead(200).end('ACK_NEW_REPLY');return;
+    }
+    if(req.url?.includes("count_tokens")) {res.writeHead(200,{"content-type":"application/json"}).end('{"input_tokens":10}');return;}
+    const body=JSON.parse((await bytes(req)).toString("utf8"));calls.push(body);
+    assert.equal(req.headers["x-api-key"],`${calls.length===1?'old':'new'}-human-fixture-key`);
+    res.writeHead(200,{"content-type":"text/event-stream"});
+    const operation=calls.length===1?'request_human':calls.length===2?'ack_human_message':undefined;
+    const events=[
+      {type:"message_start",message:{id:`human-${calls.length}`,type:"message",role:"assistant",model:body.model,content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:10,output_tokens:0}}},
+      {type:"content_block_start",index:0,content_block:operation?{type:"tool_use",id:`human-tool-${calls.length}`,name:"Bash",input:{}}:{type:"text",text:""}},
+      {type:"content_block_delta",index:0,delta:operation?{type:"input_json_delta",partial_json:JSON.stringify({command:commandFor(operation),description:operation})}:{type:"text_delta",text:"HUMAN_NATIVE_CLAUDE_OK"}},
+      {type:"content_block_stop",index:0},
+      {type:"message_delta",delta:{stop_reason:operation?"tool_use":"end_turn",stop_sequence:null},usage:{output_tokens:10}},
+      {type:"message_stop"},
+    ];
+    for(const event of events)res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  })().catch(error=>{console.error("native-fixture-request",req.url,String(error));res.writeHead(500).end();});});
+  const url=await listen(server);
+  const readArchive=async(home:string,sessionId:string)=>{
+    const projects=path.join(home,".claude/projects");
+    let directories:string[];
+    try {directories=await readdir(projects);} catch {return undefined;}
+    const archives=await Promise.all(directories.map(async directory=>{
+      try {return await readFile(path.join(projects,directory,`${sessionId}.jsonl`),"utf8");} catch {return undefined;}
+    }));
+    return archives.find(Boolean);
+  };
+  const launch=async(home:string,resume?:string)=>{
+    await mkdir(home,{recursive:true});
+    const credentials=path.join(home,`.deepsonar-credentials-${randomUUID()}`);
+    await mkdir(credentials,{mode:0o700});
+    const gatewayFile=path.join(credentials,"gateway-token"),controlFile=path.join(credentials,"control-token");
+    await writeFile(gatewayFile,resume?"new-human-fixture-key":"old-human-fixture-key",{mode:0o600});
+    await writeFile(controlFile,resume?"new-control-identity":"old-control-identity",{mode:0o600});
+    const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5","--tools","Bash","--settings",JSON.stringify({apiKeyHelper:"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs"}),"--append-system-prompt",resume?"CURRENT_SYSTEM_BOUNDARY":"OLD_SYSTEM_BOUNDARY",...(resume?["--resume",resume]:[])];
+    const child=spawn("claude",args,{cwd:root,detached:true,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:path.join(home,".claude"),
+      DEEPSONAR_GATEWAY_TOKEN_FILE:gatewayFile,DEEPSONAR_CONTROL_TOKEN_FILE:controlFile,ANTHROPIC_BASE_URL:url,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",DISABLE_TELEMETRY:"1",DISABLE_ERROR_REPORTING:"1",MAX_THINKING_TOKENS:"0"},stdio:["pipe","pipe","pipe"]});
+    let output="",pending="",session="";let failed=false;
+    child.stdout!.on("data",chunk=>{output+=chunk;pending+=chunk;const lines=pending.split("\n");pending=lines.pop()!;
+      for(const line of lines){try{const event=JSON.parse(line);if(event.session_id)session=event.session_id;if(event.type==="result"){failed=event.is_error===true;child.stdin!.end();}}catch{}}
+    });
+    child.stderr!.on("data",chunk=>{output+=chunk;});
+    const stop=()=>{if(child.exitCode===null && child.signalCode===null)process.kill(-child.pid!,"SIGKILL");};
+    const timer=setTimeout(stop,50_000);
+    const done=new Promise<number|null>((resolve,reject)=>{child.once("error",reject);child.once("close",resolve);});
+    child.stdin!.write(JSON.stringify({type:"user",message:{role:"user",content:resume?"Continue with the new human decision":"Remember ORIGINAL_CLAUDE_DECISION.\nAuthorization: Bearer old-control-identity"}})+"\n");
+    try {
+      if(!resume) {
+        await Promise.race([waitAccepted,done.then(()=>{throw new Error('CLI exited before accepting human wait');})]);
+        assert.equal(acceptedWaits,1);
+        // Storage is asynchronous. Keep the accepted tool blocked while its
+        // proposal reaches the transcript, then stop before any tool result.
+        const deadline=Date.now()+10_000;
+        let archivedTool=false;
+        while(Date.now()<deadline && !archivedTool) {
+          const archive=await readArchive(home,session);
+          try {archivedTool=archive?.trim().split("\n").some(line=>JSON.parse(line).message?.content?.some?.((block:any)=>block.type==='tool_use'))===true;} catch {}
+          if(!archivedTool)await delay(25);
+        }
+        assert.ok(archivedTool,'accepted tool proposal must be durably archived before stopping');
+        stop();await done;
+      } else {assert.equal(await done,0,output.slice(-1000));assert.equal(failed,false);}
+      assert.ok(session);return session;
+    }finally{clearTimeout(timer);stop();}
+
+  };
+  try {
+    const home=path.join(root,"old-home"),sessionId=await launch(home);
+    const original=await readArchive(home,sessionId);assert.ok(original);
+    const originalRows=original.trim().split("\n").map(line=>JSON.parse(line));
+    assert.ok(originalRows.some(row=>row.message?.content?.some?.((block:any)=>block.type==='tool_use')));
+    assert.ok(!originalRows.some(row=>row.message?.content?.some?.((block:any)=>block.type==='tool_result')),'stop before tool result is written');
+    const result=projectNativeHumanSession("claude-code","2.1.312",sessionId,original);
+    assert.equal(result.status,"supported",JSON.stringify({status:result.status,reason:result.reason,records:originalRows.map(row=>({type:row.type,operation:row.operation,queuedContentType:row.type==='queue-operation'?typeof row.content:undefined,attachmentType:row.attachment?.type,attachmentKeys:row.attachment?Object.keys(row.attachment):undefined}))}));assert.doesNotMatch(result.content,/old-control-identity/);
+    const newHome=path.join(root,"new-home"),projectName=root.replace(/[^a-zA-Z0-9]/gu,"-");
+    const destination=path.join(newHome,".claude/projects",projectName);await mkdir(destination,{recursive:true});
+    await writeFile(path.join(destination,`${sessionId}.jsonl`),result.content);
+    assert.equal(await launch(newHome,sessionId),sessionId);
+    assert.match(JSON.stringify(calls.at(-1).messages),/ORIGINAL_CLAUDE_DECISION/);
+    assert.doesNotMatch(JSON.stringify(calls.at(-1)),/old-control-identity|OLD_SYSTEM_BOUNDARY/);
+    assert.match(JSON.stringify(calls.at(-1).system),/CURRENT_SYSTEM_BOUNDARY/);
+    assert.equal(acceptedWaits,1);assert.equal(acknowledgedReplies,1);
+  }finally{await close(server);await rm(root,{recursive:true,force:true});}
+});
 async function listen(server: http.Server) {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -40,8 +146,225 @@ async function bytes(req: http.IncomingMessage) {
   return Buffer.concat(chunks);
 }
 
+test("Claude disabled hooks in a custom config directory reject before legacy hooks and upstream IO", { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "claude-disabled-hooks-"));
+  const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);
+  const home = path.join(dir, "home"), configDirectory = path.join(dir, "custom-config");
+  const sessionMarker = path.join(dir, "legacy-session-start"), toolMarker = path.join(dir, "legacy-pre-tool-use");
+  await mkdir(credentials, { mode: 0o700 });
+  await mkdir(path.join(home, ".claude"), { recursive: true });
+  await mkdir(configDirectory);
+  const homeSettings = JSON.stringify({ disableAllHooks: false });
+  const disabledSettings = JSON.stringify({ disableAllHooks: true, hooks: {
+    SessionStart: [{ hooks: [{ type: "command", command: `touch ${JSON.stringify(sessionMarker)}` }] }],
+    PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: `touch ${JSON.stringify(toolMarker)}` }] }],
+  } });
+  await writeFile(path.join(home, ".claude/settings.json"), homeSettings);
+  await writeFile(path.join(configDirectory, "settings.json"), disabledSettings);
+  await writeFile(path.join(credentials, "gateway-token"), token, { mode: 0o600 });
+  let requests = 0;
+  const server = http.createServer((_req, res) => {
+    requests++;
+    res.writeHead(200, { "content-type": "application/json" }).end('{"remaining_tokens":null,"policy_required":true}');
+  });
+  let child: ChildProcess | undefined;
+  try {
+    const upstream = await listen(server);
+    const fixture = JSON.parse(await readFile("/acceptance/runtime-fixture.json", "utf8"));
+    const script = path.join(dir, "policy.mjs");
+    await writeFile(script, fixture.policySource);
+    child = spawn(process.execPath, [script, "--claude-launch-budget", "--",
+      "claude -p --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash"], {
+      cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: configDirectory,
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:38127/gateway", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", MAX_THINKING_TOKENS: "0",
+        DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway",
+        DEEPSONAR_GATEWAY_TOKEN_FILE: path.join(credentials, "gateway-token"),
+        DEEPSONAR_CONTROL_TOKEN_FILE: undefined, DEEPSONAR_OM_GATEWAY_TOKEN_FILE: undefined },
+    });
+    let stdout = "", stderr = "";
+    child.stdout!.on("data", chunk => { stdout += chunk; });
+    child.stderr!.on("data", chunk => { stderr += chunk; });
+    child.stdin!.on("error", () => {}); // An admission refusal can close stdin before the fixture write completes.
+    const timeout = setTimeout(() => child!.kill("SIGTERM"), 30_000);
+    const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child!.once("error", reject);
+      child!.once("close", (code, signal) => resolve({ code, signal }));
+      child!.stdin!.end(fixture.encodedInput);
+    }).finally(() => clearTimeout(timeout));
+    assert.deepEqual(outcome, { code: 78, signal: null });
+    assert.equal(stdout, "");
+    assert.equal(stderr, "MODEL_REQUEST_POLICY_HOOKS_DISABLED\n", "the inner file-read catch must preserve the policy refusal");
+    assert.equal(requests, 0, "even the allowance endpoint must remain untouched");
+    for (const marker of [sessionMarker, toolMarker]) await assert.rejects(readFile(marker), { code: "ENOENT" });
+    assert.equal(await readFile(path.join(configDirectory, "settings.json"), "utf8"), disabledSettings);
+    assert.equal(await readFile(path.join(home, ".claude/settings.json"), "utf8"), homeSettings);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    await close(server); await rm(dir, { recursive: true, force: true });
+  }
+});
+
+for (const mode of ["success", "failed-tool", "failed-hook", "residual-input"] as const)
+test(`#1032 Claude native credential-file projection ${mode}`, { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "claude-private-text-"));
+  const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);
+  await mkdir(credentials, { mode: 0o700 });
+  const values = { "gateway-token": token, "control-token": "synthetic-claude-control", "om-token": "synthetic-claude-om" };
+  for (const [name, value] of Object.entries(values)) await writeFile(path.join(credentials, name), value, { mode: 0o600 });
+  let modelRequests = 0;
+  const errors: string[] = [];
+  const server = http.createServer((req, res) => { void (async () => {
+    if (req.headers.authorization !== `Bearer ${token}`) errors.push("upstream-authentication");
+    if (req.url === "/gateway/_allowance") {
+      res.writeHead(200, { "content-type": "application/json" }).end('{"remaining_tokens":null,"policy_required":true}');
+      return;
+    }
+    const body = (await bytes(req)).toString("utf8");
+    for (const value of Object.values(values)) if (body.includes(value)) errors.push("credential-reached-upstream");
+    if (req.url?.includes("count_tokens")) {
+      res.writeHead(200, { "content-type": "application/json" }).end('{"input_tokens":10}');
+      return;
+    }
+    modelRequests++;
+    const parsed = JSON.parse(body) as { model: string; messages: Array<{ content: string | Array<{
+      type: string; tool_use_id?: string; is_error?: boolean; content?: unknown;
+    }> }> };
+    const model = parsed.model;
+    if (modelRequests === 2) {
+      const results = parsed.messages.flatMap(message => Array.isArray(message.content)
+        ? message.content.filter(block => block.type === "tool_result") : []);
+      assert.equal(results.length, 1);
+      assert.equal(results[0]!.tool_use_id, "read-private-files");
+      assert.notEqual(results[0]!.is_error, true);
+      assert.equal((JSON.stringify(results[0]!.content).match(/\[REDACTED\]/gu) ?? []).length, 3);
+      assert.match(JSON.stringify(results[0]!.content), /CLAUDE_PRIVATE_OUTPUT_BEGIN/u);
+      assert.match(JSON.stringify(results[0]!.content), /CLAUDE_PRIVATE_OUTPUT_END/u);
+    }
+    let command = 'printf "CLAUDE_PRIVATE_OUTPUT_BEGIN\\n"; cat "$DEEPSONAR_GATEWAY_TOKEN_FILE" "$DEEPSONAR_CONTROL_TOKEN_FILE" "$DEEPSONAR_OM_GATEWAY_TOKEN_FILE"; printf "\\nCLAUDE_PRIVATE_OUTPUT_END\\n"';
+    if (mode === "failed-tool") command += "; exit 7";
+    if (mode === "failed-hook") command += '; chmod 0644 "$DEEPSONAR_OM_GATEWAY_TOKEN_FILE"';
+    if (mode === "residual-input") command += `; printf '%s' '${values["control-token"]}'`;
+    const tool = modelRequests === 1;
+    const events = [
+      { type: "message_start", message: { id: "credential-read", type: "message", role: "assistant", model,
+        content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: tool
+        ? { type: "tool_use", id: "read-private-files", name: "Bash", input: {} } : { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: tool
+        ? { type: "input_json_delta", partial_json: JSON.stringify({ command, description: "Read synthetic private files" }) }
+        : { type: "text_delta", text: "CLAUDE_PRIVATE_CONTINUED" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: tool ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 10 } },
+      { type: "message_stop" },
+    ];
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of events) res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  })().catch(() => { errors.push("synthetic-handler-failed"); res.writeHead(500).end(); }); });
+  let child: ChildProcess | undefined;
+  try {
+    const upstream = await listen(server);
+    const fixture = JSON.parse(await readFile("/acceptance/runtime-fixture.json", "utf8"));
+    const script = path.join(dir, "policy.mjs");
+    await writeFile(script, fixture.policySource);
+    const command = "claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash";
+    child = spawn(process.execPath, [script, "--claude-launch-budget", "--", command], {
+      cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, HOME: dir,
+        CLAUDE_CONFIG_DIR: path.join(dir, ".claude"), ANTHROPIC_BASE_URL: "http://127.0.0.1:38127/gateway",
+        DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway",
+        DEEPSONAR_GATEWAY_TOKEN_FILE: path.join(credentials, "gateway-token"),
+        DEEPSONAR_CONTROL_TOKEN_FILE: path.join(credentials, "control-token"),
+        DEEPSONAR_OM_GATEWAY_TOKEN_FILE: path.join(credentials, "om-token"),
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", MAX_THINKING_TOKENS: "0" },
+    });
+    let output = "", pending = "";
+    child.stdout!.on("data", chunk => {
+      output += chunk; pending += chunk;
+      const lines = pending.split("\n"); pending = lines.pop()!;
+      for (const line of lines) {
+        try { if (JSON.parse(line).type === "result") child!.stdin!.end(); } catch { /* Wait for a complete CLI record. */ }
+      }
+    });
+    child.stderr!.on("data", chunk => { output += chunk; });
+    const timeout = setTimeout(() => child!.kill("SIGTERM"), 45_000);
+    const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child!.once("error", reject);
+      child!.once("close", (code, signal) => resolve({ code, signal }));
+      child!.stdin!.write(fixture.encodedInput);
+    }).finally(() => clearTimeout(timeout));
+    assert.deepEqual(outcome, { code: mode === "success" ? 0 : 1, signal: null }, "native execution must settle without a timeout signal");
+    if (mode === "success") {
+      assert.match(output, /CLAUDE_PRIVATE_CONTINUED/u);
+      assert.equal(modelRequests, 2, "successful native cat projects all three credentials and continues");
+    } else {
+      assert.match(output, /credential_in_business_data/u);
+      assert.equal(modelRequests, 1, "failure output and residual input must be refused before upstream IO");
+    }
+    assert.deepEqual(errors, []);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    await close(server); await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Claude unlimited empty settings authenticate through the trusted file helper", { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "claude-unlimited-auth-"));
+  const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);
+  await mkdir(credentials, { mode: 0o700 });
+  const tokenFile = path.join(credentials, "gateway-token");
+  await writeFile(tokenFile, token, { mode: 0o600 });
+  let requests = 0;
+  const errors: string[] = [];
+  const server = http.createServer((req, res) => {
+    if (req.url === "/gateway/_allowance") {
+      if (req.headers.authorization !== `Bearer ${token}`) errors.push("allowance-authentication");
+      res.writeHead(200, { "content-type": "application/json" }).end('{"remaining_tokens":null,"policy_required":true}');
+      return;
+    }
+    if (req.headers["x-api-key"] !== token) errors.push("native-authentication");
+    requests++;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const events = [
+      { type: "message_start", message: { id: "synthetic-unlimited", type: "message", role: "assistant", model: "claude-sonnet-4-5",
+        content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "UNLIMITED_AUTHENTICATED" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ];
+    for (const event of events) res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  });
+  try {
+    const upstream = await listen(server);
+    const fixture = JSON.parse(await readFile("/acceptance/runtime-fixture.json", "utf8"));
+    const script = path.join(dir, "policy.mjs");
+    await writeFile(script, fixture.policySource);
+    const api = await import(pathToFileURL(script).href);
+    const prepared = await api.prepareClaudeLaunch(
+      "claude -p --output-format json --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools '' --no-session-persistence",
+      { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, ".claude"),
+        DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile,
+        ANTHROPIC_BASE_URL: upstream + "/gateway", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", MAX_THINKING_TOKENS: "0" }, []);
+    assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
+    const result = await run("/bin/bash", ["-c", prepared.command + " 'Return the synthetic authentication result.'"],
+      { cwd: dir, env: { ...process.env, ...prepared.env }, timeout: 45_000, maxBuffer: 1024 * 1024 });
+    assert.match(result.stdout, /UNLIMITED_AUTHENTICATED/u);
+    assert.ok(requests > 0);
+    assert.deepEqual(errors, []);
+  } finally { await close(server); await rm(dir, { recursive: true, force: true }); }
+});
+
 test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-budget tool turn", { timeout: 180_000 }, async t => {
   const dir = await mkdtemp(path.join(tmpdir(), "claude-native-budget-"));
+  const credentials = path.join(dir, '.deepsonar-credentials-' + randomUUID());
+  await mkdir(credentials, { mode: 0o700 });
+  const tokenFile = path.join(credentials, 'gateway-token');
+  await writeFile(tokenFile, token, { mode: 0o600 });
+  const privateAuth = { environment: { DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile } };
   let stage = "image-version";
   let output = "";
   let resultReceived = false;
@@ -216,13 +539,18 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     const upstream = await listen(remote);
     policy = await api.startModelRequestPolicy({ upstream: upstream + "/gateway", token, port: 0 });
     const captureUrl = await listen(capture);
+    const home = path.join(dir, "home");
+    const config = path.join(home, ".claude");
+    await mkdir(config, { recursive: true });
+    const settings = { apiKeyHelper: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs" };
+    await writeFile(path.join(config, "settings.json"), JSON.stringify(settings));
     const prepared = await api.prepareClaudeLaunch(
       "claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash --no-session-persistence",
-      { DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", DEEPSONAR_GATEWAY_TOKEN: token,
-        HOME: "/tmp/claude-budget", CLAUDE_CONFIG_DIR: "/tmp/claude-budget/config",
-        ANTHROPIC_API_KEY: token, ANTHROPIC_BASE_URL: captureUrl + "/gateway",
+      { DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", ...privateAuth.environment,
+        HOME: home, CLAUDE_CONFIG_DIR: config,
+        ANTHROPIC_BASE_URL: captureUrl + "/gateway",
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
-        MAX_THINKING_TOKENS: "0" });
+        MAX_THINKING_TOKENS: "0" }, [settings]);
     assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "4096");
     stage = "native-cli-tool-loop";
     cli = spawn("/bin/bash", ["-c", `mkdir -p "$CLAUDE_CONFIG_DIR" && exec ${prepared.command}`], {

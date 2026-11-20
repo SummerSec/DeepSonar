@@ -456,7 +456,7 @@ const OPS: Op[] = [
               create_circuit: {
                 type: "object",
                 additionalProperties: true,
-                description: "沙箱 create 熔断状态（#1046/#1119）：closed | open | half_open，含 episode、openedAt、lastTripReason 与窗口内 recentFailures。open 期间新 claim 暂停；冷却后转 half_open，按 canary 放行认领（并发仍受 maxConcurrentProvisioning 约束，不是严格的单试探）；任一 canary 成功即 closed，失败立即重新 open。",
+                description: "沙箱 create 熔断状态（#1046/#1119），包含 closed | open | half_open、episode、openedAt、lastTripReason 与窗口内 recentFailures。open 期间新 claim 暂停。冷却后进入 half_open，观察到半开的进程在 claim 数据库锁内按 claimed/provisioning 计数限制一个创建名额，全局配额不限时仍生效。出站前重查 episode，过期准入记为 provision_admission_deferred 并重新等待，保留真实创建失败重试额度。当前 episode 的 canary 成功关闭熔断，失败重新打开。状态在进程内，多副本或重启没有共享 episode 的保证。",
               },
             },
           },
@@ -822,7 +822,7 @@ const OPS: Op[] = [
     path: "/dashboard/usage",
     summary: "用量账本看板",
     description:
-      "聚合 job_usage_ledger（含缓存读/写 token）。period=day|week|month 为 Asia/Shanghai 滚动窗口；period=custom 时 from/to 为含首尾的日历日或 ISO 时刻，跨度最长 366 天。可选 project_id / canvas_id。不定价。项目级 token 只看到本项目。",
+      "聚合 job_usage_ledger（含缓存读/写 token）。models 含 settled/unknown/not_reported 计数；unconfirmed_models 按未确认请求数降序列出最多 8 项，保留零 token 项并区分 main/observational_memory。period=day|week|month 为 Asia/Shanghai 滚动窗口；period=custom 时 from/to 为含首尾的日历日或 ISO 时刻，跨度最长 366 天。可选 project_id / canvas_id。不定价。项目级 token 只看到本项目。",
     scope: "projects:read",
     tags: ["Dashboard"],
     query: {
@@ -1713,6 +1713,21 @@ const OPS: Op[] = [
       status: { type: "string", description: "逗号分隔的状态子集：waiting_human/failed/timeout/orphan" },
       limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
     },
+  },
+  {
+    method: "post",
+    path: "/jobs/{id}/continuations",
+    summary: "保存历史失败任务回复并创建受原预算约束的新任务",
+    description: "显式管理入口先幂等保存回复，再校验合法检查点、原始账本、有效执行时钟、原修正期限、当前授权和 Plan 剩余派发名额。202 表示新 Job 已排队，409 返回稳定 blocker 且已保存回复可查询。原 failed 与历史执行身份保留。",
+    scope: "jobs:control", tags: ["Jobs"], successStatus: "202",
+    body: { type: "object", additionalProperties: false, required: ["mutation_id", "request_id", "expected_revision"],
+      oneOf: [{ required: ["reply"] }, { required: ["saved_reply_message_id"] }],
+      properties: { mutation_id: { type: "string", format: "uuid" }, request_id: { type: "string", format: "uuid" },
+        expected_revision: { type: "integer", minimum: 0 }, saved_reply_message_id: { type: "string", format: "uuid" },
+        reply: { type: "object", additionalProperties: false,
+          required: ["message_id", "body"], properties: { message_id: { type: "string", format: "uuid" },
+            body: { type: "string", minLength: 1, maxLength: 8000 }, attachment_version_ids: {
+              type: "array", maxItems: 32, items: { type: "string", format: "uuid" } } } } } },
   },
   {
     method: "post",

@@ -1,9 +1,11 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；最新正式版 v0.6.20，于 2026-11-12T16:12:08Z 正式发布；v0.6.18/v0.6.19 及更早 tag/镜像保持不可变**。
+> 状态：**运维 as-built；最新正式版 v0.6.21，于 2026-11-20T14:32:41Z 正式发布；既有 tag 与镜像保持不可变**。
 > 同步日期：2026-11-20
 >
-> **v0.6.21 发布准备（2026-11-20）**。#1171 已合入，准备基线为 `26ec3fc0`（并非最终 tag 目标）；当前比较范围为 `v0.6.20...v0.6.21`。数据库从 schema 73 升至 75；非空库先备份并按既有基线重建流程预演，保留现有部署配置；#1170 不重置已有用户、密码或会话，只有空库需要首个管理员秘密文件。发布前在最终主线上完成工程门禁，待签名、Release 与回写实际成功后再记录发布结果。见 #1172。
+> **v0.6.21 发布结果（2026-11-20）**。[正式 Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.21) 绑定不可变 tag 的源码 `c3549c141e790f7745dd9ae0b622fcc596135ccc`，比较范围为 `v0.6.20...v0.6.21`，包含 #1171/#1173 的人工回复请求绑定修复。发布数据库基线从 schema 73 升至 75，后续开发候选 schema 77 不属于本版镜像。非空库先备份并按既有基线重建流程预演，保留现有部署配置；#1170 不重置已有用户、密码或会话，只有空库需要首个管理员秘密文件。
+>
+> [发布运行 44737312127](https://github.com/SummerSec/DeepSonar/actions/runs/44737312127) 首轮的 scheduler/mobile 跨 registry 复制因连接重置与超时失败，Reverse 发布受总时限取消。第二轮复用同一源码与原镜像，所有镜像发布、最终双架构清单、离线手册、签名正向验证及篡改反例均通过，Reverse 保留原 index digest。正式附件含两份字节一致的 runtime registry、签名证据、Reverse 证据和 Management Skill。下载的 registry 与回写 [#1183](https://github.com/SummerSec/DeepSonar/pull/1183) 内容 hash 一致，该 PR 的完整核心检查已通过，并以 `e370c43b923ea830245bde1e710a1672adbeb3d3` 合入主线，回写 job 也已实际成功。生产部署与本机升级未执行，跟踪见 #1172。
 >
 > **v0.6.17 发布准备（2026-11-08）**。用户要求先完成 #1002，再发布新版本。最新正式 [v0.6.16](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.16) 于 2026-11-07T16:21:03Z 发布，元数据列出 registry/v2、签名证据、Reverse 证据与 Management Skill 附件；这里核对元数据，不重新声明附件内容/签名/各通道镜像已逐项复验。远端 v0.6.17 已创建并推送（annotated tag `598dabe9`，解引用到 `24ba6a4fbff00190527da2923e7b644c387c6aa6`），compare 为 `v0.6.16...v0.6.17`。
 >
@@ -322,3 +324,5 @@ LLVM 14 对照 7/20 失败，匹配 LLVM 19 候选 20/20 通过，均保留原 f
 ## 正式版本签名发布门禁
 
 每轮版本来自新的、未使用的 `vX.Y.Z` tag，私有 package 版本不作为产品版本。正式 tag 必须指向已通过 CI 的 main；签名身份、目标 commit、CHANGELOG、schema 与最终平台镜像必须一致。`prepare-release` 的冻结产物经 `platform-signatures` 三张 GHCR index 签名及独立验证后，独立 `release-publish` / `release-writeback` 才能发布与回写。仅签名 job 新增 `id-token: write`，不创建持久凭据；信任根、签名 metadata 与默认关闭的宿主自动升级规则见 [签名运维](../deploy/UPGRADE_AUTOMATION.md)。生产正例以本版 Release 的公开回执和 workflow 为准；不能用测试密钥或 tag 存在代替。
+
+#1124 B 的[历史候选库维护入口](../deploy/GENERATION_GC.md)使用默认预览和显式审批，逐代保留最近当前完成升级的真实源库和未决引用，权限/OID 不明即保留。隔离 PG 和两 shell 回归接既有 Actions，最终 SHA 待验。

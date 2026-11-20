@@ -447,17 +447,25 @@ test("Dispatcher contract: bounded keyset pages keep Canvas → Job → Attempt 
   assert.equal(claim.slice(0, canvasLock).includes("FOR UPDATE"), false);
   assert.ok(claim.indexOf("createOrGetActiveAttempt", jobLock) > jobLock);
   assert.match(claim, /j\.created_at::text AS created_at_key/);
-  assert.match(claim, /j\.created_at > \$\{sql\.typed\(cursor\.createdAt, 25\)\}::timestamptz/);
+  assert.match(claim, /j\.created_at > \$\{sql\.typed\(project\.scan_created_at!, 25\)\}::timestamptz/);
+  assert.match(claim, /LIMIT \$\{FAIR_PENDING_PAGE_SIZE\}/);
+  assert.match(claim, /visits < FAIR_PROJECT_VISITS_PER_TICK/);
   assert.match(claim, /hint\.canvas_id IS NOT DISTINCT FROM j\.canvas_id/);
   const claimCas = claim.indexOf("const row = await lifecycle.claimPendingJob(job.id)");
   const quotaCharge = claim.indexOf("accumulateDispatchCounts([{ ...job, count: 1 }], counts)");
   assert.ok(claimCas > jobLock && quotaCharge > claimCas, "candidate hints must not reserve quota before the actual claim CAS");
+  assert.ok(claim.indexOf("await finishFairProjectVisit", claimCas) > quotaCharge,
+    "durable project service must follow the actual Job claim");
 });
 
 test("Dispatcher contract: Job ownership fence precedes provision Attempt admission/settlement", async () => {
   const source = await readFile(new URL("./dispatcher.ts", import.meta.url), "utf8");
-  const helper = source.slice(source.indexOf("export async function lockCurrentProvisioningAttempt"), source.indexOf("async function runJob"));
-  assert.ok(helper.indexOf("FOR UPDATE OF j") < helper.indexOf("getActiveAttempt(db, jobId, true)"));
+  const dispatch = await readFile(new URL("./domains/job-control/human-continuation-dispatch.ts", import.meta.url), "utf8");
+  const helper = dispatch.slice(dispatch.indexOf("export async function lockCurrentProvisioningAttempt"));
+  const rootLock = helper.indexOf("lockContinuationBudget(db, jobId)");
+  const jobLock = helper.indexOf("FOR UPDATE OF j");
+  const attemptLock = helper.indexOf("getActiveAttempt(db, jobId, true)");
+  assert.ok(rootLock >= 0 && jobLock > rootLock && attemptLock > jobLock);
   assert.match(helper, /job\.latest_attempt_id !== attemptId/);
   const run = source.slice(source.indexOf("async function runJob"), source.indexOf("export async function withProvisionTimeout"));
   assert.ok(run.indexOf('lockCurrentProvisioningAttempt(tx as unknown as typeof sql, jobId, attemptId!, "preparing")') < run.indexOf("const admitted = await beginEffect"));

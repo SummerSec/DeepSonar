@@ -1,9 +1,13 @@
+import { after } from "node:test";
+import { privateJobFixture } from "./private-job-fixture.js";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { PI_MAIN_REQUEST_BUDGET_SOURCE, redactPiContextSecrets } from "./pi-main-request-budget.js";
 
+const privateAuth = privateJobFixture();
+after(() => privateAuth.close());
 // This is an SDK-boundary double, not evidence of a real Pi process or provider run.
 const streamDouble = `
 export function createAssistantMessageEventStream() {
@@ -47,8 +51,7 @@ async function fixture(api = "openai-completions", delegateFailure?: Error) {
   const ctx = { model, modelRegistry: { getRegisteredProviderConfig: () => registrations.at(-1)?.config,
     getAll: () => [{ ...model, provider: "__deepsonar_observational_memory" }],
     getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic-om-token" }) } };
-  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token",
-    DEEPSONAR_API_TOKEN: "synthetic-control-token" },
+  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, ...privateAuth.environment },
     async function* (selected: any, context: any, options: any) {
       delegates.push({ model: selected, context, options });
       if (delegateFailure) throw delegateFailure;
@@ -301,7 +304,7 @@ test("main recovery buffers only an empty failed generation and requires the aut
       const headers = { "X-Deepsonar-Request-Id": "cannot-override", "x-custom": "preserved" };
       const calls: any[] = []; const context = { messages: [] };
       let start: any, stream: any, sdkContext: unknown;
-      module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
+      module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl, ...privateAuth.environment },
         async function* (_model: any, ctx: any, options: any) {
           assert.deepEqual(ctx, context);
           if (calls.length) assert.equal(ctx, sdkContext, "recovery reuses the same safe context projection");

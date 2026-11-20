@@ -1,3 +1,4 @@
+import { materializePrivateJobFiles, privateCredentialEnvironment } from "../../packages/runtime-sandbox/src/private-job-files.js";
 /**
  * Vendor-model proof that real CLIs inside OpenSandbox talk to Model Gateway
  * and submit Job Platform API operations themselves. Long-lived vendor keys stay
@@ -331,11 +332,11 @@ try {
       ttlSec: 3600,
     });
     const runtimeHome = "/workspace/.deepsonar-home";
-    const gatewayEnv = runtimeCliEnv({
+    const gatewayEnv = privateCredentialEnvironment(runtimeCliEnv({
       DEEPSONAR_ALLOW_EGRESS: "0",
       DEEPSONAR_GATEWAY_TOKEN: token.plaintext,
       ...capability.env,
-    });
+    }), { paths: {} });
     let runtimeConfigFiles = selectedCli === "dsh"
       ? []
       : materializeProviderSettings({
@@ -355,7 +356,7 @@ try {
       for (const key of mapping.secretKeys) delete gatewayEnv[key];
       if (mapping.baseUrlKey) delete gatewayEnv[mapping.baseUrlKey];
     } else {
-      for (const key of mapping.secretKeys) gatewayEnv[key] = token.plaintext;
+      for (const key of mapping.secretKeys) delete gatewayEnv[key];
       if (mapping.baseUrlKey) gatewayEnv[mapping.baseUrlKey] = config.gateway.sandboxUrl;
     }
     const assertVendorKeyIsolated = (contents: readonly string[], where: "env" | "workspace") => {
@@ -384,8 +385,14 @@ try {
     try {
       const host = await runner.ensureHost(handle);
       await host.run(`mkdir -p /workspace/.deepsonar ${runtimeHome} && printf '%s\\n' '{"mcpServers":{}}' > /workspace/.deepsonar/mcp.json`, { timeoutMs: 5_000 });
+      const privateFiles = await materializePrivateJobFiles(host, {
+        "control-token": capability.token, "gateway-token": token.plaintext,
+        ...Object.fromEntries(runtimeConfigFiles.filter(file => file.path === ".pi/agent/auth.json").map(file => ["pi-auth.json", file.content])),
+      });
+      Object.assign(gatewayEnv, privateCredentialEnvironment(gatewayEnv, privateFiles));
+      if (selectedCli === "pi") await privateFiles.installPiAuth();
       const uploadedTargets: string[] = [];
-      for (const file of runtimeConfigFiles) {
+      for (const file of runtimeConfigFiles.filter(file => file.path !== ".pi/agent/auth.json")) {
         const targets = selectedCli === "pi" && file.path.startsWith(".pi/")
           ? [`${runtimeHome}/${file.path}`]
           : [`/workspace/${file.path}`, `${runtimeHome}/${file.path}`];
@@ -397,11 +404,12 @@ try {
       await host.uploadFile(`#!/bin/sh
 set -eu
 base=$(printf '%s' "$DEEPSONAR_API_BASE_URL" | sed 's:/*$::')
-token=$DEEPSONAR_API_TOKEN
 post() {
-  python3 - "$base" "$token" "$1" "$2" <<'PY'
-import sys, urllib.error, urllib.request, uuid
-base, token, op, payload = sys.argv[1:5]
+  python3 - "$base" "$1" "$2" <<'PY'
+import os, sys, urllib.error, urllib.request, uuid
+from pathlib import Path
+base, op, payload = sys.argv[1:4]
+token = Path(os.environ["DEEPSONAR_CONTROL_TOKEN_FILE"]).read_text()
 req = urllib.request.Request(
     f"{base}/operations/{op}",
     data=payload.encode(),

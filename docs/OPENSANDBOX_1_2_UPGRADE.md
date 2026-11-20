@@ -1,11 +1,56 @@
 # OpenSandbox 1.2 upgrade and recovery boundaries
 
 > 状态：**源码升级、受管资源声明预检与 provision 失败诊断已接线；当前组合待最终 SHA Actions**。历史验收、逐容器执行、远端/live/native 证据分别保留，不推导现场因果。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-20
 
 Verification baseline: the 2026-11-01 integration worktree, not a released or native-validated deployment. This updates [IR-001](architecture/01-system-specification.md#ir-001-scheduler-runtime-adapter-与-model-gateway) and [IR-003](architecture/01-system-specification.md#ir-003-opensandbox-与-worker-node) without changing Scheduler recovery or execution authority; see [runtime](architecture/06-runtime-view.md), [deployment](architecture/07-deployment-view.md) and [security](architecture/10-security-and-trust-boundaries.md).
 
 Independent SDK provenance (historical): sibling worktree `DeepSonar-opensandbox-1.2`, branch `agent/opensandbox-1.2-upgrade`, clean main base `e219b53f1e4101b1b64fc97537c15f8eb582d87f` (2026-11-01). Only SDK/pin/config/tests/OpenSandbox documentation hunks were ported there from mixed source commit `7f9241f2373bb25f73f230ab7580eab19803678d`; no earlier ancestry, Plan, Finding research, authorization or Pi packaging changes were imported into that independent worktree. This does not describe the later integrated tree's scope.
+
+## 创建熔断与鉴权管理探测（#1119 / #1046）
+
+Dispatcher 在真实 provision 的失败出口独立记录服务故障。受控诊断中的 `stage=create`、未取消的 HTTP 5xx，以及 `Failed to create directory /opt/opensandbox in sandbox: 500 ...` 错误形状会计入现有 create 熔断。目录故障和结构化服务故障分别投影为固定码 `SANDBOX_CREATE_DIRECTORY_FAILED`、`SANDBOX_CREATE_SERVER_ERROR`，状态、指标与暂停日志只保存固定分类。正常 Job 错误和既有诊断审计继续通过原入口读取。
+
+核对并合入固定主集成 `d6997ce3b13a65b6c000316da83bad9fef5d71a0` 后，半开恢复由观察到半开的进程在 claim 数据库锁内按全部 claimed/provisioning 工作计数，独立限制一个创建名额，全局配额不限时仍生效。出站创建前再次核验 episode，过期准入使用 `provision_admission_deferred` 重新等待，并保留原效果的 `never_started` 证明及真实创建失败重试额度。当前 episode 的成功探针关闭熔断并恢复初始冷却。当前半开探针失败时重新打开，下一次冷却翻倍至配置上限，默认依次等待 30、60、120、240、300 秒，随后维持 300 秒。普通失败与旧 episode 的迟到结果计入窗口，但不触发半开冷却倍增。进程内状态的多副本与重启边界见[运行时视图](architecture/06-runtime-view.md#默认不限的调度配额1123)。
+
+熔断策略由 Scheduler 的 `config.ts` 在启动时读取环境变量。空值采用默认值，其余值必须是范围内的正整数，最大冷却须大于等于初始冷却。非法显式输入阻止正常启动，报错只含字段名和范围。离线升级预检使用正值兜底并将字段加入现有 `configInputErrors`，由原预检入口报告阻塞错误。配置生效需要重新启动 Scheduler，进程状态随重启重建。
+
+| 环境变量 | 默认值 | 允许范围 |
+| --- | --- | --- |
+| `OPENSANDBOX_CREATE_CIRCUIT_FAILURES` | 2 次 | 1–100 次 |
+| `OPENSANDBOX_CREATE_CIRCUIT_WINDOW_SECS` | 300 秒 | 1–3600 秒 |
+| `OPENSANDBOX_CREATE_CIRCUIT_COOLDOWN_SECS` | 30 秒 | 1–300 秒 |
+| `OPENSANDBOX_CREATE_CIRCUIT_MAX_COOLDOWN_SECS` | 300 秒 | 1–300 秒，且不小于初始冷却 |
+
+零值按非法配置拒绝。部署者通过现有 Scheduler 进程环境注入这些参数。
+
+`opensandbox-create-circuit.test.ts` 覆盖连续失败退避上限、旧 episode、恢复后重置，以及既有单名额与出站拒绝。`usage-limit-config.test.ts` 覆盖默认/显式正值、零/负数/小数/越界输入、离线预检与冷却关系校验。`job-rerun.integration.test.ts` 在隔离 PostgreSQL 内调用 `dispatch-create-circuit.fixture.ts` 的组合回归，以真实 Dispatcher → 真实 OpenSandboxRunner → 受控 client create 500 → 原 callback/审计/Attempt 引用/失败计数 → 停止后续 claim 的路径验证普通窗口和失败半开的退避，并核对健康 List 不关闭熔断、pending Job 无 Attempt、已尝试 create 的效果保持 `unknown` / `never`。该组合路径只替换上游 client 和既有 runner 实例的 provision 方法，失败通过实际出口记录。
+
+Actions 实际调用 `pnpm ci:unit:runtime-cleanup`（`gate-runtime`）、`pnpm ci:unit:finding-protocol`（`gate-contract`，含 `usage-limit-config.test.ts`）和 `pnpm ci:integration:recovery`（`gate-db-core`）。配置回归也收录在现有 `pnpm ci:unit:dispatch-limits` 入口，另验文档、既有 dispatch-limits PG 组合与适用运行时专项。本轮本地仅静态核对和 `git diff --check`，最终整合 SHA 的 Actions 待验。
+
+熔断计数与重放权限分别判断。无会话、无句柄和 HTTP 500 均不构成无副作用证明。调用过 runner 的不确定结果继续记 `unknown`，自动重试仍要求当前 owner 和原有的显式 `never_started` / `external_effect=false` 证据。取消和普通配置错误不进入新增服务故障分类。
+
+#1119 本轮落实 A 的平台工程缺口。P1-3 要求的 OpenSandbox/execd 上游现场原始日志仍属外部 TODO，当前可读来源为正常 Job 错误及 `scheduler_audit` 的固定宿主诊断，现场根因仍待上游证据。B 的 gateway 迁移尚未被用户选定。C/#1121 的诊断推断无效果与自动重放提案不满足既有内核的重放证据要求，不纳入本轮实现。该提案的处置与工程验收分别记录，未知效果继续按内核规则处理。这些范围与外部证据分别记录，A 的工程 Actions 不能证明上游根因已解决。
+
+生产、远程 Worker 与外置 Kubernetes Compose 共用只读挂载的 `deploy/opensandbox/management-health.py`，由容器内固定 Python 路径执行。它与 Scheduler 探测同用 `GET /v1/sandboxes?page=1&pageSize=1` 和 `OPEN-SANDBOX-API-KEY`，只接受 HTTP 200 且包含 `items` 数组的有界 JSON。探针从 `OPENSANDBOX_PROBE_PORT` 读取端口并核验合法范围，缺省端口及超时/字节上限以脚本为准；三份 Compose 显式绑定各自 server TOML 的监听端口。超时、缺 key、非法端口、认证失败、重定向与坏响应按固定码拒绝，错误正文和 key 不输出。管理 List 成功仅表示鉴权管理接口可用，实际 create 故障仍可独立暂停 claim，List 成功不会关闭 create 熔断。Podman 的 `service_started` overlay 与部署入口最终 readiness 检查继续按既有流程执行。
+
+试运行包的 `referenceFiles` 同时包含生产 Compose 挂载的 `management-health.py` 和 `resource-preflight.py`，按源码原字节复制，并在包内 `SHA256SUMS` 记录摘要。两个隔离生产 smoke 入口在各自项目目录复制同一脚本；回归执行实际复制语句并核对字节。`ci:unit:runtime-sandbox` 中的离线试运行 CLI 回归用合成镜像归档调用真实打包入口，核对两份脚本和摘要，无须启动 Docker。原 `issue-752-trial` 工作流的专用分支准入保持原契约，本分支不据其存在宣称已经执行试运行包验收。
+
+### #1176 覆盖与整合审计
+
+前一轮本地实现以固定 main `c3549c141e790f7745dd9ae0b622fcc596135ccc` 为基线，按范围吸收 #1176 的外置 Kubernetes 覆盖。#1176 随后已由 SummerSec 合入 main，本轮将真实 merge commit `ee375858194c779f6e29e458e246dbf9725415d2` 合入本分支，其第二父提交为 `8646305726b4b77c2011a62292f33ff2da10c7c4`。两者均保留在本分支祖先链，冲突处理继续使用 #1162 的统一探针、熔断与回归入口。以下是代码覆盖关系，工程验收仍等待汇总 Draft #1177 最终 SHA 的 Actions。
+
+| #1176 改动面 | 本分支实现与证据入口 |
+| --- | --- |
+| 生产和远程 Worker 的鉴权 List healthcheck | 共用 `management-health.py`，原 Compose/脚本及 HTTP 回归保留。 |
+| 外置 Kubernetes 与管理端口 | Kubernetes overlay 挂载同一脚本，探针端口对应 `config.k8s.external.toml`，Compose 契约回归检查两者相等。 |
+| 探针脚本 | 统一 `/v1/sandboxes`、API key、合法端口、响应字节/JSON/`items` 校验、重定向拒绝和固定诊断。新 HTTP 回归覆盖 403/404、慢响应及非法端口。 |
+| 部署说明与契约断言 | 一键部署和部署视图覆盖三种拓扑，明确 List 与 Create 的证据边界，Kubernetes 的旧 `/health` 断言改为统一探针。 |
+| 额外打包与 smoke 缺口 | 试运行清单包含两份必需脚本，核心 runtime-sandbox 回归验证真实打包 CLI 及隔离 smoke 的实际复制语句。 |
+
+此实现保留 #1176 的真实提交历史及上述功能覆盖，当前运行入口统一为 `management-health.py`。合并带入的 `readiness-probe.py` 已移除，三种 Compose、部署说明和测试均使用正确的 `/v1/sandboxes` 与有界校验。试运行包及隔离 smoke 继续携带同一脚本，create 500 计数与未知效果重放边界保持原实现。该本地提交交由主 Agent 合入 #1177 统一推送和验收，来源 PR 的历史状态不代替汇总提交的 Actions 结果。
+
+回归入口包括 `pnpm ci:unit:runtime-cleanup`（本机合成 HTTP、List 200/create 500 正交、半开与固定码）、`pnpm ci:unit:runtime-sandbox`（三种 Compose、隔离 harness 的复制接线及离线试运行打包 CLI）、`pnpm ci:integration:dispatch-limits`（真实 PostgreSQL 的 unknown/pending/无结果等拒绝与明确未开始证据准入）。`gate-runtime` 还显式执行 `python3 deploy/opensandbox/management-health.test.py`，验证实际脚本的本机 HTTP 鉴权、端口、状态/慢响应、重定向拒绝和脱敏。`node --test deploy/issue752-package-trial.test.mjs` 是试运行包的额外 Actions 入口，需要 runner 提供 Docker Compose。上述回归全部仅在 GitHub Actions 执行，最终 SHA 待验，生产与目标 server 未执行。
 
 ## Managed Docker resource preflight (#1002 P2-11)
 

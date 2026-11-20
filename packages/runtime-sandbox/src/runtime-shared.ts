@@ -37,6 +37,7 @@ export const WORKSPACE_RESERVED_ROOTS = [
 export function assertReadableWorkspacePath(filePath: string): void {
   if (
     !filePath.startsWith("/workspace/") ||
+    filePath.startsWith("/workspace/.deepsonar-credentials-") ||
     WORKSPACE_RESERVED_ROOTS.some((root) => filePath === root || filePath.startsWith(`${root}/`))
   ) {
     throw new Error("shared_asset_source_path_forbidden");

@@ -69,6 +69,12 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
 
+### 凭据容量与健康反馈（#1078）
+
+readiness 与严格 resolver 对全满候选返回稳定 `provider_credential_all_at_capacity`，RepairFeedback 为 `transient_retryable`，下一步 `wait_for_provider_capacity`，预检展示 `CREDENTIAL_AT_CAPACITY` 警告。临时健康排除后全部不可用或冻结账号不健康返回 `provider_credential_health_unavailable`，预检展示 `CREDENTIAL_HEALTH_UNAVAILABLE`，下一步检查连接。显式授权引用失效仍整次返回 stale 错误。Job 创建内部允许保存容量等待决定并保持 pending，领取按固定间隔重读，没有新增最大排队时长或取消策略。
+
+新快照可选 `credential_selection` 保存版本、观测时刻、选择理由及候选三层容量，`capacity_wait` 是选择理由枚举，仅在创建时容量阻挡时出现；没有同名无条件字段、等待 deadline 或执行 timeout 预算。字段语义、健康探测 unknown 的例外及跨 Provider 未交付边界统一见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)。历史快照保持冻结。
+
 ### 项目默认 Provider 账号选择（#914）
 
 项目 Provider 面板通过既有 settings PATCH 显式设置、更换或清除 `default_credential_id`。候选须是 active、全局或当前项目可见、在项目凭据与 CLI 启用范围内的 Provider；未配置凭据白名单表示未收紧，显式 `[]` 没有候选，不自动选择其他账号。现有失效引用清理控件继续保留；默认账号不可用时要求用户明确清除或更换，加载失败不能视作空名单并清掉配置。
@@ -166,6 +172,8 @@ Job 列表只为 `waiting_human` 项附加 Scheduler 当前 `execution_state`，
 ## 项目知识接口（#752 与项目批次）
 
 Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。
+
+本轮反馈响应修正：`record_knowledge_feedback` 仅持久化已接受的 usage 反馈，操作结果为 `{usage_ref,state:"recorded"}`，不返回 `work_ref`，也不入队或启动知识 work。成功业务 Job 的已接受反馈经普通来源登记进入项目 collector，冻结精确 usage/反馈、target 版本/hash 基线及 evidence refs；同样受 4 来源或等待 24 小时、自动批次间隔 24 小时和连续两批无产出停发约束。原 Job 没有冻结 `request_project_knowledge` 权限时，不因提交反馈获得自动整理权限。显式 `request_project_knowledge` 仍按原有授权、来源、预算与幂等约束请求整理，不被自动策略替代；不得把仅反馈记录当作显式整理。外层 accepted/receipt_ref 继续表示反馈持久接纳，不表示新 work、试验或激活；旧持久回执保持历史原样，不作为新调用返回旧 work_ref 的兼容分支。反馈记录也不清除 collector 连续失败。契约实现与最终 SHA Actions 仍须独立核对，不表示已部署。
 
 ## Gateway、流和导入接口
 
@@ -309,11 +317,17 @@ Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_con
 
 `GET /projects/:id/knowledge/backfill` 要求 `projects:read` 与项目作用域，每页默认10、最多20条，返回当前资格/原因、来源登记及已有 work；不返回来源正文。无对应 POST 补做入口，不创建或恢复执行。
 
-本轮自动collector只消费持久登记，不改变backfill只读语义。`GET /projects/:id/knowledge/activity?limit=10&offset=0`沿用`projects:read`并在handler中严格核验项目scope；分页默认10、最多50，未知字段拒绝，授权范围内项目不存在返回404。返回summary、分页work items/next_offset与最近最多10条去重skipped_sources元数据；不返回来源正文、manifest、反馈正文或跨项目链接。字段机器入口为[知识OpenAPI](../../apps/scheduler/src/domains/project-knowledge/openapi.ts)、[路由](../../apps/scheduler/src/domains/project-knowledge/activity-routes.ts)和[Web类型](../../apps/web/src/ProjectKnowledgeApi.ts)，完整口径见[专题](../PROJECT_KNOWLEDGE.md#积累与复用可见性)。
+本轮自动collector只消费持久登记，不改变backfill只读语义。`GET /projects/:id/knowledge/activity?limit=10&offset=0`沿用`projects:read`并在handler中严格核验项目scope；分页默认10、最多50，未知字段拒绝，授权范围内项目不存在返回404。保留 summary、分页 work items/next_offset 与最近最多 10 条去重 skipped_sources 元数据，新增 `collection:{state,pending_sources,consecutive_failures,next_collection_at}`；不返回来源正文、manifest、反馈正文或跨项目链接。字段机器入口为[知识OpenAPI](../../apps/scheduler/src/domains/project-knowledge/openapi.ts)、[路由](../../apps/scheduler/src/domains/project-knowledge/activity-routes.ts)和[Web类型](../../apps/web/src/ProjectKnowledgeApi.ts)，完整口径见[专题](../PROJECT_KNOWLEDGE.md#积累与复用可见性)。
 
-summary分别计登记、已纳入整理、跳过、待采集、active Memory/Skill、draft、completed/blocked work及本项目拥有并消费的usage/feedback；pending排除collected/skipped去重并集。反馈success仅为模型报告；来源登记不等于产物，collected含排队不等于生效。items只含工作状态/安全原因、累计Job/时间、当前Job/Canvas、时间戳、最新提案状态和source_count；来源数按采集审计关联work_ref，显式work在无链接且有originJob时回退1。页面在目录前紧凑展示，详情按需展开、复用原刷新、隔离迟到响应，不新增轮询或人工激活入口。注意力成本见[专题表格](../PROJECT_KNOWLEDGE.md#注意力成本)。
+本轮 collection 由与 collector 事务重验及 durable wake 共用的数据库准入查询派生；`state` 仅为 `idle|busy|accumulating|cooldown|ready|halted`，分别表达无待处理、在途工作、等待来源积累或源 retry、自动批次最小间隔限制、已可准入、连续无产出停发。cooldown 仅当 cooldown_until 大于当前时间且不早于 accumulated_at，即自动间隔是最后限制；否则来源 retry 可表现为 accumulating，下次时间仍尊重 retry。`collection.pending_sources` 按可信源登记审计去重并排除已处理，而 summary 的采集审计另核验 work 存在；正常数据下口径一致，但 collection 与 summary 是两次只读查询，并发或损坏数据不保证同值，不承诺响应同一快照；`consecutive_failures` 从持久 work/proposal 历史计算自动批次无产出次数，不是源准备 retry；`next_collection_at` 为时间戳或 null，busy/halted/idle 不预告立即采集。4 来源或 24 小时、自动间隔 24 小时与两次无产出停发/显式成功恢复见 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 和[专题字段口径](../PROJECT_KNOWLEDGE.md#积累与复用可见性)。这是只读调度投影，不新增路由、持久生命周期、权限或恢复按钮；ready 不等于已派发或完成，最终 SHA Actions 待验。
+
+summary分别计登记、已纳入整理、跳过、待采集、active Memory/Skill、draft、completed/blocked work及本项目拥有并消费的usage/feedback；pending排除collected/skipped去重并集。反馈success仅为模型报告；来源登记不等于产物，collected含排队不等于生效。items只含工作状态/安全原因、累计Job/时间、当前Job/Canvas、时间戳、最新提案状态和source_count；来源数按采集审计关联work_ref，显式work在无链接且有originJob时回退1。页面在目录前紧凑展示，详情按需展开、复用原刷新、隔离迟到响应，同一知识页展示积累/冷却/执行中/停发和下次时间，不新增通知、设置、恢复按钮、轮询或人工激活入口。注意力成本见[专题表格](../PROJECT_KNOWLEDGE.md#注意力成本)。
 
 Control的evaluation_plan增加每例显式task_inputs，平台校验引用已在work冻结；assignment.source_mode标识project_collection，工具/网络隔离只可收紧。trial不接收评分rubric；evaluator/reviewer读取精确proposal绑定的evaluation输入。publish_shared_asset返回真实version.id/content_sha256用于Evidence引用，不能以operation ID代替版本。target comparator fail的容许不放宽candidate或安全组的pass门，也不允许unexecuted激活。契约见[共享schema](../../packages/shared-types/src/project-knowledge.ts)与[发布回执](../../apps/scheduler/src/shared-asset-publish-control.ts)。本轮源码与回归已接线，Actions尚未运行，未合并、未部署、未执行真实模型收益验证。
+
+## 历史 failed 新 Job 与预算归属
+
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
 
 ## 人工等待显式让位入口（#1074）
 
@@ -328,3 +342,8 @@ POST /projects/{id}/task-queue/yield 使用 jobs:control 与项目范围，输�
 ## PTY 清理证据详情（#1143）
 
 GET `/jobs/{id}` 增加可选 `process_diagnostics`，沿用 `tasks:read` 与项目归属权限，上限 64 条。它通过原 effect 的宿主审计引用读取精确进程终止、DELETE 与 sandbox 销毁结果。`host_kill_caller` 表示实际宿主调用来源，退出码未知保持 null。字段与恢复限制见 [PTY 清理专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。
+
+
+## 模型用量待确认投影（#1082）
+
+FR-CRED-003 / NFR-OBS-001 复用 `GET /dashboard/usage` 的项目权限、画布过滤与时间窗口。`models` 增加 `settled`、`unknown`、`not_reported` 计数，`unconfirmed_models` 按未确认请求数降序返回最多 8 个 Provider/model/workload 项。原 Token 排名与总计继续独立返回，零 Token 项可进入待确认表。字段、注意力成本与验收入口见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#模型用量待确认看板1082)，无数据库或写 API 变化。最终 SHA Actions 待验。

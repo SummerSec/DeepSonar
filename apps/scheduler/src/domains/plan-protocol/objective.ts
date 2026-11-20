@@ -56,6 +56,7 @@ export const PlanExecutionState = z.object({
   last_progress_at: z.string().datetime().nullable(),
   stop_reason: z.string().min(1).max(200).nullable(),
   stopped_at: z.string().datetime().nullable(),
+  stopped_job_id: z.string().uuid().optional(),
 }).strict();
 export type PlanExecutionState = z.infer<typeof PlanExecutionState>;
 

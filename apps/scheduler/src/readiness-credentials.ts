@@ -3,6 +3,7 @@ import type { ReadinessCredentialRow, ReadinessRoleRow } from "./readiness.js";
 import { parseProjectAgentAllowlist } from "./domains/project-agent-allowlist/policy.js";
 import { ProviderCredentialResolveError, resolveProviderCredentialForJob } from "./domains/provider-adapter/resolve-credential.js";
 import type { RoleRuntimeSnapshotTransaction } from "./domains/role-runtime-snapshot/ports.js";
+import { selectCredentialSnapshotModel } from "./domains/role-runtime-snapshot/credential-model.js";
 
 export interface ReadinessCredentialResolution {
   roleId: string;
@@ -33,6 +34,9 @@ export async function resolveReadinessCredentials(
         // Both clients execute this fixed parameterized query; postgres also has helper overloads.
         db: db as RoleRuntimeSnapshotTransaction, projectId, allowlist, preferredAgentCli, modelRef,
         allowPassthrough: allowPassthrough || allowlist.allow_model_catalog_passthrough,
+        selectModel: credential => selectCredentialSnapshotModel({ credential, modelRef,
+          fallbackModelRefs: allowlist.fallback_model_refs,
+          allowPassthrough: allowPassthrough || allowlist.allow_model_catalog_passthrough }),
       });
       if (chosen) {
         role.resolved_agent_cli = chosen.agent_cli;
@@ -51,6 +55,8 @@ export async function resolveReadinessCredentials(
         ? "CREDENTIAL_BINDING_AMBIGUOUS"
         : error.code === "provider_credential_cli_mismatch" || error.code === "provider_credential_protocol_incompatible"
           ? "CREDENTIAL_CLI_INCOMPATIBLE"
+          : error.code === "provider_credential_all_at_capacity" ? "CREDENTIAL_AT_CAPACITY"
+          : error.code === "provider_credential_health_unavailable" ? "CREDENTIAL_HEALTH_UNAVAILABLE"
           : error.code === "provider_credential_allowlist_stale"
             ? "CREDENTIAL_ALLOWLIST_STALE"
             : "CREDENTIAL_MISSING";

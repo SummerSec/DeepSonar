@@ -9,8 +9,10 @@ import { MODEL_REQUEST_POLICY_SOURCE } from "@deepsonar/runtime-sandbox";
 import { createServer, request, type IncomingMessage } from "node:http";
 import { connect } from "node:net";
 import { gzipSync } from "node:zlib";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import postgres from "postgres";
+import { anthropicUsageShapeCases } from "./gateway-usage-shape-fixture.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 type Captured = { method: string; path: string; headers: string[]; body: Buffer };
@@ -22,13 +24,14 @@ const read = async (stream: IncomingMessage): Promise<Buffer> => {
   for await (const chunk of stream) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks);
 };
-function send(port: number, path: string, method: string, headers: string[], chunks: Buffer[] = []): Promise<Response> {
+function send(port: number, path: string, method: string, headers: string[], chunks: Buffer[] = [], trailers: [string, string][] = []): Promise<Response> {
   return new Promise((resolve, reject) => {
     const outgoing = request({ host: "127.0.0.1", port, path, method, headers: ["host", `127.0.0.1:${port}`, ...headers] }, (response) => {
       void read(response).then(body => resolve({ status: response.statusCode!, headers: response.rawHeaders, body }), reject);
     });
     outgoing.on("error", reject);
     for (const chunk of chunks) outgoing.write(chunk);
+    if (trailers.length) outgoing.addTrailers(trailers);
     outgoing.end();
   });
 }
@@ -77,6 +80,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
   let cancelSeen: (() => void) | undefined;
   const sseFirst = Buffer.from('event: extension\r\ndata: {"unknown":true}\r\n\r\n');
   const sseLast = Buffer.from('data: {"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\ndata: [DONE]\n\n');
+  let usageShapeBody: string | undefined;
   const upstream = createServer((req, res) => {
     void (async () => {
       const body = await read(req);
@@ -86,7 +90,13 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       res.setHeader("x-request-id", "synthetic-request");
       res.setHeader("x-unknown-response", ["first", "second"]);
       res.setHeader("set-cookie", ["fixture=a", "fixture=b"]);
-      if (req.headers["x-policy-fixture"] === "main-generation") {
+      if (usageShapeBody !== undefined) {
+        res.setHeader("content-type", "text/event-stream");
+        res.setHeader("transfer-encoding", "chunked");
+        const bytes = Buffer.from(usageShapeBody);
+        res.write(bytes.subarray(0, 17));
+        res.end(bytes.subarray(17));
+      } else if (req.headers["x-policy-fixture"] === "main-generation") {
         const common = { input_tokens: 3, output_tokens: 2, total_tokens: 5 };
         const response = path === "/v1/messages"
           ? { type: "message", role: "assistant", stop_reason: "end_turn", content: [], usage: common }
@@ -189,6 +199,60 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     const via = (path: string, method = "GET", headers: string[] = [], chunks: Buffer[] = []) =>
       send(gatewayPort, `/gateway${path}`, method, [...auth, ...headers], chunks);
 
+    await t.test("#1082 main HTTP preserves bytes and never settles start-only usage across providers", async () => {
+      for (const provider of ["openai", "anthropic"]) {
+        const shapeCredentialId = randomUUID();
+        await sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,public_metadata_json)
+          VALUES(${shapeCredentialId},'usage-shape','llm_provider',${provider},${encrypted.ciphertext},${encrypted.nonce},
+            ${encrypted.auth_tag},'offline','only',${sql.json({ base_url: `http://127.0.0.1:${address.port}` })})`;
+        const [credential] = await sql`SELECT * FROM credentials WHERE id=${shapeCredentialId}`;
+        for (const fixture of anthropicUsageShapeCases()) {
+          const shapeJobId = randomUUID();
+          await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+            VALUES(${shapeJobId},${projectId},'audit','running',${sql.json({ name: "audit", agent_cli: "claude-code",
+              runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} },
+              credential_id: shapeCredentialId, credential_provider: provider, settings_config_json: {},
+              gateway_provider_binding: freezeGatewayProviderBinding(credential as never) })},now(),3600,now()+interval '1 hour')`;
+          const attempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, shapeJobId));
+          const grant = await gateway.mintJobToken({ jobId: shapeJobId, projectId, credentialId: shapeCredentialId, maxRequests: 0, maxTokens: 50 });
+          usageShapeBody = fixture.body;
+          const call = () => send(gatewayPort, "/gateway/v1/messages", "POST",
+            ["authorization", `Bearer ${grant.plaintext}`, "content-type", "application/json"],
+            [Buffer.from(JSON.stringify({ model: "fixture", messages: [], stream: true, max_tokens: 3 }))]);
+          try {
+            const before = captured.length;
+            const response = await call();
+            assert.equal(response.status, 200, `${provider}/${fixture.name}`);
+            assert.deepEqual(response.body, Buffer.from(fixture.body));
+            const [ledger] = await sql`SELECT l.*,e.status AS effect_status FROM job_usage_ledger l JOIN job_attempt_effects e
+              ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id WHERE l.job_id=${shapeJobId}`;
+            assert.equal(ledger.attempt_id, attempt.id);
+            assert.equal(ledger.job_token_id, grant.id);
+            assert.equal(ledger.settlement_status, fixture.known ? "settled" : "not_reported");
+            assert.equal(ledger.effect_status, "settled");
+            assert.equal(Number(ledger.total_tokens), fixture.known ? 7 : 0);
+            assert.equal(Number(ledger.cache_read_input_tokens), fixture.known ? 1 : 0);
+            assert.equal(Number(ledger.cache_creation_input_tokens), fixture.known ? 1 : 0);
+            const [counter] = await sql`SELECT used_tokens,used_requests FROM job_tokens WHERE id=${grant.id}`;
+            assert.equal(Number(counter.used_tokens), fixture.known ? 7 : 0);
+            assert.equal(counter.used_requests, 1);
+            const audit = await sql`SELECT after_json FROM audit_logs WHERE action='gateway.usage_unconfirmed' AND resource_id=${shapeJobId}`;
+            assert.equal(audit.length, fixture.known ? 0 : 1);
+            if (!fixture.known) {
+              assert.equal(audit[0].after_json.attempt_id, attempt.id);
+              assert.equal(audit[0].after_json.effect_id, ledger.effect_id);
+              assert.ok(Buffer.byteLength(JSON.stringify(audit[0].after_json)) <= 2048);
+              assert.doesNotMatch(JSON.stringify(audit), /SYNTHETIC_PRIVATE|synthetic-upstream-key/);
+              const next = await call();
+              assert.equal(next.status, 409);
+              assert.equal(JSON.parse(next.body.toString()).error.type, "JOB_TOKEN_USAGE_UNKNOWN");
+              assert.equal(captured.length, before + 1, "unknown usage cannot authorize another paid call");
+            }
+          } finally { usageShapeBody = undefined; }
+        }
+      }
+    });
+
     await t.test("raw encoded path, repeated query/headers, JSON extensions, binary and chunked bodies match direct HTTP", async () => {
       const cases = [
         { body: Buffer.from(' { "model" : "fable", "tools": [], "future": {"x":1}, "max_tokens":21 }\n'), type: "application/json" },
@@ -224,29 +288,80 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     });
     await t.test("Job token in a business header or body is rejected before forwarding", async () => {
       const before = captured.length;
-      const headerLeak = await via("/v1/messages", "GET", ["x-business-data", `prefix-${token.plaintext}`]);
-      assert.equal(headerLeak.status, 400);
+      const { renderMetrics } = await import("./metrics.js");
+      const metricName = "deepsonar_gateway_credential_leak_total";
+      const counter = (text: string) => Number(text.match(new RegExp(`^${metricName} (\\d+)$`, "m"))?.[1] ?? 0);
+      const beforeMetric = counter(await renderMetrics());
+      const [{ n: beforeAudits }] = await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='gateway.credential_denied'`;
+      const assertCredentialDenial = (response: Response) => {
+        assert.equal(response.status, 400);
+        assert.equal(JSON.parse(response.body.toString("utf8")).error.type, "credential_in_business_data");
+      };
+      const headerLeak = await via("/v1/messages", "GET", ["x-business-data", `prefix-${token.plaintext}`,
+        "user-agent", token.plaintext, "x-request-id", token.plaintext]);
+      assertCredentialDenial(headerLeak);
       const bodyLeak = await via("/v1/messages", "POST", ["content-type", "application/octet-stream"], [Buffer.from(token.plaintext)]);
-      assert.equal(bodyLeak.status, 400);
+      assertCredentialDenial(bodyLeak);
       for (const value of [token.plaintext, [...token.plaintext].map(char => `%${char.charCodeAt(0).toString(16)}`).join("")]) {
-        assert.equal((await via(`/v1/messages?debug=${value}`)).status, 400);
-        assert.equal((await via(`/v1/${value}`)).status, 400);
+        assertCredentialDenial(await via(`/v1/messages?debug=${value}`));
+        assertCredentialDenial(await via(`/v1/${value}`));
       }
       const partlyEncoded = `%${token.plaintext.charCodeAt(0).toString(16)}${token.plaintext.slice(1)}`;
       for (const target of [`/v1/messages?debug=${partlyEncoded}&bad=%ZZ`,
         `/v1/messages?bad=%ZZ&debug=ok&debug=${partlyEncoded}`, `/v1/${partlyEncoded}?bad=%ZZ`]) {
-        assert.equal((await via(target)).status, 400, "unrelated invalid escapes cannot hide encoded credentials");
+        assertCredentialDenial(await via(target));
       }
+      const beforeInvalidTargets = counter(await renderMetrics());
+      assert.equal(beforeInvalidTargets, beforeMetric + 9, "unrelated invalid escapes cannot bypass credential inspection");
+      for (const target of ["/v1/messages?bad=%ZZ", "/v1/messages?bad=%ZZ&debug=ok", "/v1/messages?debug=ok&bad=%ZZ"]) {
+        // Targets without credentials still undergo strict encoding validation.
+        const response = await via(target);
+        assert.equal(response.status, 400);
+        assert.equal(JSON.parse(response.body.toString("utf8")).error.type, "invalid_request_target");
+      }
+      assert.equal(counter(await renderMetrics()), beforeInvalidTargets, "syntax refusals do not increment credential denials");
       const compressedLeak = await via("/v1/messages", "POST",
         ["content-type", "application/json", "content-encoding", "gzip"],
         [gzipSync(Buffer.from(JSON.stringify({ debug: token.plaintext })))]);
-      assert.equal(compressedLeak.status, 400);
+      assertCredentialDenial(compressedLeak);
+      const trailerLeak = await send(gatewayPort, "/gateway/v1/messages", "POST",
+        [...auth, "transfer-encoding", "chunked", "trailer", "x-business-data"], [Buffer.from("safe body")],
+        [["x-business-data", token.plaintext]]);
+      assertCredentialDenial(trailerLeak);
+      // A governed base URL can itself contain the Job token. Keep its frozen
+      // binding valid so the test reaches the independent upstream-target guard.
+      try {
+        await sql`UPDATE credentials SET public_metadata_json=${sql.json({ base_url: `http://127.0.0.1:${address.port}/v1/${token.plaintext}` })}
+          WHERE id=${credentialId}`;
+        const [changed] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
+        await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{gateway_provider_binding}',
+          ${sql.json(freezeGatewayProviderBinding(changed as never) as never)}) WHERE id=${jobId}`;
+        assertCredentialDenial(await via("/v1/messages"));
+      } finally {
+        await sql`UPDATE credentials SET public_metadata_json=${sql.json({ base_url: `http://127.0.0.1:${address.port}/v1` })}
+          WHERE id=${credentialId}`;
+        await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{gateway_provider_binding}',
+          ${sql.json(binding as never)}) WHERE id=${jobId}`;
+      }
       assert.equal(captured.length, before);
+      const metrics = await renderMetrics();
+      assert.equal(counter(metrics), beforeMetric + 12, "every rejected request increments once across all five guards");
+      assert.ok(metrics.includes(`# HELP ${metricName} `));
+      assert.ok(metrics.includes(`# TYPE ${metricName} counter\n`));
+      assert.ok(!metrics.includes(token.plaintext));
+      // Audit writes are best effort and asynchronous. Wait for their actual
+      // commit, then assert exact multiplicity rather than a partial lower bound.
+      const auditDeadline = Date.now() + 5_000;
+      while (true) {
+        const [{ n }] = await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='gateway.credential_denied'`;
+        if (n >= beforeAudits + 12 || Date.now() >= auditDeadline) break;
+        await delay(10);
+      }
       // #1032: 每次凭据拒绝都必须留下可审计痕迹，而痕迹本身不得携带凭据或请求元数据。
       const denials = await sql`SELECT actor_type, actor_id, action, project_id, resource_type, resource_id,
           request_id, ip, user_agent, result, error_code, after_json
         FROM audit_logs WHERE action = 'gateway.credential_denied' ORDER BY id ASC`;
-      assert.ok(denials.length >= 4, "each credential surface records one denial trace");
+      assert.equal(denials.length, beforeAudits + 12, "each credential rejection records exactly one denial trace");
       const surfaces = new Set<string>();
       for (const row of denials) {
         assert.equal(row.actor_type, "system", "denial audit must not persist request actor metadata");
@@ -264,8 +379,8 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         assert.equal((row.after_json as Record<string, unknown>).job_id, jobId);
         surfaces.add(String((row.after_json as Record<string, unknown>).surface));
       }
-      assert.deepEqual([...surfaces].sort(), ["body", "request_target", "upstream_data"],
-        "body, request target and business-header rejections each name their surface");
+      assert.deepEqual([...surfaces].sort(), ["body", "request_target", "trailers", "upstream_data", "upstream_target"],
+        "all five credential guards retain their fixed audit surface");
       assert.ok(!JSON.stringify(denials).includes(token.plaintext), "audit entries never echo the credential");
     });
     await t.test("duplicate policy members cannot exploit different upstream JSON parsers", async () => {

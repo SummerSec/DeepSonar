@@ -359,7 +359,7 @@ export function createOpenSandboxRuntimeHost(session: OpenSandboxSession): Runti
         `exec 3<${quoted}`,
         "resolved=$(readlink -f /proc/self/fd/3)",
         'case "$resolved" in /workspace/*) ;; *) exit 45 ;; esac',
-        'case "$resolved" in /workspace/.deepsonar/*|/workspace/.deepsonar-home/*|/workspace/.claude/*|/workspace/.codex/*|/workspace/.opencode/*) exit 46 ;; esac',
+        'case "$resolved" in /workspace/.deepsonar/*|/workspace/.deepsonar-home/*|/workspace/.deepsonar-credentials-*|/workspace/.claude/*|/workspace/.codex/*|/workspace/.opencode/*) exit 46 ;; esac',
         "test -f /proc/self/fd/3 || exit 47",
         "size=$(stat -Lc %s /proc/self/fd/3)",
         `test "$size" -le ${maxBytes} || exit 48`,

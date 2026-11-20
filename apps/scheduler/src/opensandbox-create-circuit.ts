@@ -10,23 +10,28 @@
  * This process-local circuit observes the failures the dispatcher itself sees on the
  * provision path. Trip -> new opensandbox claims pause (retry attempts land back in
  * `pending` through the existing retry lifecycle and simply are not claimed). After a
- * cooldown exactly one half-open canary claim is admitted; a successful provision
- * closes the circuit, a failed canary reopens it. No new server endpoint, config knob
- * or persisted state is introduced; counts live only in this process.
+ * cooldown the dispatcher admits one half-open creation seat under its DB claim
+ * lock, including when ordinary quotas are unlimited. It rechecks the episode before
+ * outbound creation and defers expired admissions through the no-start lifecycle.
+ * A successful canary in the current episode closes the circuit; a failed canary
+ * reopens it. Counts and episodes live in this process.
  *
  * State and logs carry only a fixed failure code (`classifyProvisionFailure`), never the
  * dispatcher error text: that text can contain provider bodies, headers or a credential.
  */
 import { inc, setGauge } from "./metrics.js";
+import { config } from "./config.js";
+import type { ProvisionFailureDiagnostic } from "@deepsonar/runtime-sandbox";
 
 export const OPENSANDBOX_CREATE_CIRCUIT_OPEN = "opensandbox_create_circuit_open";
 
 /** Dispatcher-observed provision failures inside the window required to trip. */
-export const CREATE_CIRCUIT_FAILURES_TO_TRIP = 2;
+export const CREATE_CIRCUIT_FAILURES_TO_TRIP = config.runtime.openSandbox.createCircuit.failuresToTrip;
 /** Sliding window for the failure count (ms). */
-export const CREATE_CIRCUIT_WINDOW_MS = 5 * 60 * 1000;
-/** Minimum time to stay open before admitting one half-open canary (ms). */
-export const CREATE_CIRCUIT_COOLDOWN_MS = 90 * 1000;
+export const CREATE_CIRCUIT_WINDOW_MS = config.runtime.openSandbox.createCircuit.windowMs;
+/** Minimum time to stay open before admitting a half-open creation probe (ms). */
+export const CREATE_CIRCUIT_COOLDOWN_MS = config.runtime.openSandbox.createCircuit.cooldownMs;
+export const CREATE_CIRCUIT_MAX_COOLDOWN_MS = config.runtime.openSandbox.createCircuit.maxCooldownMs;
 
 export type OpenSandboxCreateCircuitState = "closed" | "open" | "half_open";
 
@@ -74,6 +79,7 @@ let episode = 0;
 let openedAtMs: number | null = null;
 let lastTripReason: string | null = null;
 let failureTimes: number[] = [];
+let cooldownMs = CREATE_CIRCUIT_COOLDOWN_MS;
 let clock: () => number = () => Date.now();
 
 function prune(now: number): void {
@@ -94,7 +100,7 @@ export function openSandboxCreateCircuitStatus(): OpenSandboxCreateCircuitStatus
 
 /**
  * Admit a claim on the opensandbox create path. `canary` tells the dispatcher this is
- * the single half-open probe whose success closes the circuit.
+ * a half-open probe whose success in the current episode closes the circuit.
  */
 export function openSandboxCreateCircuitAllowsClaim(
   status: OpenSandboxCreateCircuitStatus = openSandboxCreateCircuitStatus(),
@@ -104,7 +110,7 @@ export function openSandboxCreateCircuitAllowsClaim(
   // single creation seat under its DB advisory lock, including unlimited quotas.
   if (status.state === "half_open") return { allowed: true, canary: true, episode };
   const openedAt = openedAtMs;
-  if (openedAt != null && clock() - openedAt >= CREATE_CIRCUIT_COOLDOWN_MS) {
+  if (openedAt != null && clock() - openedAt >= cooldownMs) {
     state = "half_open";
     setGauge("deepsonar_opensandbox_create_circuit", 1);
     return { allowed: true, canary: true, episode };
@@ -126,12 +132,32 @@ export function recordOpenSandboxProvisionFailure(
   inc("deepsonar_opensandbox_create_failures_total");
   // Only the probe admitted in the current episode can prove the backend is still
   // unstable on its own; an outcome from an earlier claim is ordinary window evidence.
-  if (probe?.canary === true && probe.episode != null && probe.episode === episode) {
+  if (state === "half_open" && probe?.canary === true && probe.episode != null && probe.episode === episode) {
+    cooldownMs = Math.min(CREATE_CIRCUIT_MAX_COOLDOWN_MS, cooldownMs * 2);
     reTrip(now, code);
   } else if (failureTimes.length >= CREATE_CIRCUIT_FAILURES_TO_TRIP) {
     reTrip(now, code);
   }
   return openSandboxCreateCircuitStatus();
+}
+
+/** A transient error is only a retry candidate. Effect/owner checks still decide replay. */
+export function isOpenSandboxTransientProvisionFailure(text: string): boolean {
+  return /CONTAINER_START_FAILED|SANDBOX_START_FAILED|Egress sidecar (?:container failed to start|did not become ready)|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)|Sandbox health check timed out|Server disconnected without sending a response|Upload failed\s*\(\s*status\s*=\s*5\d\d\s*\)|UNEXPECTED_RESPONSE|An internal error occurred in the proxy|websocket proxy failure/i.test(text);
+}
+
+/** Observe service health independently of whether the failed effect can be replayed. */
+export function recordOpenSandboxProvisionError(reason: string, diagnostic?: ProvisionFailureDiagnostic,
+  probe: CreateCircuitProbe | null = null): void {
+  if (diagnostic?.cancelled) return;
+  if (CREATE_DIRECTORY_5XX.test(reason)) {
+    recordOpenSandboxProvisionFailure("SANDBOX_CREATE_DIRECTORY_FAILED", probe);
+  } else if (diagnostic?.stage === "create" && diagnostic.http_status != null
+    && diagnostic.http_status >= 500 && diagnostic.http_status <= 599) {
+    recordOpenSandboxProvisionFailure("SANDBOX_CREATE_SERVER_ERROR", probe);
+  } else if (isOpenSandboxTransientProvisionFailure(reason)) {
+    recordOpenSandboxProvisionFailure(reason, probe);
+  }
 }
 
 /** A successful provision closes the circuit (including a successful half-open canary). */
@@ -150,6 +176,7 @@ export function recordOpenSandboxProvisionSuccess(probe: CreateCircuitProbe | nu
   openedAtMs = null;
   lastTripReason = null;
   failureTimes = [];
+  cooldownMs = CREATE_CIRCUIT_COOLDOWN_MS;
   setGauge("deepsonar_opensandbox_create_circuit", 0);
 }
 
@@ -163,8 +190,8 @@ function reTrip(now: number, code: string): void {
   console.error(`[opensandbox-create-circuit] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} reason=${code}`);
 }
 
-// Known create-path failure codes only (#1046 review): the dispatcher's retryable
-// shapes are these three identifiers (bare or protocol-qualified). Any other value —
+// Known create-path failure codes only (#1046 review), including the #1119 fixed
+// directory/server projections (bare or protocol-qualified). Any other value —
 // including arbitrary upper-case/underscore shapes, private labels or long tails —
 // falls back to "unclassified" so the circuit never promotes error content into
 // state or logs.
@@ -172,7 +199,10 @@ const KNOWN_PROVISION_FAILURE_CODES = Object.freeze([
   "SANDBOX_START_FAILED",
   "CONTAINER_START_FAILED",
   "UNEXPECTED_RESPONSE",
+  "SANDBOX_CREATE_DIRECTORY_FAILED",
+  "SANDBOX_CREATE_SERVER_ERROR",
 ] as const satisfies readonly string[]);
+const CREATE_DIRECTORY_5XX = /Failed to create directory \/opt\/opensandbox(?:\/[^\s:]*)? in sandbox:\s*5\d\d\b/iu;
 const PROTOCOL_FAILURE_CODE_RE = /\b(OPENSANDBOX|OPEN_SANDBOX|SANDBOX|DOCKER)::([A-Z][A-Z0-9_]{1,63})\b/u;
 const BARE_FAILURE_CODE_RE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,4}\b/gu;
 const isKnownProvisionCode = (code: unknown): code is (typeof KNOWN_PROVISION_FAILURE_CODES)[number] =>
@@ -184,11 +214,12 @@ let lastPauseLogAtMs: number | null = null;
 /**
  * Fixed projection of a dispatcher provision error (#1046).
  *
- * Only a protocol-style code survives. Free text — which can carry provider bodies,
+ * Only an allowlisted code survives. Free text — which can carry provider bodies,
  * headers or a leaked credential — is never truncated into state or logs, because
  * truncation is not a secret-safe boundary.
  */
 export function classifyProvisionFailure(reason: string): string {
+  if (CREATE_DIRECTORY_5XX.test(reason)) return "SANDBOX_CREATE_DIRECTORY_FAILED";
   // Allowlist only: protocol-qualified candidates win when their code itself is known
   // (a private value after the namespace must not promote); otherwise the first known
   // bare code anywhere in the text. Any other content falls back to "unclassified".
@@ -214,6 +245,7 @@ export function resetOpenSandboxCreateCircuitForTests(clockOverride?: () => numb
   openedAtMs = null;
   lastTripReason = null;
   failureTimes = [];
+  cooldownMs = CREATE_CIRCUIT_COOLDOWN_MS;
   lastPauseLogAtMs = null;
   clock = clockOverride ?? (() => Date.now());
 }

@@ -22,6 +22,7 @@ export const GATE_SUITE_INVENTORY = Object.freeze([
   Object.freeze({ suite: "pnpm ci:images", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:unit:runtime-images", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:unit:runtime-cleanup", shard: "gate-runtime" }),
+  Object.freeze({ suite: "pnpm ci:unit:opensandbox-management-probe", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:unit:image-admission", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:unit:runtime-image-record", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:unit:runtime-registry", shard: "gate-runtime" }),

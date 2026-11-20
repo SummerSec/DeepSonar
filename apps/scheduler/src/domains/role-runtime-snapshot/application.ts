@@ -1,4 +1,5 @@
 import { freezeGatewayProviderBinding } from "../../gateway-provider-binding.js";
+import { PLATFORM_DEFAULT_AGENT_CLI } from "./default-cli.js";
 import {
   buildRepairFeedback,
   PlatformToolName,
@@ -29,7 +30,6 @@ import {
   assertResolvedModelInCredentialCatalog,
   extractModelsFromSettings,
   projectProviderRuntimeSnapshot,
-  providerModelBudget,
   resolveModelSource,
   snapshotUpstreamModel,
 } from "../../provider-settings.js";
@@ -46,16 +46,12 @@ import {
   freezeMaterializationPackAtJobCreate,
 } from "../extension-materialization/index.js";
 import {
-  admitModelAgainstCatalog,
   freezeProviderModelSnapshot,
-  resolveModelDescriptorCatalog,
   resolveProviderCredentialForJob,
   ProviderCredentialResolveError,
-  selectModelsForRequirements,
 } from "../provider-adapter/index.js";
-import { resolveCredentialModelRef } from "../provider-adapter/resolve-credential.js";
-import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
-import { descriptorsWithClientBudgets, resolveModelTokenBudget } from "../provider-adapter/model-budget.js";
+import { selectCredentialSnapshotModel } from "./credential-model.js";
+import type { ResolvedProviderCredential } from "../provider-adapter/resolve-credential.js";
 import { expandModules, resolveEffectiveModuleSelectors, type MissingModule } from "../../skill-sources.js";
 import { freezeJobSkillCatalog } from "../../job-skill-catalog.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
@@ -94,45 +90,10 @@ import type {
 
 export type { RoleRuntimeSnapshotApplication, RoleRuntimeSnapshotResult, RoleRuntimeSnapshotTransaction } from "./ports.js";
 
-/** Structured fail-closed when model is outside eligible catalog SSOT (#632). */
-function throwModelCapabilityMismatch(selectedModel: string, eligibleModelIds: string[]): never {
-  const admitted = admitModelAgainstCatalog({
-    resolvedModel: selectedModel,
-    catalogJson: eligibleModelIds.length > 0 ? eligibleModelIds : ["__empty_eligible__"],
-    allowPassthrough: false,
-    operation: "resolve_role_runtime_model_requirements",
-    modelSourceHint: "hub",
-    emphasizePassthrough: true,
-  });
-  if (!admitted.ok) {
-    throw new ModelCatalogMismatchError(
-      `模型 ${selectedModel} 不满足 Provider capability requirements / 不在账号已配置模型名单`,
-      admitted.resolved,
-      eligibleModelIds,
-      {
-        ...admitted.repair,
-        message: `模型 ${selectedModel} 不满足 Provider capability requirements / 不在账号已配置模型名单`,
-      },
-      admitted.code,
-    );
-  }
-  const repair = buildRepairFeedback({
-    category: "model_correctable",
-    code: "model_passthrough_disabled",
-    operation: "resolve_role_runtime_model_requirements",
-    path: "model_ref",
-    message: `模型 ${selectedModel} 不满足 Provider capability requirements / 不在账号已配置模型名单`,
-    expected: { kind: "catalog_model_id", sample: eligibleModelIds.slice(0, 12) },
-    observed_shape: { resolved_model: selectedModel, eligible: false },
-    next_action: "select_catalog_model_id_or_enable_emergency_passthrough",
-  });
-  throw new ModelCatalogMismatchError(repair.message, selectedModel, eligibleModelIds, repair, "model_passthrough_disabled");
-}
-
 export type AgentRuntimeSnapshot = RoleRuntimeSnapshotResult;
 export type ReasoningEffort = ReasoningValue;
 
-export const PLATFORM_DEFAULT_AGENT_CLI = "claude-code";
+export { PLATFORM_DEFAULT_AGENT_CLI } from "./default-cli.js";
 export const PLATFORM_DEFAULT_AGENT_MODEL: string | null = null;
 export const SNAPSHOT_STALE = "SNAPSHOT_STALE" as const;
 
@@ -361,7 +322,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { existingCredentialId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
+  options?: { existingCredentialId?: string | null; existingJobId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color, project_id
@@ -433,7 +394,16 @@ async function resolveAgentSnapshotForJobUnchecked(
       : null;
   const allowPassthroughForResolve = config.allowModelCatalogPassthrough
     || agentAllowlist.allow_model_catalog_passthrough;
+  const selectModel = (credential: ResolvedProviderCredential) => selectCredentialSnapshotModel({
+    credential, modelRef: earlyModelRef ?? agentAllowlist.default_model_ref ?? identity.model,
+    explicitModelRef: earlyModelRef, fallbackModelRefs: agentAllowlist.fallback_model_refs,
+    modelRequirements: options?.modelRequirements, allowPassthrough: allowPassthroughForResolve,
+    contextWindowTokens: options?.runtimeProfile?.context_window_tokens ?? cfg?.context_window_tokens,
+    contextSource: options?.runtimeProfile?.context_window_tokens != null ? "job" : "role_config",
+  });
+  let credentialSelection: import("../provider-adapter/resolve-credential.js").CredentialSelection | undefined;
   let llm: Record<string, unknown> | undefined;
+  let selectedCredentialModel: string | null = null;
   try {
     const resolved = await resolveProviderCredentialForJob({
       db,
@@ -445,8 +415,13 @@ async function resolveAgentSnapshotForJobUnchecked(
       modelRef: earlyModelRef ?? agentAllowlist.default_model_ref ?? identity.model,
       allowPassthrough: allowPassthroughForResolve,
       existingCredentialId: options?.existingCredentialId,
+      existingJobId: options?.existingJobId,
+      allowCapacityWait: true,
+      selectModel,
     });
     if (resolved) {
+      credentialSelection = resolved.selection;
+      selectedCredentialModel = selectModel(resolved);
       agentCli = resolved.agent_cli!;
       llm = {
         id: resolved.id,
@@ -484,96 +459,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     : null;
   const configuredDefaultModel = agentAllowlist.default_model_ref;
   if (requestedModelRef && !llm) throw new Error(`模型 ${requestedModelRef} 需要可用的 LLM Provider`);
-  let selectedModel = requestedModelRef ?? configuredDefaultModel ?? identity.model;
-  if (llm) {
-    // Selection/admit SSOT: account-configured model ids from settings_config_json (#656/#679).
-    // Parse by credential agent_cli dialect so RoleConfig.model is checked against that shape.
-    const credentialAgentCli = typeof llm.agent_cli === "string" && llm.agent_cli.trim()
-      ? llm.agent_cli.trim()
-      : agentCli;
-    const configuredModelIds = extractModelsFromSettings(settingsConfig, credentialAgentCli);
-    const resolvedSelection = selectedModel ? resolveCredentialModelRef(settingsConfig, agentCli, selectedModel) : null;
-    const budgetInputs = {
-      roleContextWindowTokens: options?.runtimeProfile?.context_window_tokens ?? cfg?.context_window_tokens,
-      contextSource: options?.runtimeProfile?.context_window_tokens != null ? "job" as const : "role_config" as const,
-    };
-    const catalog = descriptorsWithClientBudgets({
-      descriptors: resolveModelDescriptorCatalog({
-        provider: String(llm.provider ?? ""),
-        catalogJson: configuredModelIds,
-        catalogRevision: typeof llm.model_catalog_fetched_at === "string"
-          ? llm.model_catalog_fetched_at
-          : `credential:${String(llm.id)}`,
-        compatibleAgentClis: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh" ? [agentCli] : undefined,
-      }),
-      budgetForModel: (model) => model === resolvedSelection
-        ? providerModelBudget({ agentCli, model: selectedModel, settingsConfig,
-            credentialProvider: String(llm!.provider), catalogJson: llm!.model_catalog_json, ...budgetInputs })
-        // An unselected bare id may exist on multiple Pi routes. Its observed
-        // declarations can filter candidates, but must not choose a native route.
-        : resolveModelTokenBudget({ provider: String(llm!.provider), modelId: model,
-            catalogJson: llm!.model_catalog_json, ...budgetInputs,
-            credentialContextWindowTokens: settingsConfig && typeof settingsConfig === "object"
-              ? (settingsConfig as Record<string, unknown>).context_window_tokens : null }),
-    });
-    // #697: RoleConfig.allow_model_catalog_passthrough no longer authorizes; only
-    // platform env + admin project Agent allowlist (#679 deviation 1 item 3).
-    const allowPassthrough = config.allowModelCatalogPassthrough
-      || agentAllowlist.allow_model_catalog_passthrough;
-    const requirements = options?.modelRequirements && typeof options.modelRequirements === "object"
-      ? options.modelRequirements
-      : null;
-    const requirementsRecord = requirements ?? {};
-    const normalizedRequirements = {
-      agent_cli: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh" ? agentCli : undefined,
-      min_context_window: typeof requirementsRecord.min_context_window === "number"
-        ? requirementsRecord.min_context_window
-        : typeof requirementsRecord.context_window_tokens === "number" ? requirementsRecord.context_window_tokens : undefined,
-      require_tools: requirementsRecord.require_tools === true || requirementsRecord.supports_tools === true ? true : undefined,
-      require_streaming: requirementsRecord.require_streaming === true || requirementsRecord.supports_streaming === true ? true : undefined,
-      require_structured_output: requirementsRecord.require_structured_output === true || requirementsRecord.supports_structured_output === true ? true : undefined,
-      reasoning_effort: typeof requirementsRecord.reasoning_effort === "string" ? requirementsRecord.reasoning_effort : undefined,
-      max_input_cost_per_1m_usd: typeof requirementsRecord.max_input_cost_per_1m_usd === "number"
-        ? requirementsRecord.max_input_cost_per_1m_usd
-        : typeof requirementsRecord.max_input_cost_per_million === "number" ? requirementsRecord.max_input_cost_per_million : undefined,
-      max_output_cost_per_1m_usd: typeof requirementsRecord.max_output_cost_per_1m_usd === "number"
-        ? requirementsRecord.max_output_cost_per_1m_usd
-        : typeof requirementsRecord.max_output_cost_per_million === "number" ? requirementsRecord.max_output_cost_per_million : undefined,
-      allow_unverified: requirementsRecord.allow_unverified === true,
-      allow_passthrough: allowPassthrough || requirementsRecord.allow_passthrough === true,
-    } as never;
-    const eligible = selectModelsForRequirements(catalog, normalizedRequirements);
-    const eligibleIds = new Set(eligible.map((row) => row.model_id));
-    const isEligibleModelRef = (ref: string) => {
-      const id = resolveCredentialModelRef(settingsConfig, agentCli, ref);
-      const descriptor = catalog.find((row) => row.model_id === id);
-      if (!descriptor) return false;
-      const budget = providerModelBudget({ agentCli, model: ref, settingsConfig,
-        credentialProvider: String(llm!.provider), catalogJson: llm!.model_catalog_json, ...budgetInputs });
-      return selectModelsForRequirements(descriptorsWithClientBudgets({ descriptors: [descriptor], budgetForModel: () => budget }), normalizedRequirements).length > 0;
-    };
-    const fallbackModelRef = () => agentAllowlist.fallback_model_refs.find(isEligibleModelRef);
-    if (!selectedModel) selectedModel = fallbackModelRef() ?? null;
-    if (!selectedModel && requirements && eligible.length > 0) selectedModel = eligible[0]!.model_id;
-    // Prefer first account-configured model when RoleConfig/project default is empty (#679).
-    if (!selectedModel && configuredModelIds.length > 0) selectedModel = configuredModelIds[0]!;
-    if (selectedModel && catalog.length > 0 && !allowPassthrough && !isEligibleModelRef(selectedModel)) {
-      if (requestedModelRef) {
-        throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
-      }
-      const fallback = fallbackModelRef();
-      if (fallback) selectedModel = fallback;
-      else if (configuredModelIds.includes(selectedModel)) {
-        // selectedModel is an account-configured id; capability filter may have excluded it —
-        // keep it when no fallback exists (admit gate below still validates catalog membership).
-      } else if (configuredModelIds.length > 0 && !requestedModelRef) {
-        selectedModel = configuredModelIds[0]!;
-      }
-    }
-    if (requirements && selectedModel && !allowPassthrough && !isEligibleModelRef(selectedModel)) {
-      throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
-    }
-  }
+  const selectedModel = llm ? selectedCredentialModel : requestedModelRef ?? configuredDefaultModel ?? identity.model;
   const providerSnapshot = projectProviderRuntimeSnapshot({
     agentCli,
     roleModel: selectedModel,
@@ -679,7 +565,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       .filter((name) => /^[A-Z][A-Z0-9_]{0,127}$/.test(name))
       .map((name) => ({ name, source: "role_config" as const })),
     ...providerEnvRefs.map((name) => ({ name, source: "provider_profile" as const })),
-    { name: "DEEPSONAR_GATEWAY_TOKEN", source: "gateway" as const },
+    { name: "DEEPSONAR_GATEWAY_TOKEN_FILE", source: "gateway" as const },
   ].filter((item, index, all) => all.findIndex((candidate) => candidate.name === item.name && candidate.source === item.source) === index);
   const nativeOptions = {
     claude_code: agentCli === "claude-code"
@@ -818,6 +704,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     env_vars: cfg?.env_vars_json && typeof cfg.env_vars_json === "object" ? cfg.env_vars_json as Record<string, string> : {},
     env_keys: (cfg?.env_keys as string[]) ?? [],
     credential_id: (llm?.id as string) ?? null,
+    ...(credentialSelection ? { credential_selection: credentialSelection } : {}),
     credential_name: (llm?.name as string) ?? null,
     credential_provider: (llm?.provider as string) ?? null,
     ...(llm ? { gateway_provider_binding: freezeGatewayProviderBinding({
@@ -879,7 +766,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = DEFAULT_SNAPSHOT_DB,
   projectId: string,
   jobType: string,
-  options?: { existingCredentialId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
+  options?: { existingCredentialId?: string | null; existingJobId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);

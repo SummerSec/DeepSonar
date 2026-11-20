@@ -1,7 +1,3 @@
-import {
-  createSdkOpenSandboxClient,
-  readOpenSandboxPin,
-} from "@deepsonar/runtime-sandbox";
 import { config } from "./config.js";
 import { workerIsDispatchable } from "./domains/worker-nodes/model.js";
 import { listWorkerNodes, workerStaleAfterMs } from "./domains/worker-nodes/registry.js";
@@ -66,31 +62,43 @@ function defaultRuntime(): OpenSandboxHealthRuntime {
   };
 }
 
-async function defaultProbe(): Promise<void> {
-  const pin = readOpenSandboxPin({
-    sdk: config.runtime.openSandbox.sdkVersion || undefined,
-    serverImage: config.runtime.openSandbox.serverImage || undefined,
-    execdImage: config.runtime.openSandbox.execdImage || undefined,
-    egressImage: config.runtime.openSandbox.egressImage || undefined,
-  });
-  const client = createSdkOpenSandboxClient({
-    domain: config.runtime.openSandbox.domain,
-    apiKey: config.runtime.openSandbox.apiKey,
-    protocol: config.runtime.openSandbox.protocol,
-    useServerProxy: config.runtime.openSandbox.useServerProxy,
-    pin,
-  });
-  let timer: ReturnType<typeof setTimeout> | undefined;
+/** Same authenticated, read-only List contract as deploy/opensandbox/management-health.py.
+ * A healthy management API does not prove sandbox creation or clear the create circuit. */
+export async function probeOpenSandboxManagement(input: { domain: string; apiKey: string; protocol: string }): Promise<void> {
+  if (!input.apiKey.trim()) throw new Error("OPENSANDBOX_MANAGEMENT_KEY_MISSING");
   try {
-    await Promise.race([
-      client.list(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("opensandbox health timed out")), PROBE_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
+    const response = await fetch(`${input.protocol}://${input.domain}/v1/sandboxes?page=1&pageSize=1`, {
+      method: "GET", headers: { "OPEN-SANDBOX-API-KEY": input.apiKey }, redirect: "error",
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    if (response.status !== 200) {
+      await response.body?.cancel();
+      throw new Error("management List failed");
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("missing List response");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        size += chunk.value.length;
+        if (size > 65536) throw new Error("oversized List response");
+        chunks.push(chunk.value);
+      }
+    } finally {
+      await reader.cancel();
+    }
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { items?: unknown } | null;
+    if (!body || !Array.isArray(body.items)) throw new Error("invalid List response");
+  } catch {
+    throw new Error("OPENSANDBOX_MANAGEMENT_UNAVAILABLE");
   }
+}
+
+async function defaultProbe(): Promise<void> {
+  await probeOpenSandboxManagement(config.runtime.openSandbox);
 }
 
 export type OpenSandboxHealthRefreshOptions = {

@@ -1,3 +1,4 @@
+import { privateJobFixture } from '../packages/runtime-sandbox/src/private-job-fixture.ts';
 // Run with tsx: imports the actual production profile, never a parallel fixture profile.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -7,16 +8,21 @@ import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { shellQuote } from '../packages/runtime-sandbox/src/runtime-host.ts';
 import { buildDshProfilePatch, DSH_PROFILE, DSH_PROFILE_MANIFEST } from '../packages/runtime-sandbox/src/dsh-profile.ts';
 import { DSH_REQUEST_BUDGET_PLUGIN } from '../packages/runtime-sandbox/src/dsh-request-budget.ts';
+import { DSH_REQUEST_BUDGET_SOURCE as compiledHelper } from '../packages/runtime-sandbox/dist/dsh-request-budget.js';
 import { DSH_REQUEST_BUDGET_ARTIFACT_SHA256, DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from '../packages/runtime-sandbox/src/dsh-runtime-image-guard.ts';
 import { installDshRequestBudget } from './dsh-request-budget-install.mjs';
 
+const privateFixtures = [];
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const installRoot = resolve(process.env.DSH_REQUEST_BUDGET_INSTALL_ROOT ?? join(repository, 'agent-harness/dsh-runtime'));
 const bin = join(installRoot, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
 assert.equal(JSON.parse(await readFile(join(installRoot, 'node_modules/@deepseek-ai/dsh/package.json'), 'utf8')).version, '0.2.2-rc.1');
 const artifact = await installDshRequestBudget(installRoot, join(repository, 'packages/runtime-sandbox/src'));
+assert.equal(await readFile(join(dirname(artifact), 'deepsonar-request-budget.mjs'), 'utf8'), compiledHelper,
+  'raw TypeScript image installer and compiled Scheduler must produce identical helper bytes');
 // #979: execute the production preflight against the real, pinned installation,
 // without a model request. The installer embeds two absolute SDK paths: adapt
 // only those known literals to the canonical image path for the pinned-byte check,
@@ -73,6 +79,8 @@ let childGate = new Promise(resolve => { childGateResolve = resolve; });
 let heldAllowance = new Promise(resolve => { heldAllowanceResolve = resolve; });
 let cancelledAllowance = new Promise(resolve => { cancelledAllowanceResolve = resolve; });
 const server = createServer(async (req, res) => {
+  let check = 'authentication';
+  let roles = [], toolResults = [];
   try {
     assert.equal(req.headers.authorization, `Bearer ${token}`);
     if (req.url === '/gateway/_allowance') {
@@ -86,16 +94,30 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ remaining_tokens: remaining, policy_required: true }));
       return;
     }
+    check = 'request-route';
     assert.equal(req.url, '/gateway/chat/completions');
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks));
+    check = 'request-credentials';
+    for (const secret of [token, 'synthetic-control-token', 'synthetic-om-token']) {
+      assert.ok(!JSON.stringify(body).includes(secret), 'ordinary private-file output reached the model request');
+    }
+    check = 'model-usage-contract';
     assert.equal(body.model, model);
     assert.equal(body.stream_options.include_usage, true);
     const cap = body.max_tokens ?? body.max_completion_tokens;
     const grant = grants.find(value => !value.consumed && value.cap === cap);
     assert.ok(grant, `SDK request without its exact current allowance: ${cap}`);
     grant.consumed = true;
+    roles = body.messages.slice(-12).map(message =>
+      ['system', 'user', 'assistant', 'tool'].includes(message.role) ? message.role : 'other');
+    toolResults = body.messages.filter(message => message.role === 'tool').slice(-4).map(message => {
+      const content = JSON.stringify(message.content ?? null);
+      return { contentType: Array.isArray(message.content) ? 'array' : typeof message.content,
+        characters: content.length, hasCompletion: content.includes('synthetic-tool-completed'),
+        hasRedaction: content.includes('[REDACTED]') };
+    });
     const text = JSON.stringify(body.messages);
     const summary = text.includes('You are now acting as a compaction engine');
     const child = phase === 'subagent' && body.messages.some(message => message.role === 'user'
@@ -113,13 +135,23 @@ const server = createServer(async (req, res) => {
     let delta;
     if (tool) {
       const name = phase === 'tools' ? 'bash' : 'subagent';
+      check = 'tool-availability';
       assert.ok(body.tools.some(value => value.function.name === name));
+      // Native DSH scrubs inherited names containing TOKEN, including *_TOKEN_FILE.
+      // Supply fixture paths, never credential values, to the real shell tool.
+      const credentialPaths = Object.values(privateFixtures[0].environment);
+      const readCredentials = `for (const file of ${JSON.stringify(credentialPaths)}) console.log(require('node:fs').readFileSync(file,'utf8')); console.log('synthetic-tool-completed')`;
       const args = phase === 'tools'
-        ? { command: 'printf synthetic-tool-completed', description: 'Run isolated synthetic tool' }
+        ? { command: `${shellQuote(process.execPath)} -e ${shellQuote(readCredentials)}`, description: 'Read synthetic Job credential files' }
         : { description: 'Verify governed child request', prompt: 'synthetic-child-request' };
       delta = { role: 'assistant', tool_calls: [{ index: 0, id: `synthetic-${phase}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] };
     } else {
-      if (phase === 'tools') assert.ok(body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('synthetic-tool-completed')));
+      if (phase === 'tools') {
+        check = 'tool-completion';
+        assert.ok(body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('synthetic-tool-completed')));
+        check = 'tool-redaction';
+        assert.ok(body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('[REDACTED]')));
+      }
       delta = { role: 'assistant', content: summary ? '## Primary Request and Intent\n- Continue synthetic verification.\n## Current Work\n- Tools completed.\n## Next Step\n- Answer the user.' : child ? 'synthetic-child-completed' : `synthetic-${phase}-completed` };
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -129,8 +161,9 @@ const server = createServer(async (req, res) => {
     packet.usage = { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 };
     res.write(`data: ${JSON.stringify(packet)}\n\n`);
     res.end('data: [DONE]\n\n');
-  } catch (error) {
-    errors.push(error);
+  } catch {
+    // Fixed stages and shape/boolean projections only; never log body or tool text.
+    errors.push({ phase, check, roles, toolResults });
     res.writeHead(500).end('synthetic fixture assertion failed');
   }
 });
@@ -141,19 +174,21 @@ async function launch(baseUrl, label) {
   await mkdir(cwd, { recursive: true });
   await mkdir(profile, { recursive: true });
   await writeFile(join(profile, 'package.json'), DSH_PROFILE_MANIFEST);
-  const patch = buildDshProfilePatch({ cwd, home, governedRequestBudget: true, providerConfig: { providers: {
-    [provider]: { api: 'openai-completions', apiKeyEnv: 'DEEPSONAR_GATEWAY_TOKEN', baseURL: baseUrl,
+  const privateAuth = privateJobFixture({ gateway: token });
+  privateFixtures.push(privateAuth);
+  const patch = buildDshProfilePatch({ cwd, home, governedRequestBudget: true, privateCredentialPath: privateAuth.environment.DEEPSONAR_GATEWAY_TOKEN_FILE, credentialProvider: provider, providerConfig: { providers: {
+    [provider]: { api: 'openai-completions', apiKeyEnv: 'DEEPSONAR_JOB_GATEWAY', baseURL: baseUrl,
       models: [{ id: model, contextWindow: 100000, maxTokens: 4096, reasoningEfforts: false }] },
   } } });
   assert.equal(patch.split(DSH_REQUEST_BUDGET_PLUGIN).length, 2);
   // The only profile change is installation-root relocation; the production plugin tree/config is identical.
-  const relocated = patch.replace(DSH_REQUEST_BUDGET_PLUGIN, artifact);
-  assert.equal(relocated.replace(artifact, DSH_REQUEST_BUDGET_PLUGIN), patch);
+  const relocated = patch.replaceAll('/opt/deepsonar/dsh/', installRoot + '/');
+  assert.equal(relocated.replaceAll(installRoot + '/', '/opt/deepsonar/dsh/'), patch);
   await writeFile(join(profile, 'cordis.patch.yml'), relocated);
   await writeFile(join(home, 'cordis.patch.yml'), '[]\n');
   const processChild = spawn(process.execPath, [bin, '--profile', DSH_PROFILE], { cwd, stdio: ['pipe', 'pipe', 'pipe'], env: {
     PATH: process.env.PATH, HOME: home, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1',
-    DEEPSONAR_GATEWAY_TOKEN: token, DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl,
+    ...privateAuth.environment, DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl,
     DEEPSONAR_DSH_FROZEN_IDENTITY: JSON.stringify({ provider, id: model, api: 'openai-completions', baseUrl }),
   } });
   let stderr = '', buffer = '', sequence = 0;
@@ -198,6 +233,7 @@ async function launch(baseUrl, label) {
     const start = seen.length;
     await request('session/prompt', { sessionId: label, contentBlocks: [{ type: 'text', text }] });
     await wait(() => lastIdle > start);
+    assert.deepEqual(errors, [], 'synthetic DSH upstream assertions failed before phase outcome validation');
   };
   try { await request('initialize', { cwd, provider, model }); }
   catch (error) { clearTimeout(timeout); processChild.kill('SIGKILL'); throw error; }
@@ -218,6 +254,9 @@ try {
   assert.equal(requests.filter(value => value.phase === 'tools').length, 2);
   const toolEvents = runtime.seen.filter(record => record.method === 'session.event' && record.params.event.type === 'tool/result');
   assert.ok(toolEvents.some(record => JSON.stringify(record).includes('synthetic-tool-completed')));
+  for (const secret of [token, 'synthetic-control-token', 'synthetic-om-token']) {
+    assert.ok(toolEvents.some(record => JSON.stringify(record).includes(secret)), 'native tool must actually read each synthetic private file');
+  }
   const toolMessages = runtime.seen.filter(record => record.method === 'session.event' && record.params.sessionId === 'synthetic-main-session' && record.params.event.type === 'assistant/message');
   assert.equal(toolMessages.length, 2, 'tool request and continuation must both produce assistant messages');
   toolMessages.forEach(assertUsage);
@@ -264,5 +303,6 @@ try {
   console.log(`DSH real CLI production profile passed: tools, continuation, followup, native overflow compaction, child call, native shutdown cleanup (${requests.length} SDK HTTP requests)`);
 } finally {
   runtime?.kill(); cancelling?.kill(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  for (const fixture of privateFixtures) fixture.close();
   await rm(root, { recursive: true, force: true });
 }

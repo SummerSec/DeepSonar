@@ -270,10 +270,11 @@ export function UsageLedgerBoard({
                         rows={usage.models.map((item) => ({
                           key: `${item.workload}:${item.provider}:${item.model}`,
                           name: `${item.provider} / ${item.model}`,
-                          meta: `${item.workload === "observational_memory" ? "记忆后台" : "主任务"} · ${item.requests} 次请求`,
+                          meta: `${item.workload === "observational_memory" ? "记忆后台" : "主任务"} · ${item.requests} 次请求 · 未上报 ${item.not_reported} · 待对账 ${item.unknown}`,
                           tokens: item,
                         }))}
                       />
+                      <UnconfirmedModelUsage rows={usage.unconfirmed_models} />
                     </div>
                   </>
                 )}
@@ -283,6 +284,22 @@ export function UsageLedgerBoard({
         )}
       </div>
     </section>
+  );
+}
+
+export function UnconfirmedModelUsage({ rows }: { rows: DashboardUsage["unconfirmed_models"] }) {
+  if (!rows.length) return null;
+  return (
+    <UsageTable
+      title="用量待确认的模型（最多 8 项）"
+      empty=""
+      rows={rows.map((item) => ({
+        key: `${item.workload}:${item.provider}:${item.model}`,
+        name: `${item.provider} / ${item.model}`,
+        meta: `${item.workload === "observational_memory" ? "记忆后台" : "主任务"} · 未上报 ${item.not_reported} · 待对账 ${item.unknown} · ${item.requests} 次请求`,
+        tokens: item,
+      }))}
+    />
   );
 }
 

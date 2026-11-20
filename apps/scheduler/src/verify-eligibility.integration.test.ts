@@ -9,7 +9,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("waiting evidence round wakes Hub for never-verified pending then progresses after review/test evidence", async () => {
+  test("waiting evidence round wakes Hub for never-verified pending then progresses after review/test evidence", async (t) => {
     // Install the explicit URL before importing scheduler modules so a local
     // .env can never redirect this test to an existing database.
     process.env.DATABASE_URL = testDatabaseUrl;
@@ -20,6 +20,7 @@ if (!testDatabaseUrl) {
     const { buildReportInput, maybeDispatchReport, refreshTaskReport } = await import("./report.js");
     const {
       canvasFindingsConverged,
+      closeVerifyRound,
       createVerifyRound,
       evaluateAnalysisCompleteGate,
       evaluateFollowup,
@@ -39,6 +40,7 @@ if (!testDatabaseUrl) {
     let lowCanvasId: string | null = null;
     let lowFindingId: string | null = null;
     const thresholdFindingIds: string[] = [];
+    const noProgressFindingIds: string[] = [];
     const snapshot = { agent_cli: "claude-code", credential_id: null, credential_provider: null, model: null };
     try {
       await sql`
@@ -397,6 +399,66 @@ if (!testDatabaseUrl) {
         SELECT COUNT(*)::int AS "lowTaskReports" FROM task_reports WHERE canvas_id = ${lowCanvasId}`;
       assert.equal(Number(lowTaskReports), 2);
 
+      // #1133：从项目配置经真实 closeVerifyRound/SQL 验证关闭开关，正值仍用独立阈值 2。
+      for (const { maxNoProgressRounds, outcomes } of [
+        { maxNoProgressRounds: 0, outcomes: ["rework", "rework", "rework"] },
+        { maxNoProgressRounds: 1, outcomes: ["rework", "needs_human"] },
+        { maxNoProgressRounds: 5, outcomes: ["rework", "needs_human"] },
+      ]) {
+        await t.test(`closeVerifyRound respects maxNoProgressRounds=${maxNoProgressRounds}`, async () => {
+          await sql`UPDATE projects SET config_json = ${sql.json({ rules: {
+            minVerifySeverity: "high", maxVerificationRounds: 0, maxNoProgressRounds,
+          } })} WHERE id = ${projectId}`;
+          const subjectId = randomUUID();
+          noProgressFindingIds.push(subjectId);
+          const [node] = await sql`
+            INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+            VALUES (${canvasId}, 'finding', 'No-progress regression', 'pending', '{}') RETURNING id`;
+          await sql`
+            INSERT INTO findings (id, project_id, job_id, node_id, fingerprint, title, severity, profile)
+            VALUES (${subjectId}, ${projectId}, ${originJobId}, ${node.id as string},
+              ${`no-progress-${subjectId}`}, 'No-progress regression', 'high', 'security.vulnerability')`;
+          let firstMissing: unknown;
+          for (const [index, expectedOutcome] of outcomes.entries()) {
+            const verifyJobId = randomUUID();
+            const result = await sql.begin(async (tx) => {
+              await tx`
+                INSERT INTO jobs (id, project_id, canvas_id, finding_id, type, status, agent_snapshot_json)
+                VALUES (${verifyJobId}, ${projectId}, ${canvasId}, ${subjectId}, 'verify_finding', 'succeeded', ${tx.json(snapshot)})`;
+              await tx`
+                INSERT INTO finding_verification_rounds (finding_id, attempt, verify_job_id, status)
+                VALUES (${subjectId}, ${index + 1}, ${verifyJobId}, 'running')`;
+              await tx`UPDATE findings SET verify_status = 'verifying' WHERE id = ${subjectId}`;
+              return closeVerifyRound(tx as unknown as typeof sql, verifyJobId, {
+                jobStatus: "succeeded", proposedVerdict: "confirmed",
+              });
+            });
+            assert.equal(result.outcome, expectedOutcome);
+            assert.equal(result.forceHub, expectedOutcome === "rework");
+            const [round] = await sql`
+              SELECT status, final_outcome, finished_at, evidence_snapshot_json->'decision_missing' AS missing
+              FROM finding_verification_rounds WHERE verify_job_id = ${verifyJobId}`;
+            assert.equal(round.status, expectedOutcome);
+            assert.equal(round.final_outcome, expectedOutcome);
+            assert.ok(round.finished_at);
+            assert.ok(Array.isArray(round.missing) && round.missing.length > 0);
+            if (index === 0) firstMissing = round.missing;
+            assert.deepEqual(round.missing, firstMissing, "连续轮次的门禁缺项保持相同并真实落库");
+            const [subject] = await sql`SELECT verify_status FROM findings WHERE id = ${subjectId}`;
+            assert.equal(subject.verify_status, expectedOutcome === "rework" ? "pending" : "needs_human");
+            const blockers = await sql`
+              SELECT status, body_json FROM canvas_nodes WHERE canvas_id = ${canvasId}
+                AND node_type = 'human' AND body_json->>'kind' = 'verification_blocker'
+                AND body_json->>'finding_id' = ${subjectId}`;
+            assert.equal(blockers.length, expectedOutcome === "needs_human" ? 1 : 0);
+            if (expectedOutcome === "needs_human") {
+              assert.equal(blockers[0]!.status, "open");
+              assert.equal((blockers[0]!.body_json as Record<string, unknown>).reason, "verify_no_progress");
+            }
+          }
+        });
+      }
+
     } finally {
       await sql.begin(async (tx) => {
         if (lowFindingId && lowCanvasId) {
@@ -409,6 +471,8 @@ if (!testDatabaseUrl) {
           await tx`DELETE FROM canvases WHERE id = ${lowCanvasId}`;
         }
         await tx`DELETE FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
+        await tx`DELETE FROM finding_verification_rounds WHERE finding_id = ANY(${noProgressFindingIds}::uuid[])`;
+        await tx`DELETE FROM findings WHERE id = ANY(${noProgressFindingIds}::uuid[])`;
         await tx`DELETE FROM findings WHERE id = ${findingId}`;
         await tx`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
         await tx`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;

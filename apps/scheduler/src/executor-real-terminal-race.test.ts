@@ -1,3 +1,5 @@
+import { after } from "node:test";
+import { privateJobFixture } from "./private-job.fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
@@ -7,6 +9,8 @@ import { call, completionReady, completionDiagnosticEvidence, frozenRuntimeBudge
 import { getAgentCliRuntimeAdapter, resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
+const privateAuth = privateJobFixture();
+after(() => privateAuth.close());
 const done = { summary: "Completion accepted during the bounded offline race." };
 const humanGuidance = {
   question: "请确认是否能提供隔离测试环境的凭据引用。",
@@ -444,7 +448,7 @@ test("executeReal: Pi allowance completion refusal reaches the original accepted
     let start!: (event: unknown, ctx: unknown) => void;
     let stream!: (...args: unknown[]) => AsyncIterable<{ error: { errorMessage: string } }>;
     module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl,
-      DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" })({
+      ...privateAuth.environment })({
       on: (_event: string, handler: typeof start) => { start = handler; },
       registerProvider: (_provider: string, config: { streamSimple: typeof stream }) => { stream = config.streamSimple; },
     });

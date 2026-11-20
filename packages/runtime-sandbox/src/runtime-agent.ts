@@ -38,12 +38,16 @@ import { MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE } from "./model-
 import { PI_MAIN_REQUEST_BUDGET_PATH, PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
 import { createRuntimeWarningReporter, type RuntimeWarning } from "./runtime-warnings.js";
 import { classifyCliSessionResumeError, runtimeErrorText } from "./runtime-error-classification.js";
+import { materializePrivateJobFiles, privateCredentialEnvironment } from "./private-job-files.js";
+import { nativeHumanSessionPath, projectNativeHumanSession, type NativeHumanSession } from "./human-session-import.js";
 
 export { classifyCliSessionResumeError, type CliSessionResumeReason } from "./runtime-error-classification.js";
 export type ReasoningEffort = string;
 export { createStdinCloseKiller, DEFAULT_STDIN_CLOSE_KILL_MS } from "./runtime-stdin-close.js";
 
 export interface RealAgentSpec {
+  /** Scheduler-owned, bounded and filtered conversation from an acknowledged human checkpoint. */
+  humanSession?: NativeHumanSession;
   provider: "claude-code" | "dsh" | "pi";
   adapter?: AgentCliRuntimeSnapshot;
   /** Scheduler-frozen unified Provider/CLI launch contract (#613/#617). */
@@ -60,6 +64,8 @@ export interface RealAgentSpec {
   /** DSH tool presentation preset; ignored by other providers. */
   dshTaskMode?: "standard" | "ptc";
   env: Record<string, string>;
+  /** Host-only current Job authentication. Never forwarded as CLI environment values. */
+  privateCredentials?: { controlToken?: string; gatewayToken?: string; observationalMemoryToken?: string };
   /** Hub 为本 Job 生成的本轮任务消息，等价于各 CLI 的非交互 prompt/input。 */
   input: string;
   /** 平台不可变安全边界；与 /workspace 下的角色说明文件分层。 */
@@ -1238,6 +1244,38 @@ export function mapCliEvent(
 }
 
 export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
+  const credentials = spec.privateCredentials;
+  const files: Record<string, string> = {};
+  if (credentials?.controlToken) files["control-token"] = credentials.controlToken;
+  if (credentials?.gatewayToken) files["gateway-token"] = credentials.gatewayToken;
+  if (credentials?.observationalMemoryToken) files["om-token"] = credentials.observationalMemoryToken;
+  const workspaceFiles = { ...(spec.workspaceFiles ?? {}) };
+  for (const [filename, content] of Object.entries(workspaceFiles)) {
+    if (filename.endsWith("/.pi/agent/auth.json")) {
+      if (files["pi-auth.json"] && files["pi-auth.json"] !== content) throw new Error("PRIVATE_PI_AUTH_MISMATCH");
+      files["pi-auth.json"] = content;
+      delete workspaceFiles[filename];
+    }
+  }
+  if (!Object.keys(files).length) return runAgentWithPrivateFiles(host, spec);
+  const privateFiles = await materializePrivateJobFiles(host, files);
+  try {
+    await ensureRuntimeHome(host);
+    if (files["pi-auth.json"]) await privateFiles.installPiAuth();
+    await privateFiles.check();
+    const env = privateCredentialEnvironment(spec.env, privateFiles);
+    return await runAgentWithPrivateFiles(host, { ...spec, env, workspaceFiles });
+  } finally {
+    await privateFiles.cleanup().catch(() => {
+      // The dispatcher still destroys this Job's sandbox. Cleanup diagnostics
+      // cannot replace an accepted terminal result or the original startup error.
+      try { spec.onWarning?.({ code: "private_credentials_cleanup_failed", detail: "sandbox_teardown_required" }); }
+      catch { /* A diagnostic callback has no authority over the Job outcome. */ }
+    });
+  }
+}
+
+async function runAgentWithPrivateFiles(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
   const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
   if (spec.agentRuntimeLaunch) {
@@ -1291,7 +1329,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   const cliEnv = runtimeCliEnv(spec.env);
   const piMainBudgetEnabled = spec.provider === "pi" && Boolean(cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
   if (cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
-    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
+    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN_FILE) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
     await host.run(`mkdir -p -- ${shellQuote(RUNTIME_DIR)}`);
     await host.uploadFile(MODEL_REQUEST_POLICY_SOURCE, MODEL_REQUEST_POLICY_PATH);
   }
@@ -1356,10 +1394,23 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       piExtensions: [...(spec.piExtensions ?? []), ...(piMainBudgetEnabled ? [PI_MAIN_REQUEST_BUDGET_PATH] : [])],
     } : {}),
   };
-  let exec = await adapter.start(adapterContext);
+  const importedSession = spec.humanSession;
+  let importedSessionFile: string | undefined;
+  if (importedSession) {
+    if (!spec.contextIdentity || !spec.onSessionIdentity || importedSession.cli !== adapter.id || importedSession.version !== adapter.version)
+      throw new Error("HUMAN_NATIVE_SESSION_IDENTITY");
+    const checked = projectNativeHumanSession(importedSession.cli, importedSession.version, importedSession.sessionId, importedSession.content);
+    if (checked.status !== "supported" || !checked.content) throw new Error("HUMAN_NATIVE_SESSION_FORMAT");
+    importedSessionFile = nativeHumanSessionPath(importedSession);
+    await host.run(`mkdir -p -- ${shellQuote(path.posix.dirname(importedSessionFile))}`);
+    await host.uploadFile(redactSecretValues(checked.content, secretValues), importedSessionFile);
+    await spec.onSessionIdentity({sessionId:importedSession.sessionId,
+      ...(spec.provider === "pi" ? {sessionFile:importedSessionFile} : {})});
+  }
+  let exec = importedSession ? await adapter.resume({...adapterContext, sessionId:importedSession.sessionId,sessionFile:importedSessionFile}) : await adapter.start(adapterContext);
   const adapterState: AdapterRuntimeState = {
-    sessionId: spec.contextIdentity?.session_id,
-    sessionFile: spec.contextIdentity?.session_file,
+    sessionId: importedSession?.sessionId ?? spec.contextIdentity?.session_id,
+    sessionFile: importedSessionFile ?? spec.contextIdentity?.session_file,
     finalText: undefined as string | undefined,
     model: spec.dshProvider?.model ?? spec.model,
     modelProvider: spec.dshProvider?.provider,
@@ -1381,7 +1432,8 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     adapterState.streamedText = undefined;
     adapterState.streamedReasoning = undefined;
   };
-  let piDriver = spec.provider === "pi" ? new PiRpcDriver(exec, resetPiTurn) : undefined;
+  let piDriver = spec.provider === "pi" ? new PiRpcDriver(exec, resetPiTurn,
+    importedSession && importedSessionFile ? {sessionId:importedSession.sessionId,sessionFile:importedSessionFile} : undefined) : undefined;
   const writeInitialMessage = async (content: string) => {
     if (piDriver) await piDriver.initialize(content, assertPiResumeAllowed);
     else await writeEncoded(adapter.encodeInput(content, adapterState));
@@ -1419,8 +1471,8 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   let progressBuffer = "";
   let stdoutBuffer = "";
   let finalText = "";
-  let sessionId = "";
-  let sessionFile = "";
+  let sessionId = importedSession?.sessionId ?? "";
+  let sessionFile = importedSessionFile ?? "";
   let runError: string | undefined;
   let terminalOutcome: RealAgentResult["terminalOutcome"];
   let runnerErrorSource: RealAgentResult["runnerErrorSource"];
@@ -1453,6 +1505,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     }
   };
   const observeSessionIdentity = async (observed: { sessionId?: string; sessionFile?: string }) => {
+    if (importedSession && observed.sessionId && observed.sessionId !== importedSession.sessionId) throw new Error("HUMAN_NATIVE_SESSION_IDENTITY_CHANGED");
     const next = mergeObservedSessionIdentity(observedSessionIdentity, observed);
     if (!next) return;
     observedSessionIdentity = next;

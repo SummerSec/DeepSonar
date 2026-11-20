@@ -5,6 +5,14 @@
 
 #1133 的自动 Hub worker intent 与人工 Finding 补证入口，在冻结网络策略后、运行配置前统一调用设备要求冻结。显式 adb/hdc 要求重核项目 opt-in、已配置 rig、已启用 transport、独占及出网授权，进入 Job snapshot 后由既有设备租约入口再次授权并发放短期 grant。无显式设备要求的目标继续远端路径，镜像缺 SDK 或固件不用于推断设备能力。人工无定论事务、CAS 和审计见[接口边界](09-interface-specs.md#人工结束技术验证1133)。
 
+## Verify 补证无进展开关（#1133）
+
+用户于 2026-11-20 确认本轮收口无进展循环、关闭开关与人工技术收口。可信早期运行能力判定尚未交付，由后续增强 [#1179](https://github.com/SummerSec/DeepSonar/issues/1179) 跟踪。
+
+`closeVerifyRound` 复用 `rulesForProject` 的项目 → 全局 → env 有效规则。`maxNoProgressRounds=0` 关闭本入口的缺项重复刹车，正值继续采用独立阈值 `VERIFY_NO_PROGRESS_LIMIT=2`，第二次连续相同 `decision_missing` 回弹时收口 `needs_human`。每轮决策缺项仍写入 round 快照，业务轮数上限、证据门与基础设施失败处理继续分别执行。现有 PostgreSQL 生命周期夹具通过真实 `closeVerifyRound` 事务与轮次读写，覆盖 0 下连续三轮保持 `rework` 且无人工 blocker，以及 1、5 下第二轮收口并记录 `verify_no_progress`。回归接 `pnpm ci:integration:verify-eligibility`，本地未执行，最终 SHA Actions 待验。规则分类见[用量说明](../USAGE_LIMITS.md)。
+
+#1119/#1046 的[创建故障与管理探测](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)把服务故障计数与重放准入分别判断。真实 create 阶段 5xx 和目录创建 500 计入现有进程内熔断，未知效果仍拒绝重放。Scheduler 以带 `OPEN-SANDBOX-API-KEY` 的只读 List 探测管理面，List 成功与实际创建成功分别观测。半开单名额、出站前 episode 重查和过期准入延期沿用[默认不限调度配额的恢复边界](#默认不限的调度配额1123)。
+
 ## 行锁竞争后的认领唤醒
 
 Dispatcher 的有界候选页先读身份，再以 `SKIP LOCKED` 取得 Canvas/Job 行锁。锁定复读结果少于选中的候选时，现有 [schedule-wake](../../apps/scheduler/src/schedule-wake.ts) 绑定登记一个可合并的延后认领唤醒；候选也可能已变化或消失，下一轮仍完整复读与核验，不凭旧身份授予执行资格。重试延迟以代码为准，不新增用户设置。
@@ -45,7 +53,9 @@ runner `onEvent` 进入现有 normalized Evidence，关闭码缺失明确未知�
 
 ## 人工等待后的新执行（#1074）
 
-人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
+人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件、累计已 ACK 文字决定和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
+
+业务文件清单 v2 仅恢复所有者读写及原所有者执行能力（0600/0700），上传前校验路径、上传后核验内容与权限，失败阻断启动。
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -73,16 +83,19 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 1. Hub 的 Provider/model 需求、项目默认模型和全局角色模型按既有优先级形成模型要求；模型按每张凭据的 CLI 方言核对配置清单。
 2. Hub 显式 CLI 是硬约束，与候选冲突继续 `provider_credential_cli_mismatch`（`permanent_failure`）；不能通过改选 CLI 绕过排他绑定。
-3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致，则先保持自身仍有余量的恢复身份（冻结快照已授权的那个凭据），再保持仍有余量的显式缺省凭据，其余候选按 `metadata.max_concurrent` 与该负载投影算出的余量比例排序（未设置视为不限），并列时依次按显式缺省凭据、恢复身份、同项目非终态 Job 数、历史分配数、稳定 ID 决定；因此「缺省满额时选了同伴并冻结、缺省之后腾出容量」不会把恢复 Job 换回缺省而制造 `SNAPSHOT_STALE`（#1096），恢复身份自身满额或已不在授权池内时仍让位给缺省，全部候选都达上限时仍取缺省且不新增失败码。这个余量只用于偏好排序，不占位、不放宽授权、也不改变准入判定；跨 provider 的候选等价判据仍需决策，其他歧义仍返回 `provider_credential_multi_match`。
-4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
-5. 池选择是现有 Job 历史的只读投影，readiness 读取该投影。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，在当前合法候选内按第 3 项的同质池余量规则选择。恢复仍核验冻结身份及累计预算。运行中不换 key、不因故障重选账号或重置预算。
-6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
+3. 唯一候选决定 CLI，但仍须核对容量。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好。模型/CLI/协议硬约束先行，再排除明确失败的健康候选。`health_status=unknown` 仍可用，`error` 且 `health_error_category=unknown` 沿用 #491 的目录探测限制语义，不能据此证明推理不可用。其他 `error` 暂时排除，全部不可用返回 `provider_credential_health_unavailable`。冻结账号健康失败同样返回该错误，不换账号。显式名单内删除、停用或不可访问引用仍先使整次解析以 `provider_credential_allowlist_stale` 拒绝。
+4. 显式授权白名单内 Provider、CLI 和解析后上游模型一致的多账号池，合法冻结身份保持原账号。新 Job 先排除满额候选，再按三层最小剩余容量比例降序、全项目真实凭据在途数升序、同项目历史分配数升序、同项目当前非终态分配数升序、默认账号优先、稳定 ID 选择。未设上限的层剩余比例为 1，显式 0 为 0。冻结身份满额时等待原账号，不转同伴。默认账号仅在前述负载条件相同时优先。异身份池仍保留显式默认账号硬选，不自动跨身份轮换。缺少白名单或模型/Provider 身份不同且没有明确默认或恢复身份时，继续 `provider_credential_multi_match`。不同 Provider 的同名模型及同 base_url 没有受治理等价证明，不能自动池化。
+5. #1078 的凭据、模型、Provider 三层容量共用 Dispatcher 的计数函数及全项目 `claimed` / `provisioning` / `running` 账本。凭据和模型限制读取 `public_metadata_json.max_concurrent` / `model_concurrency`，模型键使用真实上游 ID，Provider 限制复用全局 `maxConcurrentByProvider` 及同一纯解析函数。`pending` / `waiting_human` 只参与项目分配排序，不占执行名额。恢复重验用内核持有的当前 Job ID 在同一查询中排除自身，其他 Job 仍计入。选择不预留名额，readiness 不消费轮次。真正领取仍在 `DISPATCH_CLAIM_ADVISORY_KEY` 锁内复核，历史身份漂移、累计预算和未知效果门保持。运行中不换 key、不因故障重选账号或重置预算。升级离线预检仍仅消费导出的配置，不加载数据库或 core 初始化，不验证实时容量，并在 `not_checked` 明示 `live_credential_capacity`。
+6. 严格解析及 readiness 在全部可选身份满额时返回 `provider_credential_all_at_capacity`，分类为 `transient_retryable`，下一步为等待容量。Job 创建显式允许持久化等待决定并保存 pending Job，防止派发输入丢失。Dispatcher 在暂停、定时、依赖及项目 FIFO 资格满足后观测容量阻挡，合并为单个 5 秒定时器，按既有每页最多 500 个候选的领取扫描重读，释放后再由领取锁准入。没有最大排队时长契约，pending 不因创建时间或执行 timeout 到期而取消。此计时器不创建预约或等待预算。
+7. 新快照的可选 `credential_selection` 使用 `deepsonar.credential-selection/v1`，记录观测时刻、选中 UUID、选择理由、稳定错误码，以及经过授权/模型/协议硬约束后的候选 UUID、健康状态、跳过原因及三层容量。健康排除的候选容量为 null。`reason=capacity_wait` 仅表示创建时容量已满的观测，其他选择的 `error_code=null`，不携带等待起点、deadline 或执行预算。 显式同质池全满时，新 Job 优先冻结凭据、模型、Provider 三层均未显式设为 0 的暂满账号；没有此类账号时保留原等待选择，恢复与异质池默认身份不轮换。该投影没有密钥、原生设置、账号名或地址。已有快照不补写，负载释放及恢复重验不改写原冻结决定。
+
+回归接既有 `ci:unit:capability-pack`、`ci:unit:runtime-cleanup`、并发单测、`ci:integration:role-config` 与 `ci:integration:dispatch-limits`。覆盖管理 API 配额、跨项目占用、三层零上限、健康与失效引用、默认仅平局优先、连续十次创建及领取不超 3/10 上限、冻结恢复、全满保留 pending、无通知释放唤醒和并发 claim。`role-config` 另接凭据选择及 Job 插入后的事务回滚、并发创建、重复 ingress 拒绝与释放后领取的组合回归，核对三层占用和原冻结审计。新增回归尚未执行，最终提交的 Actions 结果另验。跨 Provider 受治理等价映射、版本/能力约束与迁移规则尚未交付，当前 ModelDescriptor/FrozenModelDescriptor 没有此类身份字段。用户于 2026-11-20 确认本轮收口同 Provider 容量、恢复身份与创建回滚修复，跨 Provider 自动选择另由增强 [#1178](https://github.com/SummerSec/DeepSonar/issues/1178) 跟踪。
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
 
 #914 的项目账号引用 DELETE/设置事务、scope 过滤及双向竞态回归见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)；运行期停用和既有失效引用仍按上述解析门 fail closed，#929 已另行交付默认账号选择与修复导航，不自动重跑或改写旧快照。
 
-#1002 P1-8 的选择、默认优先、异质池拒绝与恢复偏好回归接 `pnpm ci:unit:capability-pack`；隔离 PostgreSQL 中真实创建两个 Job、不同测试 key 的 Gateway 请求、独立用量归属、停用拒绝与快照不变接现有 `pnpm ci:integration:role-config`。该夹具使用 loopback 上游，不证明厂商模型质量或容量；最终 SHA Actions 待验。没有新增 UI、配置开关、池状态或分配账本；使用现有账号白名单及默认账号清除操作。
+#1002 P1-8 的选择、默认平局优先、异质池拒绝与恢复偏好回归接 `pnpm ci:unit:capability-pack`；隔离 PostgreSQL 中真实创建两个 Job、不同测试 key 的 Gateway 请求、独立用量归属、停用拒绝与快照不变接现有 `pnpm ci:integration:role-config`。该夹具使用 loopback 上游，不证明厂商模型质量或容量；最终 SHA Actions 待验。没有新增 UI、配置开关、池状态或分配账本；使用现有账号白名单及默认账号清除操作。
 
 实现入口：[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[快照组装](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 
@@ -145,9 +158,9 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 
 ## 项目知识工作链（#752 与项目批次）
 
-普通 Job 从冻结目录按需搜索、读取 Memory 或拉取 Skill，实际使用生成稳定 usage_ref；有可读来源或反馈证据时可请求整理。Scheduler 创建独立 work/Canvas，依次分派 maker、按 case×arm 分离的 trial Job、evaluator 与 reviewer；这些都是现有 Job/Attempt/沙箱路径，不新增模型执行者，也不触发业务 Hub/Report。trial 只得到相应 arm 和 stage audience 的输入，发布共享资产 JSON 并以 `emit_fact` 引用其版本/hash，评测读取实际 Evidence；缺环境、证据或终态异常保持 `needs_eval`/阻断，不以文字结论晋升。审查通过才在事务中切 active 指针；失败或重启依持久 assignment/receipt 恢复，未知外部效果不自动重放。项目治理 recipe 在 work 创建时冻结，修订仅进入下一 work。详细状态和预算见[项目知识专题](../PROJECT_KNOWLEDGE.md)。现有集成测试使用构造的 Job/Attempt 与 Evidence，未证明真实沙箱或模型效果。
+普通 Job 从冻结目录按需搜索、读取 Memory 或拉取 Skill，实际使用生成稳定 usage_ref；需要立即请求整理时显式调用获授权的 request_project_knowledge。record_knowledge_feedback 只持久反馈并返回 {usage_ref,state:"recorded"}，不返回 work_ref 或创建 work；成功业务 Job 的已接受反馈经普通来源登记纳入 collector，冻结精确反馈、target 基线和 evidence refs，与其他来源一同受项目积累/间隔/停发门约束，不因反馈扩展原 Job 整理权限。显式请求保留原授权、预算、幂等语义，不被自动策略替代。Scheduler 仅在显式请求或 collector 准入后创建独立 work/Canvas，依次分派 maker、按 case×arm 分离的 trial Job、evaluator 与 reviewer；这些都是现有 Job/Attempt/沙箱路径，不新增模型执行者，也不触发业务 Hub/Report。trial 只得到相应 arm 和 stage audience 的输入，发布共享资产 JSON 并以 `emit_fact` 引用其版本/hash，评测读取实际 Evidence；缺环境、证据或终态异常保持 `needs_eval`/阻断，不以文字结论晋升。审查通过才在事务中切 active 指针；失败或重启依持久 assignment/receipt 恢复，未知外部效果不自动重放。项目治理 recipe 在 work 创建时冻结，修订仅进入下一 work。详细状态和预算见[项目知识专题](../PROJECT_KNOWLEDGE.md)。现有集成测试使用构造的 Job/Attempt 与 Evidence，未证明真实沙箱或模型效果。
 
-成功业务 Job 结算时只在原事务/savepoint登记来源元数据，不在终态事务创建模型Job。后续既有Dispatcher tick调用[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)，[knowledge-wake](../../apps/scheduler/src/knowledge-wake.ts)从durable未处理登记和pending work计算同一调度器的唤醒。每批至多4个来源Job、合计19个来源输入（Fact、Evidence及其授权资产）及一个可选governor；项目已有非旧自动pending/running work时等待，不再准入批次。这不新增全部显式请求的唯一约束。CAS准备在短事务外，项目行锁下重新验证项目、最新成功Attempt、冻结权限、来源/hash、未结算效果和已处理状态，再原子写work与逐源collected链接。超大/失权/未知效果等永久拒绝写持久skipped，不热重试；阻断批次不重建来源来重置预算。旧knowledge:auto work仍不自动推进，历史预览仍是只读。决策见[ADR 0023](adr/0023-project-knowledge-collection.md)。
+成功业务 Job 结算时只在原事务/savepoint 登记来源元数据，不创建模型 Job。既有 Dispatcher tick 调用 [collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)，按 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 的项目准入查询判断至少 4 个未处理来源或最老来源等待 24 小时、自动批次间隔 24 小时、无非旧自动 pending/running work，且未连续两自动批次无 active/retired 产出。成功为 completed 且关联提案 active/retired，blocked/cancelled 及无该产出的 completed 均计失败；从持久 work/proposal 历史跨重启推导，成功显式整理可恢复，时间与治理 hash 变化不清零。每次扫描最多 32 个候选，在 19 原始 inputs+可选 governor 上限内继续装箱，放不下者保留，不永久消费。CAS 在短事务外准备，项目行锁下用同一准入查询重验，再核验项目/Attempt/冻结权限/来源 hash/效果/处理状态/重试代次/governor，原子写 work 与逐源 collected 链接；准备前 ready 不能代替锁内判断。永久拒绝及瞬态准备失败耗尽才跳过，保留原退避与未知效果对账。[knowledge-wake](../../apps/scheduler/src/knowledge-wake.ts) 与 activity 复用同一数据库准入规则，考虑积累、冷却和未来 retry，停发或繁忙项目不生成立即过期的采集 wake，不新增轮询执行器。旧 knowledge:auto work 不自动推进，不改历史或重置预算，历史预览只读；细则见[专题](../PROJECT_KNOWLEDGE.md#来源登记与项目批量整理)，本轮最终 SHA Actions 待验。
 
 自动批次全部阶段及所有trial在[创建期隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)中取stage工具与已准入权限交集、关闭出网、清角色预加载Skill/MCP等能力和共享资产；trial再清空普通知识目录。每例task_inputs显式选定相同的冻结共同材料，各arm只差基线/候选；不复制全部来源，不把原结论或评分规则当共同答案，rubric只给eval/review。非reuse评测为完整6×2，预留evaluator/reviewer两Job；trial发布实际资产版本/hash再引用Evidence。target comparator fail可进入对照，candidate target及全部安全组须pass，retire的目标arm为without，unexecuted一律不得激活。治理hash变化使旧work blocked，不改历史或放宽权限；合成/替身回归已接线但本轮Actions尚未运行，未合并、未部署、未执行真实模型收益验证。详细状态、工具与证据规则以[专题](../PROJECT_KNOWLEDGE.md#工作与结算)为准。
 
@@ -322,9 +335,26 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 
 项目 FIFO 队列在 Dispatcher 的全局 claim 事务锁内判定执行资格，实际 claim 后才标记当前占位。当前 Canvas 的内部 Job 可并行，下一 Canvas 等待治理 root/report 收敛、所有活动 Job 结束与效果结清。失败/取消保留队首并暂停，恢复必须确认当前失败项 ID；手动暂停只挡后续任务。Scheduler 按有界公平轮转对账，重启读取持久记录，硬重试在同一 claim 事务中以新条目 ID 排尾，保留暂停且废止旧失败项确认。Finding 报告再生成不创建任务新代际；终态 membership 保持不变，原报告权限和资源门不变。详见[队列专题](../PROJECT_TASK_QUEUE.md)。
 
+## 历史 failed 新 Job 与预算归属
+
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
+
 ## 人工等待显式释放 FIFO 席位（#1074）
 
 默认人工等待占位，用户显式让位将唯一等待 Canvas 标记 yielded。回复保存事务持有 claim advisory 锁、Canvas→Job→Attempt→请求锁，原子回队尾一次，保留完成代际。轮到且无其他 active、队列未暂停才由原 requeueJob 准入取得席位和唯一后继，Dispatcher 再验。暂停、取消、断点过期、撤权、退出/效果/预算门仍生效，详见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+
+## 持久跨项目公平领取（#1118）
+
+Scheduler 在现有 claim advisory 锁内，先按项目 dispatch_last_served、项目 ID 选项目，再按项目内 priority 降序、created_at 与 Job ID 升序选候选。成功 claim 与项目服务序号更新同事务，序号来自 global_settings 的单调计数器。多个 Scheduler 与重启共用数据库顺序。资格拒绝不计服务，项目内优先级不能持续压住其他合格项目。
+
+每个 tick 最多访问 32 个项目，每次最多读取 64 个 pending Job。global_settings 保存项目扫描位置，projects 保存项目内 keyset 位置，分页跨 tick 与进程推进。扫描项目行遇锁时同样推进全局扫描位置，保留已有延后唤醒。成功领取后重新从最久未服务项目比较，未成功项目在当前 tick 内跳过。下一轮继续未完成页，页尾后回绕，资格变化会重新核验。项目内优先级限定在沿当前持久游标的扫描顺序。前页任务在扫描期间恢复资格或新增高优先级任务时，当前页仍先完成，回绕或成功领取重置游标后重新考虑前缀。此暂时越过前缀的行为保证有限页能持续推进。有限项目持续合格、席位持续释放且行锁最终可用时，所有项目都能获得服务。该条件性活性不构成吞吐或等待时间 SLA。
+
+锁序沿用 claim advisory → Canvas → Project → budget root → Job → Attempt。Project 以 SKIP LOCKED 取得写锁后重核 active，取消、暂停、FIFO、图资格、账号、CLI、预算 owner、lease 与 provision 门保持权威。每个事务最多成功领取一个 Job，提交释放已有锁后再发现下一项目。扫描只读身份提示，不提前占用轮次。没有新增配置、管理 API 或 Web 操作。
+
+真实 PostgreSQL 回归接入 `pnpm ci:integration:dispatch-limits`，由现有 gate-db-core 调用。覆盖五项目两席位连续补充高优先级、项目内优先级、513 个无资格候选后的可领取任务、37 项目跨 tick 扫描、项目资格变化、独立进程重启与并发正常 claim。仅 Actions 运行，最终 SHA 结果另验。
+
+
+#1032 A1 的三 CLI 私有文件创建、认证读取、清理及现行 P0-1 / P1-3 / P1-4 覆盖边界见[凭据文件通道](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。同 UID 工具可读，A2 未交付。Actions 尚待本 PR 最终提交验收。
 
 ## 默认不限的调度配额（#1123）
 
@@ -332,10 +362,14 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 
 项目 `maxConcurrentJobs=null` 清除覆盖并继承全局，全局也不限时项目不限。0 暂停该项目后续领取。有限项目配额仍与有限全局上限取最小值。全局不限仅解除对应三个闸，Canvas、FIFO、暂停、图资格、Provider、账号、模型、CLI、lease、镜像及 provision 准入继续核验。计数仍为 claimed/provisioning/running，改配额不终止运行任务。仅内部剩余槽计算使用 Infinity，数据库和 JSON API 使用 null。
 
-OpenSandbox 创建熔断半开恢复独立限制为一个 claimed/provisioning 席位，观察到半开的进程在现有 claim advisory 锁内重新读取熔断状态并按数据库计数核验。出站创建前同步核验 episode，过期准入沿现有未出站 provision 重排路径重新等待，使用 provision_admission_deferred 记录且不消耗或重置真实创建失败重试额度，并保留效果归属与 never_started 证明。全局配额不限仍保留该恢复门，失败探针重新打开熔断并保留其他 pending Job。熔断状态仍在进程内，多副本或重启没有共享熔断 episode 的保证。
+OpenSandbox 创建熔断半开恢复独立限制为一个 claimed/provisioning 席位，观察到半开的进程在现有 claim advisory 锁内重新读取熔断状态并按数据库计数核验。出站创建前同步核验 episode，过期准入沿现有未出站 provision 重排路径重新等待，使用 provision_admission_deferred 记录且不消耗或重置真实创建失败重试额度，并保留效果归属与 never_started 证明。全局配额不限仍保留该恢复门，当前失败探针重新打开熔断并保留其他 pending Job，下一次冷却翻倍至配置上限，成功恢复后重置。受控环境参数与默认退避序列见 [OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)，真实 Dispatcher/受控 runner create 500 到 PG 暂停认领组合回归接既有 `pnpm ci:integration:recovery`，最终 SHA Actions 待验。熔断状态仍在进程内，多副本或重启没有共享熔断 episode 的保证。
 
 设置页全局配额独立保存，仅提交用户修改的字段。输入来自已存值，生效值单独读取，避免把环境变量或其他硬上限推导值固化为覆盖。清空保存写 null，输入非法时显示错误并禁用保存。项目设置和项目列表将 null 展示为“不限”。该交互沿用配置中心入口，额外增加三个清空按钮及独立保存操作，以明确用户何时解除限制。行为证据来自 dispatch-limits、升级预检、配置子进程与 Web DOM 回归，最终 SHA Actions 待验。
 
 ## PTY 清理事实与精确对账（#1143）
 
 宿主专用回调把退出/连接观察与 PTY DELETE 结果绑定原 Job/Attempt/Sandbox/Process/agent_run 审计引用。先提交旧凭据撤销与 pending 清理记录，再以相同锁序重核并有界销毁；持久指定 worker 的消失确认才可结清精确原终态 marker。失败、超时和提交失败保留归属，独立 unknown 与历史无证据 run 不泛清。实际 caller 与 OOM 未核实分开，现有 Job 详情按需展示证据和恢复限制。详细字段、测试入口及剩余范围见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。
+
+## 普通文本凭据出口（#1032）
+
+DSH 的注册后 SDK 出口在认证身份核对后投影 context，再调用原 SDK，主调用和直接服务共用此入口。Claude 的 start/resume settings 注入 image-owned PostToolUse helper，沿原内容 hash 准入。成功工具的 tool_response 按原结构和类型递归精确替换 main、Control、OM 值，保留工具 ID 与认证并继续。失败工具、钩子失败和其他漏网值仍由现有本地请求准入在任何上游 I/O 前拒绝，不改已形成请求。投影不证明 telemetry 或原始本地历史已清除；成功续轮与拒绝反例须由固定 CLI 回归证明。具体源码、A1 验收映射与 Actions 接线集中在[Gateway 专题](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)，最终 SHA 尚待验收。

@@ -205,7 +205,9 @@ if (!testDatabaseUrl) {
       // #1096：缺省满额时选了余量同伴并冻结，缺省之后腾出容量也不得把恢复 Job 换回缺省。
       const defaultFull = await insertCredential("claude-code");
       const frozenPeer = await insertCredential("claude-code");
-      await sql`UPDATE credentials SET meta_json=${sql.json({ max_concurrent: 1 })} WHERE id=${defaultFull}`;
+      const quotaUpdate = await app.inject({ method: "PATCH", url: `/credentials/${defaultFull}`,
+        payload: { metadata: { max_concurrent: 1 } } });
+      assert.equal(quotaUpdate.statusCode, 200, quotaUpdate.payload);
       await setConfig({ enabled_credential_ids: [defaultFull, frozenPeer], default_agent_cli: "claude-code",
         default_model_ref: "claude-sonnet-4", default_credential_id: defaultFull });
       const fillDefault = await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
@@ -214,8 +216,247 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET status='succeeded' WHERE id=${fillDefault[0].id}`;
       assert.equal((await snapshot({ existingCredentialId: frozenPeer })).credential_id, frozenPeer,
         "a freed default must not rotate the frozen recovery identity");
-      assert.equal((await snapshot()).credential_id, defaultFull, "without a frozen identity the freed default is used again");
+      assert.equal((await snapshot()).credential_id, frozenPeer, "new Jobs rank equal spare capacity by historical assignments before default");
+      await t.test("#1078 capacity follows global running occupancy, not project pending/human assignments", async () => {
+        // A global credential can be occupied by another project. Its quota is saved through the management API.
+        await sql`UPDATE credentials SET project_id=NULL WHERE id=${defaultFull}`;
+        const otherCanvas = randomUUID();
+        await sql`INSERT INTO canvases (id, project_id, title, target_json)
+          VALUES (${otherCanvas}, ${otherProjectId}, '1078 other project', ${sql.json({})})`;
+        const occupyingJob = randomUUID();
+        await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+          VALUES (${occupyingJob}, ${otherProjectId}, ${otherCanvas}, 'audit', 'running',
+            ${sql.json({ credential_id: defaultFull } as never)})`;
+        assert.equal((await snapshot()).credential_id, frozenPeer, "another project's running Job fills the global credential");
+        for (const status of ["pending", "waiting_human", "succeeded"]) {
+          await sql`UPDATE jobs SET status=${status} WHERE id=${occupyingJob}`;
+          assert.equal((await snapshot({ existingCredentialId: defaultFull })).credential_selection?.candidates
+            .find(row => row.credential_id === defaultFull)?.capacity?.credential.in_use, 0, `${status} does not occupy a dispatch slot`);
+        }
+        for (const status of ["pending", "waiting_human"]) {
+          const queuedJob = randomUUID();
+          await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+            VALUES (${queuedJob}, ${projectId}, ${canvasId}, 'audit', ${status},
+              ${sql.json({ credential_id: defaultFull } as never)})`;
+        }
+        assert.equal((await snapshot({ existingCredentialId: defaultFull })).credential_selection?.candidates
+          .find(row => row.credential_id === defaultFull)?.capacity?.credential.in_use, 0,
+        "local pending and human-wait Jobs do not consume running capacity");
+        assert.equal((await snapshot({ existingCredentialId: defaultFull })).credential_id, defaultFull);
+        for (const status of ["claimed", "provisioning", "running"]) {
+          await sql`UPDATE jobs SET status=${status} WHERE id=${occupyingJob}`;
+          assert.equal((await snapshot()).credential_id, frozenPeer, `${status} occupies the same credential slot as admission`);
+        }
+        const { resolveCurrentSnapshotForExistingJob } = await import("./domains/job-control/rerun.js");
+        const frozenDefault = await snapshot({ existingCredentialId: defaultFull, existingJobId: occupyingJob });
+        await sql`UPDATE jobs SET status='succeeded' WHERE id=${occupyingJob}`;
+        const ownJobId = randomUUID();
+        await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+          VALUES (${ownJobId}, ${projectId}, ${canvasId}, 'audit', 'claimed', ${sql.json(frozenDefault as never)})`;
+        const [ownJob] = await sql`SELECT * FROM jobs WHERE id=${ownJobId}`;
+        assert.equal((await resolveCurrentSnapshotForExistingJob(sql, ownJob)).credential_id, defaultFull,
+          "post-claim recovery excludes its own occupied slot without excluding other Jobs");
+        assert.equal((await snapshot()).credential_id, frozenPeer, "new Jobs still count that claimed slot");
+        await sql`UPDATE jobs SET status='succeeded' WHERE id=${ownJobId}`;
+        assert.equal((await snapshot({ existingCredentialId: frozenPeer })).credential_id, frozenPeer,
+          "freeing the global default keeps the still-authorized frozen peer");
+      });
+      await t.test("#1078 health, model/Provider capacity and frozen audit use real SQL", async () => {
+        await sql`UPDATE credentials SET health_status='error',health_error_category='network' WHERE id=${defaultFull}`;
+        const healthy = await snapshot();
+        assert.equal(healthy.credential_id, frozenPeer);
+        assert.equal(healthy.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.skipped, "health_error");
+        await sql`UPDATE credentials SET health_status='ok', public_metadata_json=${sql.json({ model_concurrency: { "claude-sonnet-4": 1 } })}
+          WHERE id=${defaultFull}`;
+        const activeId = randomUUID();
+        await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+          VALUES(${activeId},${projectId},${canvasId},'audit','running',
+            ${sql.json({ credential_id: defaultFull, credential_provider: "anthropic", model: "sonnet", upstream_model: "claude-sonnet-4" })})`;
+        const modelSelected = await snapshot();
+        assert.equal(modelSelected.credential_id, frozenPeer);
+        assert.deepEqual(modelSelected.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.capacity?.blocked_by, ["model"]);
+        const [beforeRules] = await sql`SELECT rules_json FROM global_settings WHERE id='global'`;
+        try {
+          await sql`UPDATE global_settings SET rules_json=${sql.json({ ...beforeRules.rules_json, maxConcurrentByProvider: { anthropic: 1 } })} WHERE id='global'`;
+          const waiting = await snapshot();
+          assert.equal(waiting.credential_selection?.error_code, "provider_credential_all_at_capacity");
+          const { createJob } = await import("./core.js");
+          const queued = (await createJob({ projectId, canvasId, type: "audit" })).job!;
+          assert.equal(queued.status, "pending", "capacity does not drop the Job");
+          const decision = structuredClone(queued.agent_snapshot_json.credential_selection);
+          assert.equal(decision.error_code, "provider_credential_all_at_capacity");
+          assert.equal(JSON.stringify(decision).includes("757-fake-test-secret"), false);
+          await sql`UPDATE jobs SET status='succeeded' WHERE id=${activeId}`;
+          const [stored] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${queued.id}`;
+          assert.deepEqual(stored.agent_snapshot_json.credential_selection, decision, "release never rewrites the frozen decision");
+        } finally {
+          await sql`UPDATE global_settings SET rules_json=${sql.json(beforeRules.rules_json)} WHERE id='global'`;
+          await sql`UPDATE jobs SET status='succeeded' WHERE id=${activeId}`;
+        }
+      });
+      await t.test("#1078 fallback model capacity matches the final frozen upstream model", async () => {
+        const fallbackSettings = { env: { ANTHROPIC_MODEL: "primary", ANTHROPIC_DEFAULT_SONNET_MODEL: "fallback" } };
+        await sql`UPDATE credentials SET settings_config_json=${sql.json(fallbackSettings)},
+          public_metadata_json=${sql.json({ model_concurrency: { fallback: 0 } })} WHERE id=${defaultFull}`;
+        await sql`UPDATE credentials SET settings_config_json=${sql.json(fallbackSettings)}, public_metadata_json='{}'::jsonb
+          WHERE id=${frozenPeer}`;
+        await setConfig({ enabled_credential_ids: [defaultFull, frozenPeer], default_agent_cli: "claude-code",
+          default_credential_id: defaultFull, fallback_model_refs: ["fallback"] });
+        const selected = await snapshot();
+        assert.equal(selected.credential_id, frozenPeer);
+        assert.equal(selected.upstream_model, "fallback");
+        assert.equal(selected.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.capacity?.model.id, "fallback");
+        assert.deepEqual(selected.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.capacity?.blocked_by, ["model"]);
+        await sql`UPDATE credentials SET public_metadata_json='{}'::jsonb,
+          settings_config_json=${sql.json({ ...fallbackSettings, context_window_tokens: 4096 })} WHERE id=${defaultFull}`;
+        await sql`UPDATE credentials SET settings_config_json=${sql.json({ ...fallbackSettings, context_window_tokens: 16384 })}
+          WHERE id=${frozenPeer}`;
+        const capable = await snapshot({ modelRequirements: { min_context_window: 8192 } });
+        assert.equal(capable.credential_id, frozenPeer, "an incompatible peer cannot reject the capable candidate");
+        assert.equal(capable.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.skipped, "model_incompatible");
+      });
       await sql`UPDATE credentials SET status='disabled' WHERE id IN (${defaultFull}, ${frozenPeer})`;
+      await t.test("#1078 ten sequential creations use both 3/10 pools and concurrent claims respect their limits", async () => {
+        const { createJob } = await import("./core.js");
+        const { claimPendingJobs } = await import("./dispatcher.js");
+        const ids = [await insertCredential("claude-code"), await insertCredential("claude-code")];
+        const limits = [3, 10];
+        const [beforeRules] = await sql`SELECT rules_json FROM global_settings WHERE id='global'`;
+        // Only this isolated test database is affected. Earlier fixture Jobs cannot compete for slots.
+        await sql`UPDATE jobs SET status='succeeded' WHERE status IN ('pending','claimed','provisioning','running','waiting_human')`;
+        try {
+          await sql`UPDATE global_settings SET rules_json=${sql.json({ ...beforeRules.rules_json,
+            maxGlobalJobs: 20, maxJobsPerProject: 20, maxConcurrentProvisioning: 20,
+            maxConcurrentByAgentCli: { "claude-code": 20 }, maxConcurrentByProvider: { anthropic: 20 },
+          })} WHERE id='global'`;
+          for (const [index, id] of ids.entries()) {
+            await sql`UPDATE credentials SET public_metadata_json=${sql.json({ max_concurrent: limits[index] })} WHERE id=${id}`;
+          }
+          await setConfig({ enabled_credential_ids: ids, default_credential_id: ids[0],
+            default_agent_cli: "claude-code", default_model_ref: "claude-sonnet-4" });
+          const selected: string[] = [];
+          for (let index = 0; index < 10; index++) {
+            const job = (await createJob({ projectId, canvasId, type: "audit" })).job!;
+            selected.push(String(job.agent_snapshot_json.credential_id));
+            const competing = await Promise.all([claimPendingJobs(), claimPendingJobs()]);
+            assert.deepEqual(competing.flat().map(row => row.id), [String(job.id)], "exactly one claimant acquires each new Job");
+            const active = await sql`SELECT agent_snapshot_json->>'credential_id' AS credential_id, count(*)::int AS count
+              FROM jobs WHERE status IN ('claimed','provisioning','running') GROUP BY agent_snapshot_json->>'credential_id'`;
+            for (const [slot, id] of ids.entries()) {
+              assert.ok(Number(active.find(row => row.credential_id === id)?.count ?? 0) <= limits[slot]!, "claim never exceeds a credential limit");
+            }
+          }
+          assert.deepEqual([...new Set(selected)].sort(), [...ids].sort(), "both authorized accounts are used");
+          assert.equal(selected.filter(id => id === ids[0]).length, 3);
+          assert.equal(selected.filter(id => id === ids[1]).length, 7);
+        } finally {
+          await sql`UPDATE jobs SET status='succeeded' WHERE agent_snapshot_json->>'credential_id'=ANY(${ids}::text[])`;
+          await sql`UPDATE global_settings SET rules_json=${sql.json(beforeRules.rules_json)} WHERE id='global'`;
+        }
+      });
+      await t.test("#1078 full homogeneous pool freezes a releasable peer rather than a paused default", async () => {
+        const { createJob } = await import("./core.js");
+        const { claimPendingJobs } = await import("./dispatcher.js");
+        const paused = await insertCredential("claude-code");
+        const busy = await insertCredential("claude-code");
+        await setConfig({ enabled_credential_ids: [paused, busy], default_credential_id: paused,
+          default_agent_cli: "claude-code", default_model_ref: "claude-sonnet-4" });
+        await sql`UPDATE credentials SET public_metadata_json='{"max_concurrent":1}' WHERE id=${busy}`;
+        try {
+          for (const metadata of [{ max_concurrent: 0 }, { model_concurrency: { "claude-sonnet-4": 0 } }]) {
+            await sql`UPDATE credentials SET public_metadata_json=${sql.json(metadata as never)} WHERE id=${paused}`;
+            const occupying = (await createJob({ projectId, canvasId, type: "audit" })).job!;
+            assert.equal(occupying.agent_snapshot_json.credential_id, busy);
+            assert.ok((await claimPendingJobs()).some(row => row.id === occupying.id));
+            const queued = (await createJob({ projectId, canvasId, type: "audit" })).job!;
+            assert.equal(queued.status, "pending");
+            assert.equal(queued.agent_snapshot_json.credential_id, busy);
+            const decision = queued.agent_snapshot_json.credential_selection;
+            assert.equal(decision.reason, "capacity_wait");
+            assert.equal(decision.selected_credential_id, busy);
+            assert.ok(!(await claimPendingJobs()).some(row => row.id === queued.id), "the peer is still full");
+            await sql`UPDATE jobs SET status='succeeded' WHERE id=${occupying.id}`;
+            assert.ok((await claimPendingJobs()).some(row => row.id === queued.id), "the queued Job can use the released slot");
+            const [stored] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${queued.id}`;
+            assert.deepEqual(stored.agent_snapshot_json.credential_selection, decision, "claim does not rewrite the frozen route");
+            await sql`UPDATE jobs SET status='succeeded' WHERE id=${queued.id}`;
+          }
+        } finally {
+          await sql`UPDATE jobs SET status='succeeded' WHERE agent_snapshot_json->>'credential_id'=ANY(${[paused, busy]}::text[])`;
+        }
+      });
+      await t.test("#1078 concurrent creation, transaction rollback and duplicate ingress preserve claim capacity", async () => {
+        const { createJob, createJobInTransaction } = await import("./core.js");
+        const { claimPendingJobs } = await import("./dispatcher.js");
+        const credentialId = await insertCredential("claude-code");
+        const [beforeRules] = await sql`SELECT rules_json FROM global_settings WHERE id='global'`;
+        await sql`UPDATE jobs SET status='succeeded' WHERE status IN ('pending','claimed','provisioning','running','waiting_human')`;
+        await sql`UPDATE credentials SET public_metadata_json='{"max_concurrent":1}' WHERE id=${credentialId}`;
+        await setConfig({ enabled_credential_ids: [credentialId], default_credential_id: credentialId,
+          default_agent_cli: "claude-code", default_model_ref: "claude-sonnet-4" });
+        try {
+          await sql`UPDATE global_settings SET rules_json=${sql.json({ ...beforeRules.rules_json,
+            maxGlobalJobs: 8, maxJobsPerProject: 8, maxConcurrentProvisioning: 8,
+            maxConcurrentByAgentCli: { "claude-code": 8 }, maxConcurrentByProvider: { anthropic: 1 },
+          })} WHERE id='global'`;
+          const beforeCapacity = (await snapshot()).credential_selection?.candidates[0]?.capacity;
+          assert.equal(beforeCapacity?.credential.in_use, 0);
+          const rolledBackIngress = randomUUID();
+          const rollbackFailure = new Error("1078 rollback after credential selection and Job insertion");
+          let rolledBackJobId = "";
+          await assert.rejects(() => sql.begin(async tx => {
+            const prepared = await createJobInTransaction(tx as unknown as typeof sql,
+              { projectId, canvasId, type: "audit", ingressKey: rolledBackIngress });
+            rolledBackJobId = String(prepared.created.id);
+            assert.equal(prepared.snapshotWithKnobs.credential_id, credentialId);
+            assert.equal((await tx`SELECT id FROM jobs WHERE id=${rolledBackJobId}`).length, 1);
+            throw rollbackFailure;
+          }), error => error === rollbackFailure);
+          assert.ok(rolledBackJobId, "failure occurs after a real Job insert");
+          assert.equal((await sql`SELECT id FROM jobs WHERE id=${rolledBackJobId}
+            OR (project_id=${projectId} AND ingress_key=${rolledBackIngress})`).length, 0);
+          assert.deepEqual((await snapshot()).credential_selection?.candidates[0]?.capacity, beforeCapacity,
+            "rollback leaves all three running-capacity counts unchanged");
+
+          const ingressKeys = [rolledBackIngress, randomUUID()];
+          const created = await Promise.all(ingressKeys.map(ingressKey =>
+            createJob({ projectId, canvasId, type: "audit", ingressKey })));
+          const jobs = created.map(result => {
+            assert.equal(result.duplicated, false);
+            assert.ok(result.job);
+            assert.equal(result.job.status, "pending");
+            assert.equal(result.job.agent_snapshot_json.credential_id, credentialId);
+            return result.job;
+          });
+          const decisions = new Map(jobs.map(job => [String(job.id), structuredClone(job.agent_snapshot_json.credential_selection)]));
+          assert.deepEqual((await snapshot()).credential_selection?.candidates[0]?.capacity, beforeCapacity,
+            "concurrent pending creations do not reserve running slots");
+          const duplicate = await createJob({ projectId, canvasId, type: "audit", ingressKey: ingressKeys[0] });
+          assert.equal(duplicate.duplicated, true);
+          assert.equal(duplicate.job, null);
+          assert.equal((await sql`SELECT id FROM jobs WHERE project_id=${projectId}
+            AND ingress_key=ANY(${ingressKeys}::text[])`).length, 2);
+
+          const claims = (await Promise.all([claimPendingJobs(), claimPendingJobs()])).flat();
+          assert.equal(claims.length, 1, "concurrent claimers share the single credential and Provider slot");
+          const [active] = await sql`SELECT count(*)::int AS count FROM jobs
+            WHERE status IN ('claimed','provisioning','running')
+              AND agent_snapshot_json->>'credential_id'=${credentialId}`;
+          assert.equal(active.count, 1);
+          assert.deepEqual(await claimPendingJobs(), []);
+          await sql`UPDATE jobs SET status='succeeded' WHERE id=${claims[0]!.id}`;
+          const released = await claimPendingJobs();
+          assert.equal(released.length, 1, "the remaining pending Job claims the released capacity");
+          assert.notEqual(released[0]!.id, claims[0]!.id);
+          const stored = await sql`SELECT id,agent_snapshot_json FROM jobs
+            WHERE project_id=${projectId} AND ingress_key=ANY(${ingressKeys}::text[])`;
+          for (const job of stored) assert.deepEqual(job.agent_snapshot_json.credential_selection, decisions.get(String(job.id)),
+            "rollback, duplicate ingress and claims preserve each original selection receipt");
+        } finally {
+          await sql`UPDATE jobs SET status='succeeded' WHERE agent_snapshot_json->>'credential_id'=${credentialId}`;
+          await sql`UPDATE global_settings SET rules_json=${sql.json(beforeRules.rules_json)} WHERE id='global'`;
+        }
+      });
       const { HubIntentPayload } = await import("@deepsonar/shared-types");
       const intent = { from: [], role: "audit", description: "Inspect the test fixture", prompt: "Inspect this isolated test fixture and record structured evidence." };
       assert.equal(HubIntentPayload.safeParse(intent).success, true);

@@ -47,6 +47,27 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
     const query = input.join("?").replace(/\s+/gu, " ").trim();
     const state = current();
     const rows = (): Row[] => {
+      // This fixture has one Job, which owns and executes its entire budget scope.
+      if (query === "SELECT COALESCE(budget_owner_job_id,id) AS root FROM jobs WHERE id=?") {
+        assert.deepEqual(values, [jobId]);
+        return [{ root: jobId }];
+      }
+      if (query === "SELECT id FROM jobs WHERE id=? OR budget_owner_job_id=? ORDER BY created_at,id") {
+        assert.deepEqual(values, [jobId, jobId]);
+        return [{ id: jobId }];
+      }
+      if (query === "SELECT id,budget_execution_job_id FROM jobs WHERE id=? FOR UPDATE") {
+        assert.deepEqual(values, [jobId]);
+        return [{ id: jobId, budget_execution_job_id: jobId }];
+      }
+      if (query === "SELECT root.id FROM jobs j JOIN jobs root ON root.id=COALESCE(j.budget_owner_job_id,j.id) WHERE j.id=? AND COALESCE(root.budget_execution_job_id,root.id)=j.id") {
+        assert.deepEqual(values, [jobId]);
+        return [{ id: jobId }];
+      }
+      if (query === "SELECT job_id,event_id,payload_json FROM events WHERE job_id=ANY(?::uuid[]) AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq") {
+        assert.deepEqual(values, [[jobId]]);
+        return [];
+      }
       if (query.startsWith("SELECT effect_id FROM job_attempt_effects")) return state.effects.filter((effect) =>
         (effect.resource_identity_json as Row)?.job_token_id === values[2] && (effect.intent_json as Row)?.gateway_request_id === values[3]);
       if (query.startsWith("SELECT status FROM jobs")) return [{ status: "running" }];
@@ -116,6 +137,7 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
         effect.settlement_json = values[1];
         return [{ effect_kind: "gateway_model_request" }];
       }
+      if (query.startsWith("UPDATE job_attempt_effects e SET status='settled'")) return [];
       if (query.startsWith("SELECT job_id FROM job_attempts")) return [{ job_id: jobId }];
       if (query.startsWith("UPDATE job_tokens SET used_tokens")) { state.usedTokens += Number(values[0]); return []; }
       if (query.startsWith("SELECT COUNT(*)::int AS n")) return [{ n: 0 }];

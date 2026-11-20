@@ -118,6 +118,25 @@ if (!testDatabaseUrl) {
       const operatorSession = await issueUserSession(operatorUser.id);
       const operatorUserHeaders = { authorization: `Bearer ${operatorSession.token}` };
 
+      // Historical continuation uses the normal operator scope and exact project boundary.
+      {
+        const jobId = randomUUID(), requestId = randomUUID();
+        await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json)
+          VALUES(${jobId},${ownProjectId},'audit','failed','{}'::jsonb)`;
+        const payload = { mutation_id: randomUUID(), request_id: requestId, expected_revision: 0,
+          reply: { message_id: randomUUID(), body: "Check authorized saved progress" } };
+        const viewer = await createUser({ username: `viewer-${randomUUID().slice(0,8)}`, password: `${randomUUID()}A!`, role: "viewer" });
+        const viewerSession = await issueUserSession(viewer.id);
+        const denied = await inject("POST", `/jobs/${jobId}/continuations`, { authorization: `Bearer ${viewerSession.token}` }, payload);
+        assert.equal(denied.statusCode, 403, denied.payload);
+        const cross = await insertToken("history-cross", ["jobs:control"], otherProjectId);
+        assert.equal((await inject("POST", `/jobs/${jobId}/continuations`, cross.headers, payload)).statusCode, 403);
+        const operator = await inject("POST", `/jobs/${jobId}/continuations`, operatorUserHeaders, payload);
+        assert.equal(operator.statusCode, 404, operator.payload);
+        assert.equal(JSON.parse(operator.payload).error_code, "HUMAN_REQUEST_NOT_FOUND", "ordinary operator reaches admission without admin");
+        await sql`DELETE FROM jobs WHERE id=${jobId}`;
+      }
+
       // ----- P0 token subset / ownership -----
       {
         const escalate = await inject("POST", "/tokens", projectTok.headers, {

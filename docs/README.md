@@ -1,16 +1,24 @@
 # DeepSonar 文档索引
 
-#1133 的[人工技术收口](architecture/09-interface-specs.md#人工结束技术验证1133)新增受权限、CAS、持久幂等与同事务审计保护的无定论终结轮次，并补齐[设备要求冻结](DEVICE_ACCESS.md)的自动和人工补证入口。既有 #1138 无进展刹车继续复用，最终 SHA Actions 待验。
+#1133 的[人工技术收口](architecture/09-interface-specs.md#人工结束技术验证1133)新增受权限、CAS、持久幂等与同事务审计保护的无定论终结轮次，并补齐[设备要求冻结](DEVICE_ACCESS.md)的自动和人工补证入口。既有 #1138 无进展刹车继续复用，其关闭开关与真实 SQL 回归见[运行时规则](architecture/06-runtime-view.md#verify-补证无进展开关1133)，最终 SHA Actions 待验。
+
+#1082 的[最终用量与安全形态诊断](MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
+
+#1118 的[持久跨项目公平领取](architecture/06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。
+
+#1119/#1046 的[OpenSandbox 创建熔断与鉴权管理探测](OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)记录目录创建 500 计数、受控熔断参数与半开有界退避、真实 Dispatcher/受控 runner 到 PostgreSQL 暂停认领回归、重放证据门、三种 Compose/Scheduler 的统一 List 契约、试运行包与隔离 smoke 接线，以及 #1176 覆盖审计。最终 SHA 的 Actions 待验。
 
 NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁竞争后的认领唤醒)覆盖临时跳过后没有新通知的恢复，保留默认轮询关闭；真实 PostgreSQL 红测已复现，修复最终 SHA 的 Actions 另验，不把它当作历史 CI 持锁者的证据。
 
 #1088 的 [OpenSandbox PTY 退出诊断](AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)区分有效退出帧、WebSocket 中断与宿主主动终止，经原 Evidence 通路保留有界脱敏关闭码和错误原因；不新增重连或任务重跑权限。最终 SHA Actions 待验，历史现场底层原因仍未知。
 
-#1074 的[人工断点续做](HUMAN_CONTINUATION.md)覆盖持久请求、有限封存与资源回收、晚回复保存和受治理的新执行；当前模式为 structured 新会话，原生 Session 与历史 failed Job 关联接续另列剩余范围。最终 SHA Actions 待验。
+#1074 的[人工断点续做](HUMAN_CONTINUATION.md)覆盖持久请求、有限封存与资源回收、晚回复保存和受治理的新执行；受限原生导入、历史 failed 显式新 Job、原预算链和 FIFO 让位已组合接线，支持范围见专题。最终 SHA Actions 待验。
 
-#1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入；原字节 Gateway 守卫不变。映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，同 UID 隔离、诊断/审计与生产验证未交付。
+业务文件清单 v2 仅恢复所有者读写及原所有者执行能力（0600/0700），上传前校验路径、上传后核验内容与权限，失败阻断启动。
 
-#1002 P1-8 与 #1078/#1096 的[同质账号池选择](architecture/06-runtime-view.md#凭据与-cli-解析757)在当前授权的同 Provider/CLI/模型候选内，先保留仍有余量的冻结恢复身份，再选择仍有余量的默认账号，其余按并发余量及稳定并列规则选择。readiness 读取负载投影，恢复继续核验冻结身份与预算。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
+#1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入。五处 Gateway 凭据拒绝的专用计数、安全审计及 Claude 稳定失败的真实 Job/Attempt SQL 回归见[拒绝观测与持久化](MODEL_GATEWAY_TRANSPARENCY.md#凭据拒绝的审计留痕1032-观测片)，映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，A2 同 UID 身份隔离保持远期边界。
+
+#1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，合法原 Job 的冻结恢复身份先于默认，满额时等待原账号，保留预算门；#1078 新 Job 按余量比例、真实在途数、历史及当前分配数、默认平局优先、稳定 ID 排序；三层容量、临时健康过滤、全满保留 pending 与无秘密冻结审计对齐现有 Dispatcher，5 秒合并唤醒不引入排队取消期限，跨 Provider 治理等价仍未交付，详见同一运行时视图；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
 > 同步日期：2026-11-20
@@ -291,7 +299,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 #1018 的[项目任务队列](PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
-项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈，以及积累/复用只读投影见[专题](PROJECT_KNOWLEDGE.md)。[ADR0023](architecture/adr/0023-project-knowledge-collection.md)在用户本轮授权内取代0021的项目批处理暂缓限制，保留历史预览只读和旧knowledge:auto禁用；无schema或整链token预算变化。审计绑定来源Attempt/manifest摘要，trial隔离评分输入，完整6×2与候选/安全组硬门保持。collector/闭环/activity/快照隔离、behavior-policy与Web回归已接Actions入口；`6d96df59` 的主CI与Reverse专项已通过，同步main后的候选仍须独立验收，未合并未部署。模型反馈不是收益认证，注意力和质量收益未知；证据见[专题验收记录](PROJECT_KNOWLEDGE.md#验证与运维)。
+项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈见[专题](PROJECT_KNOWLEDGE.md)。2026-11-16 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量与自动准入规则：4 来源或等待 24 小时、自动间隔 24 小时，扫描 32 候选但仍限 19 inputs+可选 governor，放不下者保留。连续两自动批次无 active/retired 提案产出停发，从持久 work/proposal 历史跨重启推导；显式成功整理可恢复，时间/hash 变化不清零。本轮评审补充：record_knowledge_feedback 仅持久反馈并返回 {usage_ref,state:"recorded"}，无 work_ref、不另启 work；成功 Job 的已接受反馈经普通来源登记/collector 冻结精确反馈/target 基线及 evidence refs，同受自动门与原权限约束，显式 request_project_knowledge 保持原契约。collector 事务重验、wake 和 activity 共用准入规则；原知识页以新增 collection 展示状态与下次时间，不新增通知、设置、恢复按钮或轮询。来源、旧任务/预算、最小 Job 预算拦截和完整独立评测不变，历史预览仍只读，旧 knowledge:auto 仍不自动推进；无 schema 或整链 token 预算变化。最终 SHA Actions 待验，本机不运行测试/build/typecheck，不部署或重跑历史生产任务；历史验收见[专题记录](PROJECT_KNOWLEDGE.md#验证与运维)，真实模型与注意力收益未验证。
 
 自动清理归属与共享资产只读探针的 #307 评审补齐见[运行时视图](architecture/06-runtime-view.md#自动清理归属与共享资产只读探针307-评审补齐)；扫描清理不删除未知 owner，guest 探针不冒充远端来源证明，最终 SHA Actions 待验。
 
@@ -299,6 +307,10 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 
 #1074 的[项目队列显式人工让位](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)已接 UI/API、持久决定与回复原子回队尾，默认保留席位，首片限定单一人工等待。最终 SHA Actions 另验。
 
+#1124 的[显式历史候选库回收](../deploy/GENERATION_GC.md)说明两 shell 入口、恢复保留集、权限与 OID 证明、宿主 receipt 和 Actions 隔离 PG 验收边界。
+
+#1032 A1 三 CLI 凭据文件通道及[普通文本出口](MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)明确 DSH SDK 精确投影、Claude 成功工具 PostToolUse 投影及失败/漏网值本地拒绝的范围，telemetry 和原始本地历史未承诺清除，A2 仍待决定。新增单测、真实 SDK/CLI 回归已接既有工作流，最终 SHA Actions 尚待验收。
+
 #1126 的[Job 恢复提示](architecture/05-building-blocks.md#job-恢复提示1126)显示运行结论、折叠技术诊断，并同时核对当前动作和权限；真实组件回归已接现有 Actions，最终 SHA 待验。
 
-#1143 [PTY 清理事实与精确对账](AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存 DELETE 真实结果和宿主 caller，以先撤销凭据、再受管销毁并重核原 owner 的链路收口。独立 unknown 与旧无证据 run 保留，自动整 Job 恢复未交付，最终 SHA Actions 待验。
+#1143 [PTY 清理事实与精确对账](AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存 DELETE 真实结果和宿主 caller，以先撤销凭据、再受管销毁并重核原 owner 的链路收口。独立 unknown 与旧无证据 run 保留，PTY 中断后的受治理自动恢复本轮未交付，由后续增强 [#1181](https://github.com/SummerSec/DeepSonar/issues/1181) 跟踪，最终 SHA Actions 待验。

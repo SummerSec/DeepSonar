@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 75);
+INSERT INTO schema_meta (id, version) VALUES ('global', 77);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -22,11 +22,19 @@ CREATE TABLE projects (
   description text NOT NULL DEFAULT '',
   status text NOT NULL DEFAULT 'active',
   config_json jsonb NOT NULL DEFAULT '{}',
+  dispatch_last_served bigint NOT NULL DEFAULT 0 CHECK (dispatch_last_served >= 0),
+  dispatch_scan_priority int,
+  dispatch_scan_created_at timestamptz,
+  dispatch_scan_job_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   archived_at timestamptz,
-  CONSTRAINT projects_status_check CHECK (status IN ('active', 'archived'))
+  CONSTRAINT projects_status_check CHECK (status IN ('active', 'archived')),
+  CONSTRAINT projects_dispatch_scan_check CHECK (
+    num_nonnulls(dispatch_scan_priority, dispatch_scan_created_at, dispatch_scan_job_id) IN (0, 3)
+  )
 );
+CREATE INDEX projects_dispatch_fairness_idx ON projects (dispatch_last_served, id) WHERE status = 'active';
 
 CREATE TABLE canvases (
   id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -85,6 +93,8 @@ CREATE TABLE jobs (
   project_id uuid NOT NULL REFERENCES projects(id),
   canvas_id text REFERENCES canvases(id),
   parent_job_id uuid REFERENCES jobs(id),
+  budget_owner_job_id uuid REFERENCES jobs(id),
+  budget_execution_job_id uuid,
   finding_id uuid,
   type text NOT NULL,
   status text NOT NULL DEFAULT 'pending',
@@ -119,10 +129,14 @@ CREATE UNIQUE INDEX jobs_ingress_key_uniq ON jobs (project_id, ingress_key)
 CREATE INDEX jobs_list_idx ON jobs (project_id, status, created_at DESC);
 -- #1136：不带 status 的列表（工作台默认视图）走该索引；带 status 的仍用 jobs_list_idx
 CREATE INDEX jobs_project_created_idx ON jobs (project_id, created_at DESC, id DESC);
+CREATE INDEX jobs_project_pending_fairness_idx ON jobs (project_id, priority DESC, created_at, id)
+  WHERE status = 'pending';
 CREATE INDEX jobs_pending_idx ON jobs (status, priority DESC, created_at)
   WHERE status = 'pending';
 CREATE INDEX jobs_lease_idx ON jobs (lease_expires_at) WHERE status = 'running';
 CREATE INDEX jobs_canvas_idx ON jobs (canvas_id);
+ALTER TABLE jobs ADD CONSTRAINT jobs_budget_execution_fk FOREIGN KEY (budget_execution_job_id) REFERENCES jobs(id);
+CREATE INDEX jobs_budget_owner_idx ON jobs (budget_owner_job_id);
 -- 同一 Finding 同时最多一个活跃 Verify Job（多轮验证业务轮次与 Job 重试分离）
 CREATE UNIQUE INDEX jobs_one_active_verify_per_finding
   ON jobs (finding_id)
@@ -1297,6 +1311,25 @@ CREATE TABLE human_message_attachments (
 );
 CREATE INDEX human_message_attachments_version_idx ON human_message_attachments (version_id);
 
+-- Trusted cross-Job handoff. No public Job payload can select a budget owner.
+CREATE TABLE job_continuations (
+  target_job_id uuid PRIMARY KEY REFERENCES jobs(id),
+  source_job_id uuid NOT NULL UNIQUE REFERENCES jobs(id),
+  source_attempt_id uuid NOT NULL REFERENCES job_attempts(id),
+  budget_owner_job_id uuid NOT NULL REFERENCES jobs(id),
+  request_id uuid NOT NULL REFERENCES human_requests(id),
+  request_revision integer NOT NULL CHECK (request_revision >= 0),
+  mutation_id uuid NOT NULL UNIQUE,
+  input_sha256 text NOT NULL,
+  checkpoint_sha256 text NOT NULL,
+  reply_message_id uuid NOT NULL REFERENCES human_messages(id),
+  execution_reply_id uuid NOT NULL UNIQUE REFERENCES human_messages(id),
+  hard_deadline_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (target_job_id <> source_job_id AND target_job_id <> budget_owner_job_id)
+);
+CREATE INDEX job_continuations_root_idx ON job_continuations(budget_owner_job_id,created_at);
+
 CREATE TABLE canvas_edges (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   canvas_id text NOT NULL,
@@ -1452,6 +1485,10 @@ INSERT INTO platform_upgrade_state (id) VALUES ('global');
 
 CREATE TABLE global_settings (
   id text PRIMARY KEY DEFAULT 'global',
+  -- Claim advisory lock serializes service numbering and bounded scan progress.
+  dispatch_service_sequence bigint NOT NULL DEFAULT 0 CHECK (dispatch_service_sequence >= 0),
+  dispatch_scan_served bigint,
+  dispatch_scan_project_id uuid,
   rules_json jsonb NOT NULL DEFAULT '{}',
   updated_at timestamptz NOT NULL DEFAULT now(),
   runtime_registry_channel text NOT NULL DEFAULT 'aliyun-acr',
@@ -1461,6 +1498,9 @@ CREATE TABLE global_settings (
   claims_paused_by text,
   claims_paused_at timestamptz,
   CONSTRAINT global_settings_id_check CHECK (id = 'global'),
+  CONSTRAINT global_settings_dispatch_scan_check CHECK (
+    num_nonnulls(dispatch_scan_served, dispatch_scan_project_id) IN (0, 2)
+  ),
   CONSTRAINT global_settings_runtime_registry_channel_check
     CHECK (runtime_registry_channel IN ('github', 'dockerhub', 'aliyun-acr')),
   CONSTRAINT global_settings_claims_pause_check CHECK (

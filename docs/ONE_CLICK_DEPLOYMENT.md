@@ -1,7 +1,7 @@
 # DeepSonar 一键部署
 
 > **状态：运维 as-built**。索引：[`README.md`](README.md)。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-20
 
 与代码、`deploy/deploy.sh` / `deploy/deploy.ps1` 对齐的部署说明。根目录 `README.md` 为快速入口；细节以本文件与脚本为准。
 
@@ -83,11 +83,11 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 - sh 的 `compose up` 普通失败保留原退出码；只有超时 `124` 且基础依赖真实就绪时允许受控恢复，恢复仍须等待 `silo-init` 成功退出，再启动 scheduler，最后通过同一入口与容器门禁。PowerShell 对 `compose up` 失败直接停止并输出有界诊断；不会因 `service_started` 跳过依赖探测或误报成功。
 - `pnpm ci:unit:deploy-ps1` 包含 sh 行为回归及 PowerShell 函数行为/原生命令超时回归；CI 必须提供 PowerShell。测试夹具不代替 Docker/Podman 真机部署验收。
 
-#### OpenSandbox 就绪探针（#1046 P1-4）
+#### OpenSandbox 管理接口就绪（#1046 / #1119 / #1176）
 
-- 生产 OpenSandbox overlay 与远程 Worker 的 `opensandbox` 服务，healthcheck 执行 `deploy/opensandbox/readiness-probe.py`：带鉴权的管理面 List（`GET /sandboxes`，与 Dispatcher 同口径：`OPEN-SANDBOX-API-KEY` + 5s 超时，只读幂等；401/403/5xx/慢 List 均判 unhealthy）。
-- `GET /health` 仅继续作为进程存活信号，不再是就绪条件：事故形态「List 200 / POST 500」下 /health 依旧绿灯而 create 持续失败（#1046）。
-- Podman 兼容层的 `service_started`（#726）语义不变；但最终就绪语义由该探针承担，不再由 /health 单独绿灯背书。
+生产 overlay、远程 Worker 和外置 Kubernetes overlay 的 healthcheck 共用 `deploy/opensandbox/management-health.py`，以容器内 API key 请求 `/v1/sandboxes?page=1&pageSize=1`，校验响应大小、JSON 与 `items`。`OPENSANDBOX_PROBE_PORT` 必须对应所用 server TOML 的监听端口；缺省值与检查上限以脚本为准，Compose 已显式绑定对应端口。管理接口失败使用固定诊断，脚本、key 和错误正文的边界见[OpenSandbox 专题](OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)。
+
+List 成功只证明鉴权后的管理接口可用，创建故障由 Dispatcher 的 create 熔断独立观测。Podman `service_started` 与部署入口最终 readiness 检查沿用现有契约。隔离 smoke 与试运行包均携带同一探针脚本，当前整合提交的 Actions 与真实部署证据分别记录。
 
 ### 登录
 

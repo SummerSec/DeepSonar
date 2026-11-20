@@ -4,7 +4,6 @@ import test from "node:test";
 import { readNextKnowledgeWake } from "./knowledge-wake.js";
 import { enqueueKnowledgeWork } from "./domains/project-knowledge/requests.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./domains/project-knowledge/test-support.js";
-import { registerKnowledgeSourceAfterTerminal } from "./domains/project-knowledge/automatic.js";
 import { collectProjectKnowledgeSources } from "./domains/project-knowledge/collector.js";
 
 test("historical automatic work never wakes a new stage; explicit work still observes busy-project admission", async () => {
@@ -79,7 +78,9 @@ test("registered sources survive missed notifications and wake collection after 
       VALUES(${source.canvasId},${source.jobId},'fact','input','succeeded','unverified','{"input":"bounded"}'::jsonb)`;
     await db`UPDATE jobs SET status='succeeded' WHERE id=${source.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${source.attemptId}`;
-    await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, source.jobId, "succeeded"));
+    await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
+      VALUES('system','scheduler','project_knowledge.source_registered',${source.projectId},'job',${source.jobId},'ok',
+        now()-interval '25 hours')`;
     assert.ok(await readNextKnowledgeWake(db));
     assert.equal(await collectProjectKnowledgeSources(db, "a".repeat(64)), 1);
     assert.ok(await readNextKnowledgeWake(db), "created work now owns the durable deadline");
@@ -97,7 +98,9 @@ test("source wake uses the latest persisted retry deadline and retains the pendi
         VALUES(${job.canvasId},${job.jobId},'fact','input','succeeded','unverified','{"input":"bounded"}'::jsonb)`;
       await db`UPDATE jobs SET status='succeeded' WHERE id=${job.jobId}`;
       await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${job.attemptId}`;
-      await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, job.jobId, "succeeded"));
+      await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
+        VALUES('system','scheduler','project_knowledge.source_registered',${job.projectId},'job',${job.jobId},'ok',
+          now()-interval '25 hours')`;
     }
     const soon = new Date(Date.now() + 60_000).toISOString(), later = new Date(Date.now() + 90_000).toISOString();
     for (const [job, attempt, next] of [[first, 1, "2000-01-01T00:00:00Z"], [first, 2, soon], [second, 1, later]] as const) {

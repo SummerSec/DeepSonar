@@ -1,8 +1,12 @@
+import { after } from "node:test";
+import { privateJobFixture } from "./private-job-fixture.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
 import { classifyCliSessionResumeError } from "./runtime-agent.js";
 
+const privateAuth = privateJobFixture();
+after(() => privateAuth.close());
 // #1083 first-stage contract: retain the fixed code and append `; diagnostic=`
 // followed by JSON { version:1, stage, category, name?, code?, status?, cause? }.
 // Only allowlisted scalar diagnostics survive; arbitrary message/stack/URL/header
@@ -65,7 +69,7 @@ async function fixture(options: {
   });
   extension.createPiMainRequestBudgetExtension({
     DEEPSONAR_REQUEST_POLICY_UPSTREAM: model.baseUrl,
-    DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token", DEEPSONAR_API_TOKEN: "synthetic-control-token",
+    ...privateAuth.environment,
   }, (_model: any, context: any, sdkOptions: any) => {
     calls.push({ context, options: sdkOptions });
     const fail = options.alwaysFail || calls.length === 1;

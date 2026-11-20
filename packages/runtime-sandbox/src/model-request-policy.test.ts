@@ -1,7 +1,10 @@
+import { after } from "node:test";
+import { privateJobFixture } from "./private-job-fixture.js";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -12,7 +15,14 @@ import test from "node:test";
 import { MODEL_REQUEST_POLICY_BASE_URL, MODEL_REQUEST_POLICY_SOURCE, modelRequestPolicyCommand } from "./model-request-policy.js";
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 import { shellQuote, type RuntimeHost } from "./runtime-host.js";
+import { CLAUDE_PRIVATE_KEY_HELPER_SOURCE } from "./private-credential-reader.js";
 
+const claudeSettings = { apiKeyHelper: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs",
+  hooks: { PostToolUse: [{ hooks: [{ type: "command",
+    command: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs --post-tool-use", timeout: 10 }] }] } };
+
+const privateAuth = privateJobFixture();
+after(() => privateAuth.close());
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "request-policy-"));
   const script = path.join(dir, "policy.mjs");
@@ -30,6 +40,72 @@ async function close(server: http.Server) {
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
+
+test("#1032 model admission refuses ordinary private-file text with zero egress and no credential echo", async () => {
+  const file = await fixture();
+  const secrets = await Promise.all(Object.values(privateAuth.environment).map(file => readFile(file, "utf8")));
+  const received: Buffer[] = [];
+  const remote = http.createServer((req, res) => { void (async () => {
+    received.push(await new Promise<Buffer>(resolve => {
+      const chunks: Buffer[] = [];
+      req.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+    }));
+    res.writeHead(200, { "content-type": "application/json" }).end('{}');
+  })(); });
+  const upstream = await listen(remote);
+  const policy = await file.api.startModelRequestPolicy({ upstream: upstream + "/gateway",
+    token: secrets[0], secretValues: secrets, port: 0 });
+  const local = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}`;
+  try {
+    for (const route of ["v1/messages", "v1/messages/count_tokens"]) {
+      for (const secret of secrets) {
+        const bytes = Buffer.from(JSON.stringify({ model: "fixture", max_tokens: 8, messages: [{ role: "user",
+          content: [{ type: "tool_result", tool_use_id: "file-read", content: `ordinary tool output ${secret}` }] }] }));
+        const original = Buffer.from(bytes);
+        const response = await fetch(`${local}/gateway/${route}`, { method: "POST",
+          headers: { authorization: `Bearer ${secrets[0]}`, "content-type": "application/json" }, body: bytes });
+        const refusal = await response.text();
+        assert.equal(response.status, 400);
+        assert.equal(response.headers.get("x-should-retry"), "false");
+        assert.equal(JSON.parse(refusal).error.type, "credential_in_business_data");
+        for (const value of secrets) assert.ok(!refusal.includes(value));
+        assert.deepEqual(bytes, original);
+      }
+    }
+    assert.equal(received.length, 0, "neither allowance nor model traffic may leave after a known credential match");
+  } finally { await policy.close(); await close(remote); await file.close(); }
+});
+
+test("#1032 Claude telemetry uses only fixed local routes and preserves bytes with upstream Job authentication", async () => {
+  const file = await fixture();
+  const received: Array<{ url: string; auth: string | undefined; body: Buffer }> = [];
+  const remote = http.createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    received.push({ url: req.url!, auth: req.headers.authorization, body: Buffer.concat(chunks) });
+    res.end("ok");
+  });
+  const upstream = await listen(remote);
+  const policy = await file.api.startModelRequestPolicy({ upstream: upstream + "/gateway", token: "synthetic-main-token", port: 0 });
+  const local = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}`;
+  const raw = Buffer.from([0, 1, 127, 255, 42]);
+  try {
+    for (const route of ["logs", "metrics", "traces"]) {
+      const response = await fetch(`${local}/gateway/otel/v1/${route}`, { method: "POST", body: raw });
+      assert.equal(response.status, 200); await response.arrayBuffer();
+    }
+    for (const url of ["/gateway/v1/messages", "/gateway/_allowance", "/gateway/otel/v1/logs?extra=1"]) {
+      const response = await fetch(local + url, { method: "POST", body: raw });
+      assert.equal(response.status, 401); await response.arrayBuffer();
+    }
+    assert.equal(received.length, 3);
+    for (const request of received) {
+      assert.equal(request.auth, "Bearer synthetic-main-token");
+      assert.deepEqual(request.body, raw);
+    }
+  } finally { await policy.close(); await close(remote); await file.close(); }
+});
 
 test("three CLI request shapes preserve compliant bytes and refuse requests needing generation changes", { timeout: 20_000 }, async () => {
   const file = await fixture();
@@ -159,6 +235,43 @@ test("byte validation preserves every compliant byte and refuses required policy
   } finally { await file.close(); }
 });
 
+test("Claude start and resume reject effective hook disabling before allowance without changing settings", async () => {
+  const file = await fixture();
+  let requests = 0;
+  const server = http.createServer((_req, res) => {
+    requests++;
+    res.setHeader("content-type", "application/json");
+    res.end('{"remaining_tokens":null,"policy_required":true}');
+  });
+  const environment = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${await listen(server)}/gateway`, ...privateAuth.environment };
+  const originalEnvironment = structuredClone(environment);
+  try {
+    for (const command of ["claude -p", "claude -p --resume fixture"]) {
+      for (const disabled of [true, null, 0, 1, "false", undefined]) {
+        const settings = [{ disableAllHooks: false }, { disableAllHooks: disabled,
+          hooks: { SessionStart: [{ hooks: [{ type: "command", command: "retained legacy hook" }] }] } },
+          { env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "5" } }];
+        const original = structuredClone(settings);
+        const before = requests;
+        await assert.rejects(file.api.prepareClaudeLaunch(command, environment, settings),
+          { message: "MODEL_REQUEST_POLICY_HOOKS_DISABLED" });
+        assert.equal(requests, before, "a later settings object without this field cannot clear disabling");
+        assert.deepEqual(settings, original);
+      }
+      const settings = [{ disableAllHooks: true, hooks: { PreToolUse: [] } }, { disableAllHooks: false }];
+      const original = structuredClone(settings);
+      const before = requests;
+      const prepared = await file.api.prepareClaudeLaunch(command, environment, settings);
+      assert.equal(requests, before + 1, "an explicit later false permits the normal allowance read");
+      assert.equal(prepared.command, command + " --settings " + shellQuote(JSON.stringify(claudeSettings)));
+      assert.deepEqual(settings, original);
+      assert.deepEqual(environment, originalEnvironment);
+      assert.doesNotMatch(prepared.command, /disableAllHooks/u,
+        "the generated override must not turn legacy hooks back on");
+    }
+  } finally { await close(server); await file.close(); }
+});
+
 test("Claude launch and resume prepare the native output option before the CLI forms requests", async () => {
   const file = await fixture();
   let remaining: number | null = 20;
@@ -169,12 +282,13 @@ test("Claude launch and resume prepare the native output option before the CLI f
     res.end(JSON.stringify({ remaining_tokens: remaining, policy_required: true }));
   });
   const base = await listen(server);
-  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, ...privateAuth.environment };
   try {
     for (const command of ["claude -p", "claude -p --resume fixture"]) {
       const prepared = await file.api.prepareClaudeLaunch(command, env);
       assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, String(remaining));
-      assert.equal(prepared.command, command + ` --settings '{"env":{"CLAUDE_CODE_MAX_OUTPUT_TOKENS":"${remaining}"}}'`);
+      assert.equal(prepared.command, command + " --settings " + shellQuote(JSON.stringify({ ...claudeSettings,
+        env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(remaining) } })));
       remaining = 10;
     }
     const lower = await file.api.prepareClaudeLaunch("claude -p", { ...env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8" },
@@ -183,7 +297,11 @@ test("Claude launch and resume prepare the native output option before the CLI f
     remaining = 0;
     await assert.rejects(file.api.prepareClaudeLaunch("claude -p", env), /EXHAUSTED/u);
     remaining = null;
-    assert.deepEqual(await file.api.prepareClaudeLaunch("claude -p", env), { command: "claude -p", env });
+    for (const command of ["claude -p", "claude -p --resume fixture"]) {
+      const prepared = await file.api.prepareClaudeLaunch(command, env, []);
+      assert.deepEqual(prepared, { command: command + " --settings " + shellQuote(JSON.stringify(claudeSettings)), env });
+      assert.equal(Object.hasOwn(prepared.env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS"), false);
+    }
   } finally { await close(server); await file.close(); }
 });
 
@@ -202,7 +320,7 @@ test("Claude re-derives the native cap at each start and resume from a fresh bou
       ? { remaining_tokens: remaining, policy_required: true } : { error: { type: "JOB_TOKEN_USAGE_UNKNOWN" } }));
   });
   const base = await listen(server);
-  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, ...privateAuth.environment };
   try {
     const first = await file.api.prepareClaudeLaunch("claude -p", env);
     assert.equal(first.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "1000");
@@ -211,7 +329,8 @@ test("Claude re-derives the native cap at each start and resume from a fresh bou
     remaining = 700;
     const resumed = await file.api.prepareClaudeLaunch("claude -p --resume fixture", env);
     assert.equal(resumed.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "700", "the next generation boundary follows the shrunken allowance");
-    assert.equal(resumed.command, "claude -p --resume fixture --settings '{\"env\":{\"CLAUDE_CODE_MAX_OUTPUT_TOKENS\":\"700\"}}'");
+    assert.equal(resumed.command, "claude -p --resume fixture --settings " + shellQuote(JSON.stringify({ ...claudeSettings,
+      env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "700" } })));
     assert.equal(durable, "1000", "the live process cap is never rewritten in place");
     status = 409;
     const before = queries;
@@ -230,18 +349,25 @@ test("Claude re-derives the native cap at each start and resume from a fresh bou
 
 test("all three CLI starts and supported resumes use the explicit wrapper without changing their stdin protocol", async () => {
   const commands: string[] = [];
+  const guards: string[] = [];
   const host = {
     runAsync: async (command: string) => { commands.push(command); return {} as never; },
-    run: async () => ({ exitCode: 0, stdout: "", stderr: "" }), uploadFile: async () => {},
+    run: async (command: string) => { guards.push(command); return { exitCode: 0, stdout: "", stderr: "" }; }, uploadFile: async () => {},
   } as unknown as RuntimeHost;
   const context = { host, cwd: "/workspace", input: "fixture", mcpConfigPath: "/workspace/mcp.json",
-    env: { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway.invalid/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
+    env: { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway.invalid/gateway", ...privateAuth.environment },
     dshProvider: { provider: "fixture", model: "fixture", config: { providers: {} } } };
   for (const id of ["pi", "dsh", "claude-code"] as const) await AGENT_CLI_RUNTIME_ADAPTERS[id].start(context);
   for (const id of ["pi", "claude-code"] as const) await AGENT_CLI_RUNTIME_ADAPTERS[id].resume({ ...context, sessionId: "fixture", sessionFile: "/workspace/session.jsonl" });
   assert.equal(commands.length, 5);
   for (const command of commands) assert.match(command, /^node '\/workspace\/\.deepsonar\/model-request-policy\.mjs'(?: --claude-launch-budget)? -- /u);
   assert.equal(commands.filter(command => command.includes(" --claude-launch-budget ")).length, 2);
+  const helperHash = createHash("sha256").update(CLAUDE_PRIVATE_KEY_HELPER_SOURCE).digest("hex");
+  assert.equal(guards.filter(command => command.includes(helperHash)).length, 2,
+    "start and resume admit the complete auth and PostToolUse helper content");
+  host.run = async () => ({ exitCode: 78, stdout: "", stderr: "" });
+  await assert.rejects(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"].start(context), /CLAUDE_PRIVATE_HELPER_IMAGE_CONTENT_INVALID/u);
+  assert.equal(commands.length, 5, "a stale or modified helper is rejected before CLI launch");
   assert.equal(modelRequestPolicyCommand("pi --mode rpc", {}), "pi --mode rpc");
   assert.throws(() => modelRequestPolicyCommand("pi", { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway.invalid/gateway" }));
 });
@@ -251,7 +377,7 @@ test("wrapper preserves child stdin/exit, owns the fixed port and cleans up on s
   const remote = http.createServer((_req: http.IncomingMessage, res: http.ServerResponse) => res.end("unused"));
   const upstream = `${await listen(remote)}/gateway`;
   const start = (program: string): ChildProcess => spawn(process.execPath, [file.script, "--", `${shellQuote(process.execPath)} -e ${shellQuote(program)}`],
-    { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" } });
+    { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream, ...privateAuth.environment } });
   let active: ChildProcess | undefined;
   try {
     active = start("process.stdout.write('ready:'+process.pid+'\\n');process.stdin.on('data',chunk=>process.stdout.write(chunk));setInterval(()=>{},1000)");
@@ -299,8 +425,8 @@ test("accepted Claude scope keeps the launch cap static and refuses later insuff
     res.setHeader("content-type", "application/json"); res.end('{"content":[]}');
   });
   const base = await listen(remote);
-  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
-  const policy = await file.api.startModelRequestPolicy({ upstream: env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: env.DEEPSONAR_GATEWAY_TOKEN, port: 0 });
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, ...privateAuth.environment };
+  const policy = await file.api.startModelRequestPolicy({ upstream: env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: "synthetic-main-token", port: 0 });
   const endpoint = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}/gateway/v1/messages`;
   try {
     const launch = await file.api.prepareClaudeLaunch("claude -p", env);
