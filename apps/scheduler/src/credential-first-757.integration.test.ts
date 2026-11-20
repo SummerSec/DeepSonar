@@ -385,6 +385,78 @@ if (!testDatabaseUrl) {
           await sql`UPDATE jobs SET status='succeeded' WHERE agent_snapshot_json->>'credential_id'=ANY(${[paused, busy]}::text[])`;
         }
       });
+      await t.test("#1078 concurrent creation, transaction rollback and duplicate ingress preserve claim capacity", async () => {
+        const { createJob, createJobInTransaction } = await import("./core.js");
+        const { claimPendingJobs } = await import("./dispatcher.js");
+        const credentialId = await insertCredential("claude-code");
+        const [beforeRules] = await sql`SELECT rules_json FROM global_settings WHERE id='global'`;
+        await sql`UPDATE jobs SET status='succeeded' WHERE status IN ('pending','claimed','provisioning','running','waiting_human')`;
+        await sql`UPDATE credentials SET public_metadata_json='{"max_concurrent":1}' WHERE id=${credentialId}`;
+        await setConfig({ enabled_credential_ids: [credentialId], default_credential_id: credentialId,
+          default_agent_cli: "claude-code", default_model_ref: "claude-sonnet-4" });
+        try {
+          await sql`UPDATE global_settings SET rules_json=${sql.json({ ...beforeRules.rules_json,
+            maxGlobalJobs: 8, maxJobsPerProject: 8, maxConcurrentProvisioning: 8,
+            maxConcurrentByAgentCli: { "claude-code": 8 }, maxConcurrentByProvider: { anthropic: 1 },
+          })} WHERE id='global'`;
+          const beforeCapacity = (await snapshot()).credential_selection?.candidates[0]?.capacity;
+          assert.equal(beforeCapacity?.credential.in_use, 0);
+          const rolledBackIngress = randomUUID();
+          const rollbackFailure = new Error("1078 rollback after credential selection and Job insertion");
+          let rolledBackJobId = "";
+          await assert.rejects(() => sql.begin(async tx => {
+            const prepared = await createJobInTransaction(tx as unknown as typeof sql,
+              { projectId, canvasId, type: "audit", ingressKey: rolledBackIngress });
+            rolledBackJobId = String(prepared.created.id);
+            assert.equal(prepared.snapshotWithKnobs.credential_id, credentialId);
+            assert.equal((await tx`SELECT id FROM jobs WHERE id=${rolledBackJobId}`).length, 1);
+            throw rollbackFailure;
+          }), error => error === rollbackFailure);
+          assert.ok(rolledBackJobId, "failure occurs after a real Job insert");
+          assert.equal((await sql`SELECT id FROM jobs WHERE id=${rolledBackJobId}
+            OR (project_id=${projectId} AND ingress_key=${rolledBackIngress})`).length, 0);
+          assert.deepEqual((await snapshot()).credential_selection?.candidates[0]?.capacity, beforeCapacity,
+            "rollback leaves all three running-capacity counts unchanged");
+
+          const ingressKeys = [rolledBackIngress, randomUUID()];
+          const created = await Promise.all(ingressKeys.map(ingressKey =>
+            createJob({ projectId, canvasId, type: "audit", ingressKey })));
+          const jobs = created.map(result => {
+            assert.equal(result.duplicated, false);
+            assert.ok(result.job);
+            assert.equal(result.job.status, "pending");
+            assert.equal(result.job.agent_snapshot_json.credential_id, credentialId);
+            return result.job;
+          });
+          const decisions = new Map(jobs.map(job => [String(job.id), structuredClone(job.agent_snapshot_json.credential_selection)]));
+          assert.deepEqual((await snapshot()).credential_selection?.candidates[0]?.capacity, beforeCapacity,
+            "concurrent pending creations do not reserve running slots");
+          const duplicate = await createJob({ projectId, canvasId, type: "audit", ingressKey: ingressKeys[0] });
+          assert.equal(duplicate.duplicated, true);
+          assert.equal(duplicate.job, null);
+          assert.equal((await sql`SELECT id FROM jobs WHERE project_id=${projectId}
+            AND ingress_key=ANY(${ingressKeys}::text[])`).length, 2);
+
+          const claims = (await Promise.all([claimPendingJobs(), claimPendingJobs()])).flat();
+          assert.equal(claims.length, 1, "concurrent claimers share the single credential and Provider slot");
+          const [active] = await sql`SELECT count(*)::int AS count FROM jobs
+            WHERE status IN ('claimed','provisioning','running')
+              AND agent_snapshot_json->>'credential_id'=${credentialId}`;
+          assert.equal(active.count, 1);
+          assert.deepEqual(await claimPendingJobs(), []);
+          await sql`UPDATE jobs SET status='succeeded' WHERE id=${claims[0]!.id}`;
+          const released = await claimPendingJobs();
+          assert.equal(released.length, 1, "the remaining pending Job claims the released capacity");
+          assert.notEqual(released[0]!.id, claims[0]!.id);
+          const stored = await sql`SELECT id,agent_snapshot_json FROM jobs
+            WHERE project_id=${projectId} AND ingress_key=ANY(${ingressKeys}::text[])`;
+          for (const job of stored) assert.deepEqual(job.agent_snapshot_json.credential_selection, decisions.get(String(job.id)),
+            "rollback, duplicate ingress and claims preserve each original selection receipt");
+        } finally {
+          await sql`UPDATE jobs SET status='succeeded' WHERE agent_snapshot_json->>'credential_id'=${credentialId}`;
+          await sql`UPDATE global_settings SET rules_json=${sql.json(beforeRules.rules_json)} WHERE id='global'`;
+        }
+      });
       const { HubIntentPayload } = await import("@deepsonar/shared-types");
       const intent = { from: [], role: "audit", description: "Inspect the test fixture", prompt: "Inspect this isolated test fixture and record structured evidence." };
       assert.equal(HubIntentPayload.safeParse(intent).success, true);
