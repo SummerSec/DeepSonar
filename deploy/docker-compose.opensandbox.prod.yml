@@ -28,6 +28,7 @@ services:
     environment:
       SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
       OPENSANDBOX_SERVER_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
+      OPENSANDBOX_PROBE_PORT: "8080"
     volumes:
       - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro

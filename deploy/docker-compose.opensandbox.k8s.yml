@@ -13,13 +13,15 @@ services:
     environment:
       SANDBOX_CONFIG_PATH: /etc/opensandbox/config.toml
       OPENSANDBOX_SERVER_API_KEY: ${OPEN_SANDBOX_API_KEY:?set a Scheduler-only API key}
+      OPENSANDBOX_PROBE_PORT: "18084"
     volumes:
       - ./opensandbox/config.k8s.external.toml:/etc/opensandbox/config.toml:ro
       - ./opensandbox/batchsandbox-template.yaml:/etc/opensandbox/batchsandbox-template.yaml:ro
       - ${OPEN_SANDBOX_KUBECONFIG:?set OPEN_SANDBOX_KUBECONFIG}:/etc/opensandbox/kubeconfig:ro
+      - ./opensandbox/management-health.py:/etc/opensandbox/management-health.py:ro
       - opensandbox-k8s-data:/var/lib/opensandbox
     healthcheck:
-      test: ["CMD", "/app/.venv/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18084/health')"]
+      test: ["CMD", "/app/.venv/bin/python3", "/etc/opensandbox/management-health.py"]
       interval: 5s
       timeout: 3s
       retries: 20

@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -697,7 +697,7 @@ OCI 扫描创建与凭据删除共用凭据行锁；导入事务内重验 active
 - **决策来源**：凭据、模型、CLI 和镜像是组合约束，不能由 prompt 绕过目录。
 - **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。#914 的引用保护切片在设置事务内重验所有保留/新增凭据，并与 DELETE 共用凭据行锁；项目 impact 按 actor scope 过滤，删除独立检查全局引用，拒绝时不自动修复白名单。此处为 #925 服务端切片；#929 已交付默认账号显式选择与修复导航，详见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[限制发现](../../apps/scheduler/src/domains/provider-adapter/model-discovery.ts)、[预算冻结](../../apps/scheduler/src/domains/provider-adapter/model-budget.ts)。
-- **#1002 P1-8 补充契约**：显式授权且 Provider/CLI/解析模型一致的多账号池，在没有默认账号时按同项目现有 Job 负载选择并冻结新 Job。readiness 只读，不消耗轮次；已有 Job 的仍合法冻结账号偏好、显式默认优先、身份漂移/累计预算及未知效果门保留。不同模型或 Provider 不自动任选；实现/回归见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)，最终 SHA Actions 待验。
+- **#1002 P1-8、#1078 与 #1096 的凭据选择契约**。显式授权且 Provider/CLI/解析模型一致的多账号池，先保留仍有余量的冻结恢复身份，再选择仍有余量的显式默认账号，其余按现有 Job 负载计算的余量比例及稳定并列规则选择并冻结新 Job。readiness 读取负载投影，恢复继续核验当前授权、模型/CLI、冻结身份、累计预算与未知效果。精确排序、计数范围、满额及其他候选组合见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)，恢复优先顺序的修正已由 [#1103](https://github.com/SummerSec/DeepSonar/pull/1103) 采纳并合入。最终 SHA Actions 待验。
 - **#958 补充契约**：发现限制逐字段保存 provider_declared 来源与 declared/missing/invalid 状态；发现不扩大账号配置模型名单。显式预算优先于声明，运行观测不改冻结；非法显式值拒绝，未知/非法发现值不猜容量。配置/投影回归沿用下列 credential-compatibility / provider-settings，实际锁版本 SDK 输出参数回归接 `pnpm ci:integration:request-budget-sdk`；最终 SHA Actions 待验，详见[专题](../PI_MODEL_BUDGET_RECOVERY.md)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
@@ -1039,7 +1039,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Scheduler 必须区分 liveness、readiness 和 runtime-image warmup；镜像/依赖未准备好时服务可保持 live 但不得启用 Dispatcher，错误必须可查询并有界退避。
 - **决策来源**：容器存活不等于可安全执行，错误就绪会把资源问题扩大为 Job 失败。
-- **实现状态**：as-built；启动 gate、健康端点和 image readiness 分层。#1119/#1046 的创建熔断独立计入真实 create 阶段服务故障与目录创建 500，计数不授权重放。Compose/Scheduler 同用鉴权 List 管理探测，List 成功与 create 成功分别观测，见 [OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)。
+- **实现状态**：as-built；启动 gate、健康端点和 image readiness 分层。#1119/#1046 的创建熔断独立计入真实 create 阶段服务故障与目录创建 500，计数不授权重放。生产、Worker、外置 Kubernetes 共用鉴权 List 探针并核验端口，Scheduler 使用同一管理接口契约；试运行包与隔离 smoke 携带所需脚本。List 成功与 create 成功分别观测，见 [OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)。
 - **代码入口**：[readiness](../../apps/scheduler/src/readiness.ts)、[image warmup](../../apps/scheduler/src/runtime-image-warmup.ts)、[readiness tests](../../apps/scheduler/src/readiness.test.ts)。
 - **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-prod`。
 
