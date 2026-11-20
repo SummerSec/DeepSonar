@@ -397,3 +397,22 @@ test("#1114 claim skip logging keeps throttle and a bounded log volume under bac
     resetClaimDiagnosticsForTests();
   }
 });
+
+test("#1119 沙箱目录创建 500 计入熔断，但不构成可重放证据", async () => {
+  const { isRetryableProvisionFailure } = await import("./dispatcher.js");
+  const { clock } = clockAt();
+  resetOpenSandboxCreateCircuitForTests(clock);
+  // 现场原文（脱敏后保留报错结构）：sandbox 已创建，目录创建这一步 500。
+  const message = "Failed to create directory /opt/opensandbox in sandbox: 500 Server Error: Internal Server Error";
+  // 1) 固定投影只认协议码，自由文本（可能含 provider body 或凭据）不得进入状态与日志。
+  assert.equal(classifyProvisionFailure(message), "unclassified");
+  // 2) 熔断统计与分类无关：两次观测即可 trip，不因为它是 unclassified 就漏计。
+  recordOpenSandboxProvisionFailure(message);
+  assert.equal(openSandboxCreateCircuitStatus().state, "closed");
+  recordOpenSandboxProvisionFailure(message);
+  assert.equal(openSandboxCreateCircuitStatus().state, "open");
+  // 3) 重放许可仍按未知外部效果 fail closed：sandbox 已被创建，无法证明 never_started。
+  assert.equal(isRetryableProvisionFailure(new Error(message)), false);
+  // 对照：同族但发生在 create 之前/无外部效果的形状仍可重试。
+  assert.equal(isRetryableProvisionFailure(new Error("Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)")), true);
+});
