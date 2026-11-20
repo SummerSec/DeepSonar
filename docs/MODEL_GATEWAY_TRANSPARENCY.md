@@ -193,9 +193,9 @@ Reverse 工作流将 Claude、Pi/OM 和 Reverse/REA 分为三个独立原生双�
 
 `private-job-files.ts` 通过 RuntimeProcess live stdin 写入每 Job 全新随机私有子目录。逐级以目录描述符和 NOFOLLOW 打开，目录创建为 0700，文件使用 O_EXCL / O_NOFOLLOW 并在创建时设置 0600，校验 owner、regular file、单链接及进程退出。Pi auth.json 副本采用同样的独占创建规则。创建中途失败时依据持有的文件描述符清除本次文件中的秘密，只移除身份仍匹配的目录项，不递归删除替换目录。正常清理失败仅产生固定诊断，保留原执行结果，随后使用现有 Dispatcher sandbox teardown。
 
-Pi 使用 auth store，models.json 不含 key 或环境占位符。Claude 使用镜像内固定 apiKeyHelper，start/resume 生成的同一份 `--settings` 始终携带可信 helper，有限额度时再携带数值输出上限，避免重复参数覆盖认证配置。OTLP 仅可通过当前 Job loopback 的固定 POST telemetry 路由补充认证。DSH 使用官方 CredentialProvider / credentials.resolve 服务，引用固定 Job credential，核对冻结 provider，插件或文件缺失即拒绝。helper 与插件纳入镜像内容守卫。
+Pi 使用 auth store，models.json 不含 key 或环境占位符。Claude 使用镜像内固定 apiKeyHelper，start/resume 生成的同一份 `--settings` 始终携带可信 helper，同一配置同步注入成功工具 PostToolUse 投影，有限额度时再携带数值输出上限，避免重复参数覆盖认证或钩子配置。OTLP 仅可通过当前 Job loopback 的固定 POST telemetry 路由补充认证。DSH 使用官方 CredentialProvider / credentials.resolve 服务，引用固定 Job credential，核对冻结 provider，插件或文件缺失即拒绝。helper 与插件纳入镜像内容守卫。
 
-现行 P0-1 在 Pi 主 SDK 与 OM SDK 调用前，对已登记秘密值做精确替换，覆盖工具结果、认证文件内容和错误文本，原 Session 与认证参数保持各自用途。DSH 注册后的 SDK 出口和 Claude 本地准入的普通文本保护见下节，具体出口与未覆盖输入分别记录。P1-3 已有 `credential-refusal.ts` 分类和 dispatcher 不可重试分支。P1-4 的五种 Gateway 拒绝已由 `gateway.ts` 记录 `gateway.credential_denied`，仅固定 surface、已核验资源 ID 和稳定错误码，相关 SQL/HTTP 回归位于 gateway-transparent.integration.test.ts。
+现行 P0-1 在 Pi 主 SDK 与 OM SDK 调用前，对已登记秘密值做精确替换，覆盖工具结果、认证文件内容和错误文本，原 Session 与认证参数保持各自用途。DSH 注册后的 SDK 出口及 Claude 成功工具投影与本地准入的普通文本保护见下节，具体出口与未覆盖输入分别记录。P1-3 已有 `credential-refusal.ts` 分类和 dispatcher 不可重试分支。P1-4 的五种 Gateway 拒绝已由 `gateway.ts` 记录 `gateway.credential_denied`，仅固定 surface、已核验资源 ID 和稳定错误码，相关 SQL/HTTP 回归位于 gateway-transparent.integration.test.ts。
 
 同 UID 工具仍能读 0600 文件。A2 的执行身份隔离和兑换约束未交付，属于待决定的远期方案，本轮不将其作为强制验收；#1032 的 P0-1/A1 普通文本要求仍须独立验证，Issue 当前保持 open。与 #1159（含 #1157）及 #1168 的组合按业务检查点恢复、新执行凭据文件、脱敏历史导入、原生 resume 的顺序接线。正常 runner 回归核对该顺序及新文件引用，Pi / Claude 固定 CLI 回归使用私有文件认证继续原会话。历史恢复保持首 Job 的预算根，清理锁序为 Canvas、预算根、执行 Job、Attempt，清理未确认或独立 unknown 继续阻止恢复。组合工程验收仍须由最终 SHA 的 Actions 证明。新 Linux 文件安全回归接现有 runtime-sandbox 门禁，固定 CLI 回归沿用 request-budget-sdk、Pi RPC / OM 和 Claude native 专项。所有行为、build 和 typecheck 仅由本 PR 最终 SHA 的 GitHub Actions 验证，当前尚无通过结论。
 
@@ -206,8 +206,10 @@ Pi 使用 auth store，models.json 不含 key 或环境占位符。Claude 使用
 | 入口 | 当前处理 | Actions 回归入口 |
 | --- | --- | --- |
 | DSH 注册后的 `profile.piProvider.streamSimple` | 身份核验后复用 `redactPiContextSecrets`，对当前 main、Control、OM token 做字符串值精确替换，再交 SDK 生成。prepared 主调用、直接服务和使用同一注册的压缩/子调用共用此出口，原历史与认证 options 不改写。声明的私有凭据文件缺失或不安全时停止。 | `ci:unit:runtime-sandbox` 的 dsh-request-budget.test.ts；`ci:integration:request-budget-sdk` 的真实 SDK prepared/direct 与 DSH CLI 工具、压缩和子调用。回归要求原生工具实际读取三份私有文件，并断言模型请求只含替换投影。 |
-| Claude 现有 loopback 请求准入 | 从本执行的私有文件读取三类已知值，在任何上游 I/O 前拒绝正文原始字节中的精确命中，含辅助 count_tokens 请求。返回 HTTP 400、`credential_in_business_data` 类型和 `x-should-retry:false`，不回显秘密，不静默改写已形成的请求。干净请求继续原字节发送。 | `ci:unit:runtime-sandbox` 的 model-request-policy.test.ts；Reverse 双架构 `ci:integration:claude-request-budget` 分别读取 main、Control、OM 文件，要求仅干净首请求到达合成上游，随后原生执行以错误终态退出。 |
+| Claude 成功工具输出与本地请求准入 | start/resume 的受治理 settings 注入同步 `PostToolUse` command hook。image-owned helper 复用私有文件 reader，在原 `tool_response` 的字符串值内递归精确替换 main、Control、OM token，保留结构、类型及错误字段，原生 CLI 按原工具 ID 继续。无命中时不提交 identity rewrite。现有 loopback 守卫在任何上游 I/O 前拒绝正文原字节的漏网已知值，含辅助 count_tokens 请求，返回 HTTP 400、`credential_in_business_data` 和 `x-should-retry:false`。 | `ci:unit:runtime-sandbox` 的 private-job-files.test.ts / model-request-policy.test.ts 覆盖结构投影、失败、启动与恢复 settings 及完整 helper hash；Reverse 双架构 `ci:integration:claude-request-budget` 用原生 Bash cat 三份凭据，要求第二轮 body 无三类值、有 `[REDACTED]`、保留工具 ID 且正常完成，并保留失败工具、钩子失败与残余 tool input 的零出站拒绝反例。 |
 
-Claude 的文件结果仍可进入 CLI 本地历史，命中时停止当前执行，不能称为 SDK 上下文脱敏或无感继续。该本地拒绝不会调用 Gateway，因此没有相应 Gateway 接受回执、用量或 gateway.credential_denied 条目；运行失败沿原 Evidence/Dispatcher 分类记录。DSH 的成功继续与 Claude 的明确拒绝均待最终 SHA Actions，新增回归尚未执行，不能以源码断言替代通过证据。
+钉死的 Claude Code 2.1.312 Linux x64 npm 原生包已按 `agent-harness/base-cli-runtime/package-lock.json` 的 integrity 静态核验，内含 `updatedToolOutput` 字段、支持内建工具的说明，以及输出 schema 不匹配时使用原输出的分支。实现遵守[官方 PostToolUse 契约](https://code.claude.com/docs/en/hooks#posttooluse-decision-control)，替换值保持原工具输出结构。helper 沿用固定 `/opt/deepsonar/dsh/deepsonar-claude-key.mjs` 路径，通过原安装器写入，start/resume 的内容 hash 同时绑定认证和投影代码，旧内容拒绝启动。该证据是静态包核验，成功续轮仍须由最终 SHA 的双架构 Actions 证明。
+
+`PostToolUseFailure` 官方契约不允许改写 error，失败工具继续由本地请求守卫 fail closed。钩子输入或声明凭据不合法时仅输出固定失败码，后续漏网请求同样拒绝；不把该拒绝冒充脱敏成功。成功投影只改变送入模型的工具输出，不证明工具执行前的 telemetry、analytics、CLI 原始本地历史或文件已清除。该本地拒绝不会调用 Gateway，故没有对应 Gateway 接受回执、用量或 gateway.credential_denied 条目；运行失败沿原 Evidence/Dispatcher 分类记录。认证、工具 ID 和已形成请求不重写，干净请求按原字节传输。所有新增回归尚未执行，工程验收仍待最终 SHA Actions。
 
 保证仅覆盖当前 Job 已知 token 在普通文本中的上述具体出口。任意编码、分片、二进制/图像、工具直接联网或同 UID 对执行代码的修改不由这轮证明；既有网络、原字节 Gateway 守卫及权限仍独立约束。长期 Provider key 不进入沙箱，当前短期 token 的文件化不构成身份隔离。

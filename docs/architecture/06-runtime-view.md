@@ -370,4 +370,4 @@ OpenSandbox 创建熔断半开恢复独立限制为一个 claimed/provisioning �
 
 ## 普通文本凭据出口（#1032）
 
-DSH 的注册后 SDK 出口在认证身份核对后投影 context，再调用原 SDK，主调用和直接服务共用此入口。Claude 现有本地请求准入从当前执行的私有文件读取 main、Control、OM 值，对请求正文精确命中在任何上游 I/O 前作稳定拒绝，不查询 allowance、不创建模型调用，不回显值或改写已形成的请求。Claude 的此类拒绝结束当前执行，原生文件读取和错误终态须由固定 CLI 回归证明。具体源码、A1 验收映射与 Actions 接线集中在[Gateway 专题](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)，最终 SHA 尚待验收。
+DSH 的注册后 SDK 出口在认证身份核对后投影 context，再调用原 SDK，主调用和直接服务共用此入口。Claude 的 start/resume settings 注入 image-owned PostToolUse helper，沿原内容 hash 准入。成功工具的 tool_response 按原结构和类型递归精确替换 main、Control、OM 值，保留工具 ID 与认证并继续。失败工具、钩子失败和其他漏网值仍由现有本地请求准入在任何上游 I/O 前拒绝，不改已形成请求。投影不证明 telemetry 或原始本地历史已清除；成功续轮与拒绝反例须由固定 CLI 回归证明。具体源码、A1 验收映射与 Actions 接线集中在[Gateway 专题](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)，最终 SHA 尚待验收。

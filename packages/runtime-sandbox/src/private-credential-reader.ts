@@ -48,10 +48,52 @@ export const CLAUDE_PRIVATE_HELPER_PATH = "/opt/deepsonar/dsh/deepsonar-claude-k
 
 /** Fixed image-owned entry point. No business-controlled command or token argv. */
 export const CLAUDE_PRIVATE_KEY_HELPER_SOURCE = PRIVATE_CREDENTIAL_READER_SOURCE + String.raw`
-if (process.argv.length !== 2) throw new Error('PRIVATE_CREDENTIAL_REJECTED');
-const token = readPrivateCredential(process.env.DEEPSONAR_GATEWAY_TOKEN_FILE);
-if (!token || /[\r\n]/.test(token)) throw new Error('PRIVATE_CREDENTIAL_REJECTED');
-process.stdout.write(token);
+if (process.argv.length === 3 && process.argv[2] === '--post-tool-use') {
+  try {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of process.stdin) {
+      size += chunk.length;
+      if (size > 16 * 1024 * 1024) throw new Error('hook input limit');
+      chunks.push(chunk);
+    }
+    const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!input || input.hook_event_name !== 'PostToolUse' || !Object.hasOwn(input, 'tool_response')) {
+      throw new Error('invalid hook event');
+    }
+    const secrets = [...new Set([readPrivateCredential(process.env.DEEPSONAR_GATEWAY_TOKEN_FILE),
+      readPrivateCredential(process.env.DEEPSONAR_CONTROL_TOKEN_FILE, true),
+      readPrivateCredential(process.env.DEEPSONAR_OM_GATEWAY_TOKEN_FILE, true)].filter(Boolean))]
+      .sort((a, b) => b.length - a.length);
+    let changed = false;
+    const project = value => {
+      if (typeof value === 'string') {
+        let text = value;
+        for (const secret of secrets) text = text.split(secret).join('[REDACTED]');
+        if (text !== value) changed = true;
+        return text;
+      }
+      if (Array.isArray(value)) return value.map(project);
+      if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, project(entry)]));
+      }
+      return value;
+    };
+    const output = project(input.tool_response);
+    // Identity rewrites can overwrite a sibling hook's real projection.
+    process.stdout.write(JSON.stringify(changed ? { hookSpecificOutput: {
+      hookEventName: 'PostToolUse', updatedToolOutput: output,
+    } } : {}));
+  } catch {
+    process.stderr.write('CLAUDE_TOOL_OUTPUT_PROJECTION_FAILED\n');
+    process.exitCode = 78;
+  }
+} else {
+  if (process.argv.length !== 2) throw new Error('PRIVATE_CREDENTIAL_REJECTED');
+  const token = readPrivateCredential(process.env.DEEPSONAR_GATEWAY_TOKEN_FILE);
+  if (!token || /[\r\n]/.test(token)) throw new Error('PRIVATE_CREDENTIAL_REJECTED');
+  process.stdout.write(token);
+}
 `;
 
 /** Official DSH 0.2.2-rc.1 CredentialProvider service, restricted to this Job. */

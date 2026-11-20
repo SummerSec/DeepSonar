@@ -717,7 +717,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。
 
-#1032 的 [Pi context 凭据投影首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)在 SDK 生成前共用当前 main/Control/OM token 的精确替换，不改已生成请求、认证、预算与回执。工具读取 env 和认证文件、错误及 OM 来源的回归接上述 runtime-sandbox、锁版本 request-budget-sdk 与原生 om-provider-headers；最终 SHA Actions 待验，同 UID 凭据隔离和 deny 诊断/审计仍未交付。
+#1032 的 [Pi context 凭据投影首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)在 SDK 生成前共用当前 main/Control/OM token 的精确替换，不改已生成请求、认证、预算与回执。工具读取 env 和认证文件、错误及 OM 来源的回归接上述 runtime-sandbox、锁版本 request-budget-sdk 与原生 om-provider-headers；Claude 的成功工具普通文本在 PostToolUse 按原结构投影，失败工具与漏网值继续本地拒绝，详见[普通文本出口](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)。最终 SHA Actions 待验，同 UID 凭据隔离和 deny 诊断/审计仍未交付。
 
 #1097 的 [managed proxy 逐跳隔离](../MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)回归接现有 `pnpm ci:unit:runtime-sandbox`，覆盖连接广告归属与内容/流式边界；最终 SHA Actions 另验，不回填历史模型错误原因。
 

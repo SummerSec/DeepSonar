@@ -146,11 +146,8 @@ async function bytes(req: http.IncomingMessage) {
   return Buffer.concat(chunks);
 }
 
-for (const [credentialName, environmentName] of [
-  ["gateway-token", "DEEPSONAR_GATEWAY_TOKEN_FILE"],
-  ["control-token", "DEEPSONAR_CONTROL_TOKEN_FILE"],
-  ["om-token", "DEEPSONAR_OM_GATEWAY_TOKEN_FILE"],
-] as const) test(`#1032 Claude native ${credentialName} read terminates before its tool result leaves`, { timeout: 60_000 }, async () => {
+for (const mode of ["success", "failed-tool", "failed-hook", "residual-input"] as const)
+test(`#1032 Claude native credential-file projection ${mode}`, { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "claude-private-text-"));
   const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);
   await mkdir(credentials, { mode: 0o700 });
@@ -171,15 +168,35 @@ for (const [credentialName, environmentName] of [
       return;
     }
     modelRequests++;
-    const model = JSON.parse(body).model;
-    const command = `node -e "console.log(require('fs').readFileSync(process.env.${environmentName},'utf8'))"`;
+    const parsed = JSON.parse(body) as { model: string; messages: Array<{ content: string | Array<{
+      type: string; tool_use_id?: string; is_error?: boolean; content?: unknown;
+    }> }> };
+    const model = parsed.model;
+    if (modelRequests === 2) {
+      const results = parsed.messages.flatMap(message => Array.isArray(message.content)
+        ? message.content.filter(block => block.type === "tool_result") : []);
+      assert.equal(results.length, 1);
+      assert.equal(results[0]!.tool_use_id, "read-private-files");
+      assert.notEqual(results[0]!.is_error, true);
+      assert.equal((JSON.stringify(results[0]!.content).match(/\[REDACTED\]/gu) ?? []).length, 3);
+      assert.match(JSON.stringify(results[0]!.content), /CLAUDE_PRIVATE_OUTPUT_BEGIN/u);
+      assert.match(JSON.stringify(results[0]!.content), /CLAUDE_PRIVATE_OUTPUT_END/u);
+    }
+    let command = 'printf "CLAUDE_PRIVATE_OUTPUT_BEGIN\\n"; cat "$DEEPSONAR_GATEWAY_TOKEN_FILE" "$DEEPSONAR_CONTROL_TOKEN_FILE" "$DEEPSONAR_OM_GATEWAY_TOKEN_FILE"; printf "\\nCLAUDE_PRIVATE_OUTPUT_END\\n"';
+    if (mode === "failed-tool") command += "; exit 7";
+    if (mode === "failed-hook") command += '; chmod 0644 "$DEEPSONAR_OM_GATEWAY_TOKEN_FILE"';
+    if (mode === "residual-input") command += `; printf '%s' '${values["control-token"]}'`;
+    const tool = modelRequests === 1;
     const events = [
       { type: "message_start", message: { id: "credential-read", type: "message", role: "assistant", model,
         content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
-      { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "read-private-files", name: "Bash", input: {} } },
-      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ command, description: "Read synthetic private files" }) } },
+      { type: "content_block_start", index: 0, content_block: tool
+        ? { type: "tool_use", id: "read-private-files", name: "Bash", input: {} } : { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: tool
+        ? { type: "input_json_delta", partial_json: JSON.stringify({ command, description: "Read synthetic private files" }) }
+        : { type: "text_delta", text: "CLAUDE_PRIVATE_CONTINUED" } },
       { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 10 } },
+      { type: "message_delta", delta: { stop_reason: tool ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 10 } },
       { type: "message_stop" },
     ];
     res.writeHead(200, { "content-type": "text/event-stream" });
@@ -217,10 +234,14 @@ for (const [credentialName, environmentName] of [
       child!.once("close", (code, signal) => resolve({ code, signal }));
       child!.stdin!.write(fixture.encodedInput);
     }).finally(() => clearTimeout(timeout));
-    assert.deepEqual(outcome, { code: 1, signal: null }, "credential refusal must end the native process without a timeout signal");
-    assert.ok(output.includes(values[credentialName]), "the native tool must actually read the selected private file");
-    assert.match(output, /credential_in_business_data/u);
-    assert.equal(modelRequests, 1, "only the clean initial model request may leave");
+    assert.deepEqual(outcome, { code: mode === "success" ? 0 : 1, signal: null }, "native execution must settle without a timeout signal");
+    if (mode === "success") {
+      assert.match(output, /CLAUDE_PRIVATE_CONTINUED/u);
+      assert.equal(modelRequests, 2, "successful native cat projects all three credentials and continues");
+    } else {
+      assert.match(output, /credential_in_business_data/u);
+      assert.equal(modelRequests, 1, "failure output and residual input must be refused before upstream IO");
+    }
     assert.deepEqual(errors, []);
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");

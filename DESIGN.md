@@ -350,7 +350,7 @@ OCI 镜像导入在扫描创建事务内持有与凭据删除互斥的凭据行�
 
 Pi 单次模型错误先等待原进程内部重试与执行结算，不在消息错误时提前结束 Job；重试按消息回滚失败输出并保留此前成功文本，空响应判断不借用历史输出；实际后续成功消息才清除待判定错误，最终失败与完成回执边界见 [#1072](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)。运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。真实进程失败不因已接受完成被吞掉；唯一窄例外（#1045）是 CLI 在宿主已持久接受完成后以普通非零码退出、且终态错误精确等于完成拒绝身份，仅剥离本机生成的退出码前缀，信号退出（≥128）、stderr 尾文与其它文本仍失败。限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
 
-#1032 首片在 Pi 主执行与 OM 的 SDK 调用前共用精确凭据替换，覆盖工具 env/认证文件/错误与来源文本，不修改原 Session 或认证选项；OM 内容准入同时绑定 wrapper 与共享源码。DSH 注册后的 SDK 出口复用相同精确替换，Claude 现有本地准入在发送前拒绝正文中的已知凭据值并明确停止当前执行。Gateway 原字节守卫、稳定不可重试分类与五处拒绝审计保持。A1 文件读取普通文本的实现、回归与边界见[范围与验收](docs/MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)，最终 SHA Actions 待验。A2 同 UID 身份隔离仍是待决定的远期方案，不作为本轮强制验收。
+#1032 首片在 Pi 主执行与 OM 的 SDK 调用前共用精确凭据替换，覆盖工具 env/认证文件/错误与来源文本，不修改原 Session 或认证选项；OM 内容准入同时绑定 wrapper 与共享源码。DSH 注册后的 SDK 出口复用相同精确替换，Claude 在成功工具的 PostToolUse 中按原 tool_response 结构精确投影已登记值并继续，失败工具、钩子失败和其他漏网值由现有本地准入拒绝出站。Gateway 原字节守卫、稳定不可重试分类与五处拒绝审计保持。A1 文件读取普通文本的实现、回归与边界见[范围与验收](docs/MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)，最终 SHA Actions 待验。A2 同 UID 身份隔离仍是待决定的远期方案，不作为本轮强制验收。
 
 **Pi 模型预算与截断（#958）：** `/models` 限制作为 `provider_declared` 元数据保留，创建时逐字段冻结显式配置、声明、客户端选值及来源到 `model_budget`，Pi 投影 `contextWindow/maxTokens`；未观测的 CLI 默认保持未知，声明不证明真实容量。`length` 的 text/tool/thinking-only 不进入通用完成 nudge，改为同一精确 Session 的有界状态查询、必要压缩与短反馈；每步复用原完成/修正生命周期、lease/deadline、预算和未知效果守卫。压缩 start/end 不证明进展，不补造上下文摘要；耗尽保留截断和具体诊断，已接受完成/人工等待仍是权威。详情与 Actions 入口见[预算与恢复专题](docs/PI_MODEL_BUDGET_RECOVERY.md)，最终 SHA 待验，不宣称上游容量或生产重跑通过。
 

@@ -1,16 +1,70 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { chmod, link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PRIVATE_JOB_FILES_SCRIPT, materializePrivateJobFiles, privateCredentialEnvironment } from "./private-job-files.js";
-import { PRIVATE_CREDENTIAL_READER_SOURCE } from "./private-credential-reader.js";
+import { CLAUDE_PRIVATE_KEY_HELPER_SOURCE, PRIVATE_CREDENTIAL_READER_SOURCE } from "./private-credential-reader.js";
+import { privateJobFixture } from "./private-job-fixture.js";
 import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
 
 const identity = "11111111-1111-4111-8111-111111111111";
 const token = "ephemeral-fixture-token";
 const linux = process.platform === "linux";
+
+test("#1032 Claude success hook preserves response shape and only projects registered secret values", { skip: !linux }, async t => {
+  const auth = privateJobFixture();
+  t.after(() => auth.close());
+  const dir = await mkdtemp(path.join(os.tmpdir(), "claude-tool-projection-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const script = path.join(dir, "helper.mjs");
+  await writeFile(script, CLAUDE_PRIVATE_KEY_HELPER_SOURCE);
+  const invoke = (input: unknown, args = ["--post-tool-use"]) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, [script, ...args], { env: { ...process.env, ...auth.environment } });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", code => resolve({ code, stdout, stderr }));
+    child.stdin.on("error", reject);
+    child.stdin.end(input === undefined ? undefined : JSON.stringify(input));
+  });
+  const response = { stdout: "before synthetic-main-token after", stderr: "synthetic-control-token",
+    interrupted: false, isImage: false, exitCode: 0, error: null,
+    content: [{ type: "text", text: "synthetic-om-token" }], toolId: "retained-tool-id" };
+  const event = { hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "retained-tool-id",
+    tool_input: { command: "retained command" }, tool_response: response };
+  const original = structuredClone(event);
+  const projected = await invoke(event);
+  assert.equal(projected.code, 0, projected.stderr);
+  assert.deepEqual(JSON.parse(projected.stdout), { hookSpecificOutput: { hookEventName: "PostToolUse",
+    updatedToolOutput: { ...response, stdout: "before [REDACTED] after", stderr: "[REDACTED]",
+      content: [{ type: "text", text: "[REDACTED]" }] } } });
+  assert.deepEqual(event, original);
+  const withError = { stdout: "synthetic-main-token", is_error: true, exitCode: 7, error: "retained diagnostic" };
+  assert.deepEqual(JSON.parse((await invoke({ ...event, tool_response: withError })).stdout).hookSpecificOutput.updatedToolOutput,
+    { ...withError, stdout: "[REDACTED]" }, "output projection must retain error flags and diagnostics");
+  for (const toolResponse of [null, false, 3, ["retained", true], { stdout: "retained", is_error: false }]) {
+    assert.deepEqual(JSON.parse((await invoke({ ...event, tool_response: toolResponse })).stdout), {},
+      "unchanged responses must not compete with another hook's rewrite");
+  }
+  for (const input of [{ ...event, hook_event_name: "PostToolUseFailure", error: "synthetic-main-token" },
+    { hook_event_name: "PostToolUse" }]) {
+    const failure = await invoke(input);
+    assert.equal(failure.code, 78);
+    assert.equal(failure.stdout, "");
+    assert.equal(failure.stderr, "CLAUDE_TOOL_OUTPUT_PROJECTION_FAILED\n");
+  }
+  const authentication = await invoke(undefined, []);
+  assert.equal(authentication.code, 0);
+  assert.equal(authentication.stdout, "synthetic-main-token");
+  await chmod(auth.environment.DEEPSONAR_OM_GATEWAY_TOKEN_FILE, 0o644);
+  const unsafe = await invoke(event);
+  assert.equal(unsafe.code, 78);
+  assert.equal(unsafe.stdout, "");
+  assert.equal(unsafe.stderr, "CLAUDE_TOOL_OUTPUT_PROJECTION_FAILED\n");
+});
 
 test("#1032 CLI environment carries paths and removes gateway, control, provider and telemetry values", () => {
   const base = `/workspace/.deepsonar-credentials-${identity}`;

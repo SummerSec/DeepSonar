@@ -311,11 +311,14 @@ export async function prepareClaudeLaunch(command, environment, settings = []) {
   const cap = claudeOutputCap(allowance, [environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...settings.map(setting => setting?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)]);
   const configuration = JSON.stringify({
     apiKeyHelper: ${JSON.stringify("node " + CLAUDE_PRIVATE_HELPER_PATH)},
+    disableAllHooks: false,
+    hooks: { PostToolUse: [{ hooks: [{ type: 'command',
+      command: ${JSON.stringify("node " + CLAUDE_PRIVATE_HELPER_PATH + " --post-tool-use")}, timeout: 10 }] }] },
     ...(cap === null ? {} : { env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } }),
   });
   // The CLI keeps only the final --settings argument. Keep the trusted file
-  // helper in the same generated override as the numeric launch cap.
-  // Neither value contains business-controlled shell text.
+  // helper, success-output hook and numeric launch cap in one generated override.
+  // The image helper's content hash is checked before start and resume.
   return { command: command + " --settings '" + configuration + "'",
     env: cap === null ? environment : { ...environment, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } };
 }

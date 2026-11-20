@@ -1,6 +1,7 @@
 import { after } from "node:test";
 import { privateJobFixture } from "./private-job-fixture.js";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -14,6 +15,11 @@ import test from "node:test";
 import { MODEL_REQUEST_POLICY_BASE_URL, MODEL_REQUEST_POLICY_SOURCE, modelRequestPolicyCommand } from "./model-request-policy.js";
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 import { shellQuote, type RuntimeHost } from "./runtime-host.js";
+import { CLAUDE_PRIVATE_KEY_HELPER_SOURCE } from "./private-credential-reader.js";
+
+const claudeSettings = { apiKeyHelper: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs",
+  disableAllHooks: false, hooks: { PostToolUse: [{ hooks: [{ type: "command",
+    command: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs --post-tool-use", timeout: 10 }] }] } };
 
 const privateAuth = privateJobFixture();
 after(() => privateAuth.close());
@@ -244,7 +250,8 @@ test("Claude launch and resume prepare the native output option before the CLI f
     for (const command of ["claude -p", "claude -p --resume fixture"]) {
       const prepared = await file.api.prepareClaudeLaunch(command, env);
       assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, String(remaining));
-      assert.equal(prepared.command, command + ` --settings '{"apiKeyHelper":"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs","env":{"CLAUDE_CODE_MAX_OUTPUT_TOKENS":"${remaining}"}}'`);
+      assert.equal(prepared.command, command + " --settings " + shellQuote(JSON.stringify({ ...claudeSettings,
+        env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(remaining) } })));
       remaining = 10;
     }
     const lower = await file.api.prepareClaudeLaunch("claude -p", { ...env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8" },
@@ -255,7 +262,7 @@ test("Claude launch and resume prepare the native output option before the CLI f
     remaining = null;
     for (const command of ["claude -p", "claude -p --resume fixture"]) {
       const prepared = await file.api.prepareClaudeLaunch(command, env, []);
-      assert.deepEqual(prepared, { command: command + ` --settings '{"apiKeyHelper":"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs"}'`, env });
+      assert.deepEqual(prepared, { command: command + " --settings " + shellQuote(JSON.stringify(claudeSettings)), env });
       assert.equal(Object.hasOwn(prepared.env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS"), false);
     }
   } finally { await close(server); await file.close(); }
@@ -285,7 +292,8 @@ test("Claude re-derives the native cap at each start and resume from a fresh bou
     remaining = 700;
     const resumed = await file.api.prepareClaudeLaunch("claude -p --resume fixture", env);
     assert.equal(resumed.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "700", "the next generation boundary follows the shrunken allowance");
-    assert.equal(resumed.command, "claude -p --resume fixture --settings '{\"apiKeyHelper\":\"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs\",\"env\":{\"CLAUDE_CODE_MAX_OUTPUT_TOKENS\":\"700\"}}'");
+    assert.equal(resumed.command, "claude -p --resume fixture --settings " + shellQuote(JSON.stringify({ ...claudeSettings,
+      env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "700" } })));
     assert.equal(durable, "1000", "the live process cap is never rewritten in place");
     status = 409;
     const before = queries;
@@ -304,9 +312,10 @@ test("Claude re-derives the native cap at each start and resume from a fresh bou
 
 test("all three CLI starts and supported resumes use the explicit wrapper without changing their stdin protocol", async () => {
   const commands: string[] = [];
+  const guards: string[] = [];
   const host = {
     runAsync: async (command: string) => { commands.push(command); return {} as never; },
-    run: async () => ({ exitCode: 0, stdout: "", stderr: "" }), uploadFile: async () => {},
+    run: async (command: string) => { guards.push(command); return { exitCode: 0, stdout: "", stderr: "" }; }, uploadFile: async () => {},
   } as unknown as RuntimeHost;
   const context = { host, cwd: "/workspace", input: "fixture", mcpConfigPath: "/workspace/mcp.json",
     env: { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway.invalid/gateway", ...privateAuth.environment },
@@ -316,6 +325,12 @@ test("all three CLI starts and supported resumes use the explicit wrapper withou
   assert.equal(commands.length, 5);
   for (const command of commands) assert.match(command, /^node '\/workspace\/\.deepsonar\/model-request-policy\.mjs'(?: --claude-launch-budget)? -- /u);
   assert.equal(commands.filter(command => command.includes(" --claude-launch-budget ")).length, 2);
+  const helperHash = createHash("sha256").update(CLAUDE_PRIVATE_KEY_HELPER_SOURCE).digest("hex");
+  assert.equal(guards.filter(command => command.includes(helperHash)).length, 2,
+    "start and resume admit the complete auth and PostToolUse helper content");
+  host.run = async () => ({ exitCode: 78, stdout: "", stderr: "" });
+  await assert.rejects(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"].start(context), /CLAUDE_PRIVATE_HELPER_IMAGE_CONTENT_INVALID/u);
+  assert.equal(commands.length, 5, "a stale or modified helper is rejected before CLI launch");
   assert.equal(modelRequestPolicyCommand("pi --mode rpc", {}), "pi --mode rpc");
   assert.throws(() => modelRequestPolicyCommand("pi", { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway.invalid/gateway" }));
 });

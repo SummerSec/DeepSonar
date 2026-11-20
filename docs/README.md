@@ -309,7 +309,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 
 #1124 的[显式历史候选库回收](../deploy/GENERATION_GC.md)说明两 shell 入口、恢复保留集、权限与 OID 证明、宿主 receipt 和 Actions 隔离 PG 验收边界。
 
-#1032 A1 三 CLI 凭据文件通道及[普通文本出口](MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)明确 DSH SDK 精确投影和 Claude 本地拒绝的范围，A2 仍待决定。新增单测、真实 SDK/CLI 回归已接既有工作流，最终 SHA Actions 尚待验收。
+#1032 A1 三 CLI 凭据文件通道及[普通文本出口](MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)明确 DSH SDK 精确投影、Claude 成功工具 PostToolUse 投影及失败/漏网值本地拒绝的范围，telemetry 和原始本地历史未承诺清除，A2 仍待决定。新增单测、真实 SDK/CLI 回归已接既有工作流，最终 SHA Actions 尚待验收。
 
 #1126 的[Job 恢复提示](architecture/05-building-blocks.md#job-恢复提示1126)显示运行结论、折叠技术诊断，并同时核对当前动作和权限；真实组件回归已接现有 Actions，最终 SHA 待验。
 
