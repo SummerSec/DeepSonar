@@ -93,7 +93,7 @@ export async function runCredentialRefusalDispatchFixture(
       },
     };
     Object.assign(config.runtime, { agentMode: "real", provider: "fake" });
-    config.hub.enabled = false;
+    Object.assign(config.hub, { enabled: false });
     runner.provision = async input => { provisions++; return provision.call(runner, input); };
     runner.ensureHost = async () => host;
     await db`UPDATE global_settings SET rules_json=${db.json({ ...settings!.rules_json,
@@ -136,7 +136,7 @@ export async function runCredentialRefusalDispatchFixture(
     runner.provision = provision;
     runner.ensureHost = ensureHost;
     Object.assign(config.runtime, runtime);
-    config.hub.enabled = hubEnabled;
+    Object.assign(config.hub, { enabled: hubEnabled });
     await db`UPDATE global_settings SET rules_json=${db.json(settings!.rules_json)} WHERE id='global'`;
     await db`DELETE FROM jobs WHERE id=${jobId}`;
     await db`DELETE FROM canvases WHERE id=${canvasId}`;
