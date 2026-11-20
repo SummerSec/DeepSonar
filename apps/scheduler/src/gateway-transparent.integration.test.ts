@@ -293,28 +293,43 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       const counter = (text: string) => Number(text.match(new RegExp(`^${metricName} (\\d+)$`, "m"))?.[1] ?? 0);
       const beforeMetric = counter(await renderMetrics());
       const [{ n: beforeAudits }] = await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='gateway.credential_denied'`;
+      const assertCredentialDenial = (response: Response) => {
+        assert.equal(response.status, 400);
+        assert.equal(JSON.parse(response.body.toString("utf8")).error.type, "credential_in_business_data");
+      };
       const headerLeak = await via("/v1/messages", "GET", ["x-business-data", `prefix-${token.plaintext}`,
         "user-agent", token.plaintext, "x-request-id", token.plaintext]);
-      assert.equal(headerLeak.status, 400);
+      assertCredentialDenial(headerLeak);
       const bodyLeak = await via("/v1/messages", "POST", ["content-type", "application/octet-stream"], [Buffer.from(token.plaintext)]);
-      assert.equal(bodyLeak.status, 400);
+      assertCredentialDenial(bodyLeak);
       for (const value of [token.plaintext, [...token.plaintext].map(char => `%${char.charCodeAt(0).toString(16)}`).join("")]) {
-        assert.equal((await via(`/v1/messages?debug=${value}`)).status, 400);
-        assert.equal((await via(`/v1/${value}`)).status, 400);
+        assertCredentialDenial(await via(`/v1/messages?debug=${value}`));
+        assertCredentialDenial(await via(`/v1/${value}`));
       }
       const partlyEncoded = `%${token.plaintext.charCodeAt(0).toString(16)}${token.plaintext.slice(1)}`;
+      for (const target of [`/v1/messages?debug=${partlyEncoded}`,
+        `/v1/messages?debug=ok&debug=${partlyEncoded}`, `/v1/${partlyEncoded}`]) {
+        assertCredentialDenial(await via(target));
+      }
+      const beforeInvalidTargets = counter(await renderMetrics());
+      assert.equal(beforeInvalidTargets, beforeMetric + 9, "valid encoded targets must reach the credential guard");
       for (const target of [`/v1/messages?debug=${partlyEncoded}&bad=%ZZ`,
         `/v1/messages?bad=%ZZ&debug=ok&debug=${partlyEncoded}`, `/v1/${partlyEncoded}?bad=%ZZ`]) {
-        assert.equal((await via(target)).status, 400, "unrelated invalid escapes cannot hide encoded credentials");
+        // Invalid escapes are rejected before token inspection. A generic 400
+        // cannot prove that a credential guard ran or incremented its counter.
+        const response = await via(target);
+        assert.equal(response.status, 400);
+        assert.equal(JSON.parse(response.body.toString("utf8")).error.type, "invalid_request_target");
       }
+      assert.equal(counter(await renderMetrics()), beforeInvalidTargets, "syntax refusals do not increment credential denials");
       const compressedLeak = await via("/v1/messages", "POST",
         ["content-type", "application/json", "content-encoding", "gzip"],
         [gzipSync(Buffer.from(JSON.stringify({ debug: token.plaintext })))]);
-      assert.equal(compressedLeak.status, 400);
+      assertCredentialDenial(compressedLeak);
       const trailerLeak = await send(gatewayPort, "/gateway/v1/messages", "POST",
         [...auth, "transfer-encoding", "chunked", "trailer", "x-business-data"], [Buffer.from("safe body")],
         [["x-business-data", token.plaintext]]);
-      assert.equal(trailerLeak.status, 400);
+      assertCredentialDenial(trailerLeak);
       // A governed base URL can itself contain the Job token. Keep its frozen
       // binding valid so the test reaches the independent upstream-target guard.
       try {
@@ -323,7 +338,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         const [changed] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
         await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{gateway_provider_binding}',
           ${sql.json(freezeGatewayProviderBinding(changed as never) as never)}) WHERE id=${jobId}`;
-        assert.equal((await via("/v1/messages")).status, 400);
+        assertCredentialDenial(await via("/v1/messages"));
       } finally {
         await sql`UPDATE credentials SET public_metadata_json=${sql.json({ base_url: `http://127.0.0.1:${address.port}/v1` })}
           WHERE id=${credentialId}`;
