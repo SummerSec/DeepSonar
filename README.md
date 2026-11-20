@@ -78,7 +78,7 @@ pwsh -NoProfile -File .\deploy\deploy.ps1 -Action up -Mode fake -Source pull
 
 `fake` 模式用于状态机和界面联调，不启动真实 Agent 沙箱，也不调用上游模型；它不能证明真实模型的任务效果。
 
-空库首次启动会创建默认管理员。登录信息见 [部署指南](docs/ONE_CLICK_DEPLOYMENT.md#登录)，首次登录后立即修改密码。完成账号与访问控制配置前，不要把服务暴露到公网。
+空库首次启动使用部署提供的密码文件创建首个管理员。准备方式见 [部署指南](docs/ONE_CLICK_DEPLOYMENT.md#登录)，已有账户不会被重置。完成账号与访问控制配置前，不要把服务暴露到公网。
 
 ### 启用真实执行
 
@@ -176,7 +176,41 @@ pnpm install
 cp .env.example .env                 # PowerShell: Copy-Item .env.example .env
 ```
 
-在根目录 `.env` 中将 `AGENT_MODE` 设置为 `fake`，再启动开发数据库和服务：
+在根目录 `.env` 中将 `AGENT_MODE` 设置为 `fake`。**开发数据库还是空库时**，即使禁用了 API 鉴权，也要在启动 Scheduler 前准备一次管理员密码文件。以下两种方式任选其一，从仓库根目录运行。已经有用户的数据库不需要这一步，也不会因生成文件而重置账号。
+
+Bash / POSIX shell（需要 OpenSSL）：
+
+```sh
+(umask 077; mkdir -m 700 .deepsonar-bootstrap-admin && set -C && \
+  openssl rand -hex 32 > .deepsonar-bootstrap-admin/password)
+# 生成成功后设置路径；已有密码文件时跳过生成，只设置路径。
+export DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE="$PWD/.deepsonar-bootstrap-admin/password"
+```
+
+Windows PowerShell 7.2+：
+
+```powershell
+$dir = Join-Path (Get-Location).Path '.deepsonar-bootstrap-admin'
+New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetAccessRuleProtection($true, $false)
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+  $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+Set-Acl -LiteralPath $dir -AclObject $acl -ErrorAction Stop
+$path = Join-Path $dir 'password'
+$stream = [System.IO.File]::Open($path, 'CreateNew', 'Write', 'None')
+try {
+  $bytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+  $encoded = [System.Text.Encoding]::UTF8.GetBytes([Convert]::ToHexString($bytes))
+  $stream.Write($encoded, 0, $encoded.Length)
+} finally { $stream.Dispose() }
+$env:DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE = $path
+```
+
+Windows 如已有此密码文件，跳过创建，只将 `$env:DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE` 设为它的绝对路径。两种方式都不打印密码，该目录已排除在 Git 和 Docker 构建上下文之外。不要在命令参数、聊天或 Git 中复制密码。
+
+在**设置了上述环境变量的同一终端**启动数据库和服务（或者把文件的绝对路径填入仓库根目录 `.env` 的同名配置项）：
 
 ```bash
 pnpm db:up

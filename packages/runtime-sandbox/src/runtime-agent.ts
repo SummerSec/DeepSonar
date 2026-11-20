@@ -102,6 +102,8 @@ export interface RealAgentSpec {
   onProgress?: (message: string) => void;
   /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
   onEvent?: (event: Record<string, unknown>) => void;
+  /** Trusted host observations. CLI output never invokes this callback. */
+  onProcessDiagnostic?: (observation: import("./runtime-process-diagnostic.js").RuntimeProcessObservation) => Promise<void>;
   /** 上下文压缩摘要；不得携带原始 prompt 或 provider 原文。可返回更新后的身份。 */
   onContextEvent?: (event: Record<string, unknown>) => void | ContextIdentity | Promise<void | ContextIdentity>;
   /** 恢复前由调度器冻结的上下文身份。 */
@@ -1337,7 +1339,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     }
   };
   const adapterContext = {
-    host: observeRuntimeProcesses(host, secretValues, spec.onEvent),
+    host: observeRuntimeProcesses(host, secretValues, spec.onEvent, spec.onProcessDiagnostic),
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
@@ -1472,7 +1474,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin；
   // execd 没有 EOF 控制帧，terminal_result 后有界等待再 kill，避免成功路径挂到 Reaper。
   const stdinCloseKiller = createStdinCloseKiller({
-    kill: () => { void exec.kill().catch(() => {}); },
+    kill: () => { void exec.kill("terminal_result").catch(() => {}); },
     graceMs: spec.stdinCloseKillMs,
   });
   const closeStdin = (reason?: TerminalAttemptCloseReason) => {
@@ -1518,7 +1520,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
         ? new PiRpcChunkAssembler({ onExpire: () => {
             processError ??= new Error("PI_RPC_CHUNK_INCOMPLETE");
             fatalOutputError ??= "PI_RPC_CHUNK_INCOMPLETE";
-            void exec.kill().catch(() => {});
+            void exec.kill("output_capture_failure").catch(() => {});
           } })
         : undefined;
       try {
@@ -1706,7 +1708,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       } catch (error) {
         processError = error;
         if (error instanceof Error && error.message.startsWith("PI_RPC_")) fatalOutputError = error.message;
-        await exec.kill().catch(() => {});
+        await exec.kill("runtime_exception").catch(() => {});
       } finally {
         processError ??= piDriver?.finishError();
         piDriver?.dispose();

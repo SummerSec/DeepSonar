@@ -1,10 +1,14 @@
 # DeepSonar Design
 
+#1133 补齐人工技术收口与设备冻结。Finding 详情允许有 findings:write 权限的操作者对 needs_human 显式记录无定论决定，按对象修订、状态、最后轮次做 CAS，新增终结轮次并同事务写审计。补证两个入口复用画布设备要求冻结与授权，远端测试按明确目标执行。工程验收以最终 SHA Actions 为准，详见[接口边界](docs/architecture/09-interface-specs.md#人工结束技术验证1133)。
+
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
 > 同步日期：2026-11-19
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
+
+#1123 的[默认不限调度配额](docs/architecture/06-runtime-view.md#默认不限的调度配额1123)使用全局 null 不限、项目 null 继承和项目 0 暂停。显式数字及环境变量保留，缺省采用新 null 契约，设置输入与生效值分开展示；正常 HTTP/claim 与 DOM 回归已接线，最终 SHA Actions 待验。
 
 #1002 P1-6 为 Canvas 边和人工消息的节点引用外键，以及 Finding 候选 sources/edges 的项目+Finding 级联引用增加完整前导列索引，任务 retry 的单事务重置、外键与项目范围保持不变；不提高 timeout 或分批提交。基线同步与索引前后计划/HTTP 回滚隔离证据见[数据库说明](database/README.md#canvas-节点引用索引1002-p1-6)，最终 SHA Actions 待验，现场延迟仍未归因。
 
@@ -510,3 +514,5 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 #1124 B 的[历史候选库回收](deploy/GENERATION_GC.md)提供默认预览和显式审批执行，复用升级锁，保留当前库、最近真实恢复源及未决引用，以 marker/cluster/OID/ACL 证明删除归属。宿主 receipt 与当前库审计支持丢失响应对账，最终 SHA Actions 待验。
 
 #1126 的 Job 恢复界面按当前 Scheduler 动作与用户权限呈现，结果结论优先，维护者技术诊断默认折叠，详见[构件视图](docs/architecture/05-building-blocks.md#job-恢复提示1126)。恢复提交仍重新准入，最终 SHA Actions 待验。
+
+#1143 的 [PTY 清理事实与精确对账](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存宿主专用观察与原运行绑定，先提交旧凭据撤销及清理记录，再有界销毁并重核收口。DELETE 拒绝、超时和独立 unknown 分别保留；宿主 caller 不证明 OOM。无合法断点的整 Job 自动恢复尚未交付，晚 usage 与历史跨 Job 预算组合另验。

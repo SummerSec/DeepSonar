@@ -4,7 +4,7 @@
  */
 import type { OpenSandboxExecHandle } from "./opensandbox.js";
 import type { RuntimeProcessChunk } from "./runtime-host.js";
-import { projectProcessError, RuntimeProcessFailure, safeProcessDiagnosticText, type RuntimeProcessDiagnostic } from "./runtime-process-diagnostic.js";
+import { projectProcessError, RuntimeProcessFailure, safeProcessDiagnosticText, type RuntimeProcessDiagnostic, type RuntimeCleanupDiagnostic, type RuntimeKillCaller } from "./runtime-process-diagnostic.js";
 import { createRuntimeStreamCheckpoint } from "./runtime-stream-fairness.js";
 
 export const PTY_BIN_STDIN = 0x00;
@@ -109,6 +109,8 @@ export async function openOpenSandboxPty(
   let serverError: string | undefined;
   let serverErrorCode: string | undefined;
   let hostKillRequested = false;
+  let hostKillCaller: RuntimeKillCaller | undefined;
+  let cleanupDiagnostic: RuntimeCleanupDiagnostic | undefined;
   let closeRequested = false;
   let finalDiagnostic: RuntimeProcessDiagnostic | undefined;
   const diagnostic = (): RuntimeProcessDiagnostic => structuredClone<RuntimeProcessDiagnostic>(finalDiagnostic ?? {
@@ -117,10 +119,11 @@ export async function openOpenSandboxPty(
     ...(serverError !== undefined ? { server_error: serverError } : {}),
     ...(serverErrorCode !== undefined ? { server_error_code: serverErrorCode } : {}),
     host_kill_requested: hostKillRequested, close_requested: closeRequested,
+    ...(hostKillCaller ? { host_kill_caller: hostKillCaller } : {}),
   });
   const failure = (code?: string) => new RuntimeProcessFailure(
-    code ?? `OPENSANDBOX_PTY_${termination!.toUpperCase()}`, diagnostic());
-  let sessionId: string;
+    code ?? `OPENSANDBOX_PTY_${termination!.toUpperCase()}`, diagnostic(), sessionId, cleanupDiagnostic);
+  let sessionId: string | undefined;
   try {
     const created = await fetchImpl(joinUrl(endpoint.httpUrl, "pty"), {
       method: "POST", headers: { "content-type": "application/json", ...endpoint.headers },
@@ -128,7 +131,7 @@ export async function openOpenSandboxPty(
     });
     if (!created.ok) throw new Error(`OPENSANDBOX_PTY_CREATE_FAILED HTTP_${created.status}`);
     const body = await created.json() as { session_id?: unknown };
-    if (typeof body?.session_id !== "string" || !body.session_id || body.session_id.length > 256) {
+    if (typeof body?.session_id !== "string" || !/^[A-Za-z0-9_.:-]{1,256}$/u.test(body.session_id)) {
       throw new Error("OPENSANDBOX_PTY_SESSION_MISSING");
     }
     sessionId = body.session_id;
@@ -137,17 +140,23 @@ export async function openOpenSandboxPty(
     websocketError = projectProcessError(error, secrets);
     throw failure();
   }
+  const processId = sessionId;
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () => cleanupPromise ??= (async () => {
     const controller = new AbortController();
+    const requestedAt = new Date().toISOString();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
-        fetchImpl(joinUrl(endpoint.httpUrl, `pty/${encodeURIComponent(sessionId)}`), {
+      const result = await Promise.race([
+        fetchImpl(joinUrl(endpoint.httpUrl, `pty/${encodeURIComponent(processId)}`), {
           method: "DELETE", headers: endpoint.headers, signal: controller.signal,
-        }).catch(() => undefined),
-        new Promise<void>(resolve => { timer = setTimeout(() => { controller.abort(); resolve(); }, PTY_CLEANUP_TIMEOUT_MS); }),
+        }).then(response => ({ outcome: response.ok ? "confirmed" as const : "http_error" as const, http_status: response.status }))
+          .catch(() => ({ outcome: "transport_error" as const, http_status: null })),
+        new Promise<{ outcome: "timeout"; http_status: null }>(resolve => {
+          timer = setTimeout(() => { resolve({ outcome: "timeout", http_status: null }); controller.abort(); }, PTY_CLEANUP_TIMEOUT_MS);
+        }),
       ]);
+      cleanupDiagnostic = { ...result, requested_at: requestedAt, completed_at: new Date().toISOString() };
     } finally { if (timer) clearTimeout(timer); }
   })();
 
@@ -156,7 +165,7 @@ export async function openOpenSandboxPty(
   try {
     const query = input.pty ? "" : "?pty=0";
     ws = (deps.openWebSocket ?? defaultOpenWebSocket)(
-      `${toWebSocketUrl(joinUrl(endpoint.httpUrl, `pty/${encodeURIComponent(sessionId)}/ws`))}${query}`, endpoint.headers,
+      `${toWebSocketUrl(joinUrl(endpoint.httpUrl, `pty/${encodeURIComponent(processId)}/ws`))}${query}`, endpoint.headers,
     );
     ws.binaryType = "arraybuffer";
   } catch (error) {
@@ -250,11 +259,12 @@ export async function openOpenSandboxPty(
   });
   if (!opened && !termination) connectTimer = setTimeout(() => terminate("connect_timeout"), PTY_CONNECT_TIMEOUT_MS);
   try { await connected; }
-  catch (error) { await cleanup(); throw error; }
+  catch { await cleanup(); throw failure(); }
 
   return {
-    id: sessionId,
+    id: processId,
     getTerminationDiagnostic: () => finalDiagnostic ? diagnostic() : undefined,
+    getCleanupDiagnostic: () => cleanupDiagnostic ? { ...cleanupDiagnostic } : undefined,
     async write(data) {
       if (termination) {
         if (!done) await new Promise<void>(resolve => waiters.add(resolve));
@@ -274,10 +284,11 @@ export async function openOpenSandboxPty(
       // execd has no stdin EOF frame. Only the terminal-result killer may stop it.
       stdinClosed = true;
     },
-    async kill() {
+    async kill(caller: RuntimeKillCaller = "unspecified_host") {
       stdinClosed = true;
       if (!done) {
         hostKillRequested = true;
+        hostKillCaller = caller;
         terminate("host_kill");
         try { ws.send(JSON.stringify({ type: "signal", signal: "SIGTERM" })); } catch { /* already closed */ }
         closeSocket();

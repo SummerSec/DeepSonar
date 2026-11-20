@@ -317,8 +317,40 @@ function Ensure-AllowedImageRegistries {
   Ensure-EnvKv "DEEPSONAR_ALLOWED_IMAGE_REGISTRIES" "ghcr.io,docker.io,registry-1.docker.io,$AcrHost"
 }
 
+function Initialize-BootstrapAdminFile {
+  $directory = Join-Path $PSScriptRoot "bootstrap-admin"
+  if (Test-Path -LiteralPath $directory) { return }
+  New-Item -ItemType Directory -Path $directory -ErrorAction Stop | Out-Null
+  if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
+    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    foreach ($identity in @($sid, [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18"))) {
+      $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+        $identity, "FullControl", $inheritance, "None", "Allow")
+      $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $directory -AclObject $acl -ErrorAction Stop
+  } else {
+    & chmod 700 $directory
+    if ($LASTEXITCODE -ne 0) { throw "Unable to restrict the bootstrap admin secret directory." }
+  }
+  $bytes = New-Object byte[] 32
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+  $value = [BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant()
+  $path = Join-Path $directory "password"
+  $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+  try {
+    $encoded = $Utf8NoBom.GetBytes($value)
+    $stream.Write($encoded, 0, $encoded.Length)
+  } finally { $stream.Dispose() }
+}
+
 function Initialize-Env {
   if (-not (Test-Path -LiteralPath $EnvFile)) {
+    if ($Mode -ne "worker-join") { Initialize-BootstrapAdminFile }
     $content = [IO.File]::ReadAllText($EnvExample, $Utf8NoBom)
     $content = $content.Replace("change-me-postgres-password", (New-HexSecret 1))
     $content = $content.Replace("change-me-bootstrap-admin-token", "deepsonar_bootstrap_$(New-HexSecret 2)")
@@ -658,7 +690,7 @@ try {
         Write-PlatformImages
       }
       Write-Host "[deploy] The bootstrap admin token is stored as DEEPSONAR_ADMIN_TOKEN in deploy/.env."
-      Write-Host "[deploy] Human default admin: admin / Deep@Sonar66. Change the password (and preferably the username) immediately in production."
+    Write-Host "[deploy] First-run human admin password file: deploy/bootstrap-admin/password (existing users are not changed)."
       if ($Mode -eq "fake") {
         Write-Host "[deploy] Running in fake mode. Use -Mode real for real agents." -ForegroundColor Yellow
       } else {

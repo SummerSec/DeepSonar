@@ -11,3 +11,6 @@ node_modules
 deploy/.env
 data
 *.log
+# Deployment-only human administrator seed (never commit or copy into builds).
+deploy/bootstrap-admin/
+.deepsonar-bootstrap-admin
