@@ -10,6 +10,7 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDshProfilePatch, DSH_PROFILE, DSH_PROFILE_MANIFEST } from '../packages/runtime-sandbox/src/dsh-profile.ts';
 import { DSH_REQUEST_BUDGET_PLUGIN } from '../packages/runtime-sandbox/src/dsh-request-budget.ts';
+import { DSH_REQUEST_BUDGET_SOURCE as compiledHelper } from '../packages/runtime-sandbox/dist/dsh-request-budget.js';
 import { DSH_REQUEST_BUDGET_ARTIFACT_SHA256, DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from '../packages/runtime-sandbox/src/dsh-runtime-image-guard.ts';
 import { installDshRequestBudget } from './dsh-request-budget-install.mjs';
 
@@ -19,6 +20,8 @@ const installRoot = resolve(process.env.DSH_REQUEST_BUDGET_INSTALL_ROOT ?? join(
 const bin = join(installRoot, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
 assert.equal(JSON.parse(await readFile(join(installRoot, 'node_modules/@deepseek-ai/dsh/package.json'), 'utf8')).version, '0.2.2-rc.1');
 const artifact = await installDshRequestBudget(installRoot, join(repository, 'packages/runtime-sandbox/src'));
+assert.equal(await readFile(join(dirname(artifact), 'deepsonar-request-budget.mjs'), 'utf8'), compiledHelper,
+  'raw TypeScript image installer and compiled Scheduler must produce identical helper bytes');
 // #979: execute the production preflight against the real, pinned installation,
 // without a model request. The installer embeds two absolute SDK paths: adapt
 // only those known literals to the canonical image path for the pinned-byte check,
