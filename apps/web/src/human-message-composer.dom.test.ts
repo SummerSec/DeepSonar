@@ -203,6 +203,12 @@ test("a reply saved after leaving and returning to a task cannot close its new d
       human_continuation: { ...currentDetail.human_continuation!, id: "request-b", revision: 8 },
     };
     await act(async () => { finishNewRead(nextDetail); await requestResult; });
+    const confirmDraft = () => act(() => {
+      [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "确认用此草稿回复当前问题")!.click();
+    });
+    assert.equal(sendDisabled(), true, "a refreshed revision must not silently rebind the draft");
+    assert.equal(createMessage.mock.callCount(), 4);
+    confirmDraft();
     sendError = new Error("HUMAN_REQUEST_CHANGED: 请求已变化");
     await act(async () => { send(); await saved; });
     assert.match(container.textContent ?? "", /HUMAN_REQUEST_CHANGED/);
@@ -215,11 +221,40 @@ test("a reply saved after leaving and returning to a task cannot close its new d
       await requestResult;
     });
     assert.equal(container.querySelector("textarea")!.value, "重新打开后回复当前问题");
+    assert.equal(sendDisabled(), true);
+    assert.equal(createMessage.mock.callCount(), 5, "rereading never submits or rebinds the draft without confirmation");
+    confirmDraft();
     sendError = null;
     await act(async () => { send(); await saved; });
     assert.deepEqual(createMessage.mock.calls[5]!.arguments[1].target, {
       kind: "request", request_id: "request-b", expected_revision: 9,
     }, "after a stale revision is rejected, the retained draft can answer the freshly read request");
+
+    act(() => root.render(null));
+    requestResult = Promise.resolve(currentDetail);
+    await act(async () => { renderWaiting(currentItem()); await requestResult; });
+    type("写给问题 A 的草稿");
+    const replacement = { ...currentDetail,
+      human_request: { ...currentDetail.human_request!, event_id: "request-c", payload: { reason: "新的问题 B" } },
+      human_continuation: { ...currentDetail.human_continuation!, id: "request-c", revision: 0 },
+    };
+    requestResult = Promise.resolve(replacement);
+    const refreshedItem = { ...currentItem(), node: { ...currentItem().node, updated_at: "2026-11-20T07:00:00.000Z" } };
+    await act(async () => { renderWaiting(refreshedItem); await requestResult; });
+    assert.match(container.textContent ?? "", /新的问题 B/);
+    assert.equal(container.querySelector("textarea")!.value, "写给问题 A 的草稿");
+    assert.equal(sendDisabled(), true, "a new request on the same Job must never inherit the previous request's answer");
+    act(() => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.click());
+    renderWaiting(refreshedItem);
+    assert.equal(sendDisabled(), true, "rerendering the new request cannot implicitly confirm the old draft");
+    assert.equal(createMessage.mock.callCount(), 6, "no reply API call is allowed before confirming the new question");
+    confirmDraft();
+    assert.equal(createMessage.mock.callCount(), 6, "confirmation alone must not send anything");
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[6]!.arguments[1].target, {
+      kind: "request", request_id: "request-c", expected_revision: 0,
+    });
+    assert.equal(createMessage.mock.calls[6]!.arguments[1].body, "写给问题 A 的草稿");
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();

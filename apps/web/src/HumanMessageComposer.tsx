@@ -1,6 +1,6 @@
 import { CheckCircle, File, PaperPlaneTilt, UploadSimple, X } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api, type CanvasHumanMessage, type CanvasNode } from "./api";
+import { api, type CanvasHumanMessage, type CanvasNode, type CreateCanvasHumanMessage } from "./api";
 import { HumanRequestDetails } from "./HumanRequestDetails";
 import { useHumanMessageRequest } from "./use-human-message-request";
 import {
@@ -49,14 +49,20 @@ export function HumanMessageComposer({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
+  const [draftRequest, setDraftRequest] = useState<Extract<CreateCanvasHumanMessage["target"], { kind: "request" }> | null>(null);
   const trimmed = body.trim();
   const jobId = selectedNode?.job_id ?? (typeof selectedNode?.body_json.job_id === "string" ? selectedNode.body_json.job_id : null);
   const waitingJob = selectedNode?.status === "waiting_human"
     || jobs?.some(job => job.id === jobId && job.status === "waiting_human");
   const request = useHumanMessageRequest(canvasId, targetKind === "job" && waitingJob ? jobId : null, intervention?.node.updated_at);
+  useEffect(() => {
+    if (!draftRequest && request.target) setDraftRequest(request.target);
+  }, [draftRequest, request.target]);
+  const requestChanged = Boolean(request.target && draftRequest && (request.target.request_id !== draftRequest.request_id
+    || request.target.expected_revision !== draftRequest.expected_revision));
   const jobTarget = nodeEligible ? waitingJob ? request.target : humanMessageTargetForNode(selectedNode, jobs) : null;
   const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
-  const waitingForCurrentRequest = targetKind === "job" && (Boolean(waitingJob && !request.target)
+  const waitingForCurrentRequest = targetKind === "job" && (Boolean(waitingJob && (!request.target || !draftRequest || requestChanged))
     || Boolean(intervention?.pending && (intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true)));
   const canSubmit = Boolean(projectId && target && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy && !waitingForCurrentRequest);
   const targetTitle = targetKind === "hub" ? "Hub" : targetKind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
@@ -148,6 +154,11 @@ export function HumanMessageComposer({
               </p>
             </section>
           )}
+          {showCurrentRequest && requestChanged && <div className="human-message-feedback" role="alert">
+            人工问题或版本已变化。草稿和附件已保留，请核对上方当前问题，确认后再发送。
+            <button type="button" disabled={busy || !request.target || Boolean(intervention?.pending && (intervention.detailStatus !== "loaded" || !intervention.detailVersionMatches))}
+              onClick={() => setDraftRequest(request.target)}>确认用此草稿回复当前问题</button>
+          </div>}
           <fieldset disabled={busy}>
             <legend>发送目标</legend>
             {!nodeEligible && (

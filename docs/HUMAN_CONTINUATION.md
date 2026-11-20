@@ -26,6 +26,8 @@ Dispatcher 正常 finally 立即回收等待资源；重启后现有 reconciliat
 
 画布的人工消息窗口在回复 waiting_human 运行前，从既有 Job 详情读取当前持久请求、完整问题和版本，并用 request 目标发送正文及附件；不能仅凭画布节点详情改发普通 Job 消息。读取期间禁用发送；读取失败可在原窗口重试，草稿保留；请求缺失、已处理、历史请求或归属不一致时阻止提交。普通活动运行仍使用原 Job 目标；窗口不自动重发失败消息，不通过切换 Hub 目标替用户回答请求。回归接既有 ci:unit:web-facts，最终 SHA Actions 另验。
 
+窗口首次读到可回复的持久请求后固定草稿关联的请求编号和版本；同一 Job 换问题或版本变化时保留正文和附件，但禁用发送。用户须核对新问题并点击「确认用此草稿回复当前问题」，才能重新启用发送；刷新、重读、切换目标和确认本身都不会自动提交回复。这一确认只在请求变化时出现，防止旧答案误答新问题，不要求用户手填编号或重新粘贴草稿。
+
 回复先保存为 answered，返回 202/reply_state=reply_saved。即使准备中、暂停、缺文件或预算不足，回复仍持久存在，不要求重复输入。202 只证明保存，UI 通过 human_continuation 和 execution_state 展示后续阻塞。generic job/hub 消息和「忽略」都不能直接恢复 waiting_human。
 
 既有 reconciliation 有界公平轮转扫描 answered 请求，核文件、旧执行退出/回收、最新 Attempt、冻结身份、目标实时授权、FIFO 席位、任务暂停、全部效果/用量和累计预算。全部通过才在同一 Canvas→Job→Attempt→请求事务写 Scheduler-owned human_continuation 事件、唯一下一 attempt_no 并转 pending。有 rejected-completion root 时还用原 repair_generation 授权精确新 owner，保持原 deadline 和额度；无 root 仍有独立续做归属事件。
