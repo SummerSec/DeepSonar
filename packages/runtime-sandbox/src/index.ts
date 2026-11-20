@@ -4,6 +4,7 @@
  */
 
 import type { RuntimeHost, RuntimeResource } from "./runtime-host.js";
+export type { RuntimeProcessObservation, RuntimeProcessDiagnostic, RuntimeCleanupDiagnostic, RuntimeKillCaller } from "./runtime-process-diagnostic.js";
 
 export interface ProvisionInput {
   jobId: string;

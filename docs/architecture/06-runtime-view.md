@@ -3,6 +3,8 @@
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
 > 同步日期：2026-11-19
 
+#1133 的自动 Hub worker intent 与人工 Finding 补证入口，在冻结网络策略后、运行配置前统一调用设备要求冻结。显式 adb/hdc 要求重核项目 opt-in、已配置 rig、已启用 transport、独占及出网授权，进入 Job snapshot 后由既有设备租约入口再次授权并发放短期 grant。无显式设备要求的目标继续远端路径，镜像缺 SDK 或固件不用于推断设备能力。人工无定论事务、CAS 和审计见[接口边界](09-interface-specs.md#人工结束技术验证1133)。
+
 ## 行锁竞争后的认领唤醒
 
 Dispatcher 的有界候选页先读身份，再以 `SKIP LOCKED` 取得 Canvas/Job 行锁。锁定复读结果少于选中的候选时，现有 [schedule-wake](../../apps/scheduler/src/schedule-wake.ts) 绑定登记一个可合并的延后认领唤醒；候选也可能已变化或消失，下一轮仍完整复读与核验，不凭旧身份授予执行资格。重试延迟以代码为准，不新增用户设置。
@@ -339,3 +341,20 @@ Scheduler 在现有 claim advisory 锁内，先按项目 dispatch_last_served、
 锁序沿用 claim advisory → Canvas → Project → budget root → Job → Attempt。Project 以 SKIP LOCKED 取得写锁后重核 active，取消、暂停、FIFO、图资格、账号、CLI、预算 owner、lease 与 provision 门保持权威。每个事务最多成功领取一个 Job，提交释放已有锁后再发现下一项目。扫描只读身份提示，不提前占用轮次。没有新增配置、管理 API 或 Web 操作。
 
 真实 PostgreSQL 回归接入 `pnpm ci:integration:dispatch-limits`，由现有 gate-db-core 调用。覆盖五项目两席位连续补充高优先级、项目内优先级、513 个无资格候选后的可领取任务、37 项目跨 tick 扫描、项目资格变化、独立进程重启与并发正常 claim。仅 Actions 运行，最终 SHA 结果另验。
+
+
+#1032 A1 的三 CLI 私有文件创建、认证读取、清理及现行 P0-1 / P1-3 / P1-4 覆盖边界见[凭据文件通道](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。同 UID 工具可读，A2 未交付。Actions 尚待本 PR 最终提交验收。
+
+## 默认不限的调度配额（#1123）
+
+三项全局规则 `maxGlobalJobs`、`maxJobsPerProject`、`maxConcurrentProvisioning` 接受 null 或 1–1000 整数。null 表示不限，0 拒绝。仅缺少持久键时读取显式环境变量，环境变量缺省或空白时为 null。已存数字及显式环境变量数字保留，缺省直接采用新契约，不固化旧 20/5/2 默认值。非法显式值阻止启动或领取，升级预检报告字段名。
+
+项目 `maxConcurrentJobs=null` 清除覆盖并继承全局，全局也不限时项目不限。0 暂停该项目后续领取。有限项目配额仍与有限全局上限取最小值。全局不限仅解除对应三个闸，Canvas、FIFO、暂停、图资格、Provider、账号、模型、CLI、lease、镜像及 provision 准入继续核验。计数仍为 claimed/provisioning/running，改配额不终止运行任务。仅内部剩余槽计算使用 Infinity，数据库和 JSON API 使用 null。
+
+OpenSandbox 创建熔断半开恢复独立限制为一个 claimed/provisioning 席位，观察到半开的进程在现有 claim advisory 锁内重新读取熔断状态并按数据库计数核验。出站创建前同步核验 episode，过期准入沿现有未出站 provision 重排路径重新等待，使用 provision_admission_deferred 记录且不消耗或重置真实创建失败重试额度，并保留效果归属与 never_started 证明。全局配额不限仍保留该恢复门，失败探针重新打开熔断并保留其他 pending Job。熔断状态仍在进程内，多副本或重启没有共享熔断 episode 的保证。
+
+设置页全局配额独立保存，仅提交用户修改的字段。输入来自已存值，生效值单独读取，避免把环境变量或其他硬上限推导值固化为覆盖。清空保存写 null，输入非法时显示错误并禁用保存。项目设置和项目列表将 null 展示为“不限”。该交互沿用配置中心入口，额外增加三个清空按钮及独立保存操作，以明确用户何时解除限制。行为证据来自 dispatch-limits、升级预检、配置子进程与 Web DOM 回归，最终 SHA Actions 待验。
+
+## PTY 清理事实与精确对账（#1143）
+
+宿主专用回调把退出/连接观察与 PTY DELETE 结果绑定原 Job/Attempt/Sandbox/Process/agent_run 审计引用。先提交旧凭据撤销与 pending 清理记录，再以相同锁序重核并有界销毁；持久指定 worker 的消失确认才可结清精确原终态 marker。失败、超时和提交失败保留归属，独立 unknown 与历史无证据 run 不泛清。实际 caller 与 OOM 未核实分开，现有 Job 详情按需展示证据和恢复限制。详细字段、测试入口及剩余范围见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。

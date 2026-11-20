@@ -1,7 +1,9 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
 > 状态：**运维 as-built；最新正式版 v0.6.20，于 2026-11-12T16:12:08Z 正式发布；v0.6.18/v0.6.19 及更早 tag/镜像保持不可变**。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-20
+>
+> **v0.6.21 发布准备（2026-11-20）**。#1171 已合入，准备基线为 `26ec3fc0`（并非最终 tag 目标）；当前比较范围为 `v0.6.20...v0.6.21`。数据库从 schema 73 升至 75；非空库先备份并按既有基线重建流程预演，保留现有部署配置；#1170 不重置已有用户、密码或会话，只有空库需要首个管理员秘密文件。发布前在最终主线上完成工程门禁，待签名、Release 与回写实际成功后再记录发布结果。见 #1172。
 >
 > **v0.6.17 发布准备（2026-11-08）**。用户要求先完成 #1002，再发布新版本。最新正式 [v0.6.16](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.16) 于 2026-11-07T16:21:03Z 发布，元数据列出 registry/v2、签名证据、Reverse 证据与 Management Skill 附件；这里核对元数据，不重新声明附件内容/签名/各通道镜像已逐项复验。远端 v0.6.17 已创建并推送（annotated tag `598dabe9`，解引用到 `24ba6a4fbff00190527da2923e7b644c387c6aa6`），compare 为 `v0.6.16...v0.6.17`。
 >
@@ -100,13 +102,13 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-10 已发布 v0.6.19（compare `v0.6.18...v0.6.19`）；2026-11-12 已发布 v0.6.20（compare `v0.6.19...v0.6.20`，除目标外最高 `v*` tag 为 v0.6.19，schema 版本按源码核对为 73；本版含运行时 CLI 与基础镜像升级并已重建镜像）；下一次发布须重新核对除目标外最高 `v*` tag 与 schema 基线后再替换此候选值，不沿用本轮：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-10 已发布 v0.6.19（compare `v0.6.18...v0.6.19`）；2026-11-12 已发布 v0.6.20（compare `v0.6.19...v0.6.20`，除目标外最高 `v*` tag 为 v0.6.19，schema 版本按源码核对为 73；本版含运行时 CLI 与基础镜像升级并已重建镜像）；v0.6.21 准备阶段已核对前一 tag 为 v0.6.20，当前候选 schema 75；打 tag 前按最终主线再次核对：
 
 ```bash
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.20 --previous-version 0.6.19 --tag v0.6.20
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.21 --previous-version 0.6.20 --tag v0.6.21
 pnpm typecheck
 pnpm build
 pnpm ci:images

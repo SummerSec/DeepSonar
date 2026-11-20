@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import { HumanRequestGuidance, TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { HumanRequestGuidance, TaskContract, TaskGoalReviewRequest, FindingVerifyStatusBody } from "@deepsonar/shared-types";
 import { PlanGoalReviewBinding } from "./domains/plan-protocol/criterion-model.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -438,6 +438,12 @@ const OPS: Op[] = [
           },
           runtime_images: { type: "object", additionalProperties: true },
           dispatcher: { type: "object", additionalProperties: true },
+          concurrency_limits: {
+            type: ["object", "null"],
+            description: "当前生效并发配额；字段 null 表示不限，整个对象 null 表示读数不可用",
+            properties: Object.fromEntries(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]
+              .map(key => [key, { type: ["integer", "null"], minimum: 1, maximum: 1000 }])),
+          },
           opensandbox: {
             type: "object",
             additionalProperties: false,
@@ -544,8 +550,8 @@ const OPS: Op[] = [
               properties: {
                 auth_required: { type: "boolean" },
                 has_users: { type: "boolean" },
-                bootstrap_available: { type: "boolean" },
-                default_admin_credentials_active: { type: "boolean" },
+                bootstrap_available: { type: "boolean", deprecated: true, enum: [false] },
+                default_admin_credentials_active: { type: "boolean", deprecated: true, enum: [false] },
                 session_ttl_days: { type: "integer" },
               },
             },
@@ -589,7 +595,7 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/auth/bootstrap",
-    summary: "兼容旧版的首次管理员引导（默认管理员种子后返回 409）",
+    summary: "首个管理员仅能由部署密码文件初始化；HTTP 引导已停用",
     scope: null,
     tags: ["Auth"],
     body: {
@@ -1554,6 +1560,14 @@ const OPS: Op[] = [
         type: "object",
         required: ["human_request", "human_continuation"],
         properties: {
+          process_diagnostics: {
+            type: "array", maxItems: 64,
+            description: "精确绑定 Job/Attempt/Sandbox/Process/原 agent_run 的宿主审计。固定终止类别、实际宿主 kill caller、PTY DELETE 结果和已核验沙箱销毁结果，不含原始日志、命令、URL 或凭据。退出码未知保持 null，host_kill 不证明 OOM。失败或超时保留 unknown 与旧凭据撤销状态，无合法断点的自动整 Job 恢复尚未交付。",
+            items: { type: "object", properties: {
+              audit_id: { type: "string" }, observed_at: { type: "string", format: "date-time" },
+              observation: { type: "object" }, sandbox_cleanup: { type: "object", nullable: true },
+            } },
+          },
           human_continuation: {
             type: "object", nullable: true,
             description: "请求和断点的管理摘要，不含文件正文、路径、密钥或运行权限；回复保存不代表已启动或完成。",
@@ -1809,19 +1823,11 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/findings/{id}/verify-status",
-    summary: "人工将等待中的 Finding 收口为 needs_human",
-    description: "仅允许同画布存在 waiting_human Hub Job 且尚未 confirmed 的 Finding；confirmed 只能由 Scheduler Verify 收口。",
+    summary: "人工处理等待中的 Finding 技术验证",
+    description: "needs_human 分支要求等待人工的 Hub。inconclusive 分支仅接受 needs_human 且无活动执行、未决效果或开放轮次，必须提交原因、当前 subject revision/状态/最后轮次和 mutation_id。同编号同决定重放，同编号不同决定或过期状态返回409。新增独立终结轮次，审计与状态同事务。",
     scope: "findings:write",
     tags: ["Findings"],
-    body: {
-      type: "object",
-      required: ["verify_status"],
-      additionalProperties: false,
-      properties: {
-        verify_status: { type: "string", enum: ["needs_human"] },
-        reason: { type: "string", minLength: 1, maxLength: 2000 },
-      },
-    },
+    body: z.toJSONSchema(FindingVerifyStatusBody, { target: "openapi-3.0", io: "input" }) as Record<string, unknown>,
   },
   {
     method: "post",
@@ -2083,7 +2089,9 @@ const OPS: Op[] = [
         rules: {
           type: "object",
           additionalProperties: true,
-          description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 1–1000；stallSec / jobTokenMaxRequests 为 0–上限（0=不限制）；auditTimeoutSec / verifyTimeoutSec / provisionTimeoutSec 为配置中心第一批；maxConcurrentJobs 只能写在项目设置。",
+          properties: Object.fromEntries(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]
+            .map(key => [key, { type: ["integer", "null"], minimum: 1, maximum: 1000 }])),
+          description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 null（不限）或 1–1000 整数，拒绝 0；缺省使用显式环境变量，无环境配置则不限；stallSec / jobTokenMaxRequests 为 0–上限（0=不限制）；auditTimeoutSec / verifyTimeoutSec / provisionTimeoutSec 为配置中心第一批；maxConcurrentJobs 只能写在项目设置。",
         },
       },
     },
@@ -2193,7 +2201,7 @@ const OPS: Op[] = [
         rules: {
           type: "object",
           additionalProperties: true,
-          description: "项目规则覆盖。maxConcurrentJobs 为 0–1000 或 null（清除后继承全局 maxJobsPerProject）；不得修改全局并发键。",
+          description: "项目规则覆盖。maxConcurrentJobs 为 0–1000 或 null（清除后继承全局 maxJobsPerProject，全局不限则不限）；0 暂停该项目新 claim；不得修改全局并发键。",
         },
         device_access_enabled: {
           type: "boolean",

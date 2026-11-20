@@ -13,6 +13,10 @@ export async function readRepairRequeueAdmission(db: typeof sql, jobId: string) 
   const [job] = await db`SELECT j.started_at,j.timeout_sec,j.execution_deadline_at,j.agent_snapshot_json,c.target_json FROM jobs j
     LEFT JOIN canvases c ON c.id=j.canvas_id WHERE j.id=${jobId}`;
   if (canvasExecutionIsPaused(job?.target_json)) return deny("REPAIR_PAUSED", "任务已暂停；恢复修复前需由操作员解除暂停。");
+  const [cleanup] = await db`SELECT id FROM job_attempt_effects WHERE job_id=ANY(${jobIds}::uuid[])
+    AND effect_kind='agent_run' AND jsonb_array_length(COALESCE(intent_json->'host_process_audits','[]'::jsonb))>0
+    AND COALESCE(intent_json->'host_cleanup'->>'state','pending')='pending' LIMIT 1`;
+  if (cleanup) return deny("RUNTIME_CLEANUP_PENDING", "旧执行的沙箱销毁尚未确认，不能启动新的执行。");
   const [effects] = await db`SELECT id FROM job_attempt_effects WHERE job_id=ANY(${jobIds}::uuid[]) AND status<>'settled' LIMIT 1`;
   if (effects) return deny("REPAIR_EFFECT_UNRESOLVED", "旧执行仍有未结算或未知效果；先对账并确认旧执行退出，不能创建新修复代际。");
   const [requests] = await db`SELECT COALESCE(SUM(used_requests),0) AS used,

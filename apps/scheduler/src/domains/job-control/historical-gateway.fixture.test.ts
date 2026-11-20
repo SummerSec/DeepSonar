@@ -362,7 +362,22 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
         const { markEffectUnknown } = await import("../job-attempt/index.js");
         const [effect] = await sql`SELECT effect_id FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_kind='gateway_model_request'`;
         await markEffectUnknown(sql, f.attemptId, String(effect.effect_id), "independent unknown outcome");
+        const { recordRuntimeProcessEvidence } = await import("../../runtime-process-evidence.js");
+        const { destroyObservedRuntime } = await import("../../runtime-process-cleanup.js");
+        const { readRepairRequeueAdmission } = await import("./repair-admission.js");
+        const [job] = await sql`SELECT sandbox_id FROM jobs WHERE id=${f.jobId}`;
+        const owner = { jobId: f.jobId, attemptId: f.attemptId, sandboxId: String(job.sandbox_id) };
+        await recordRuntimeProcessEvidence(sql, owner, { process_sequence: 1, process_id: "late-usage-source",
+          diagnostic: { source: "opensandbox_pty", phase: "stream", termination: "transport_closed", exit_frame: null,
+            websocket_close: null, websocket_error: null, host_kill_requested: false, close_requested: true }, cleanup: null });
+        await attempts.settleAttemptTerminal(sql, f.jobId, "failed");
+        await sql`UPDATE jobs SET status='failed',finished_at=now() WHERE id=${f.jobId}`;
+        assert.equal(await destroyObservedRuntime(sql, { destroy: async () => { throw new Error("controlled destroy failure"); } }, owner), false);
+        assert.equal((await readRepairRequeueAdmission(sql, f.jobId)).blocker?.code, "RUNTIME_CLEANUP_PENDING");
         releaseUpstream(); assert.equal((await request).statusCode, 200); await settled(f.jobId, 1);
+        assert.equal((await readRepairRequeueAdmission(sql, f.jobId)).blocker?.code, "RUNTIME_CLEANUP_PENDING");
+        const [run] = await sql`SELECT status,intent_json FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_kind='agent_run'`;
+        assert.equal(run.status, "unknown"); assert.equal(run.intent_json.host_cleanup.state, "pending");
         const [kept] = await sql`SELECT status,settlement_json FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id=${effect.effect_id}`;
         assert.equal(kept.status, "unknown"); assert.deepEqual(kept.settlement_json, { result: "unknown_effect" });
       } finally {

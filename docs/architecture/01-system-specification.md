@@ -171,7 +171,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-010 Claim、并发和 Lease
 
-- **规范要求**：Scheduler 必须在持久化 claim、全局/项目并发和 lease 约束内领取 Job；Lease 续期必须绑定有效 Job/Attempt，过期或迟到回调不得重新取得执行权。
+- **规范要求**：Scheduler 必须在持久化 claim、全局/项目并发和 lease 约束内领取 Job；#1123 三项全局并发配额缺省且未配环境变量时为 null（不限），显式 null 覆盖环境变量，显式数字保留，0 拒绝；项目 null 继承，0 暂停新领取。Lease 续期必须绑定有效 Job/Attempt，过期或迟到回调不得重新取得执行权。
 - **决策来源**：多 Scheduler 副本、重试和迟到网络回调不能造成双执行或跨项目资源占用。
 - **实现状态**：as-built；claim 使用持久状态和锁，跨项目按持久服务序号公平轮转，项目内沿持久游标按优先级循环扫描，前页资格变化在回绕后重新核验；有界扫描位置跨 Scheduler 与重启推进，拒绝资格不消耗服务轮次（#1118）。Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
 - **代码入口**：[Dispatch 控制](../../apps/scheduler/src/task-execution-control.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[全局设置](../../apps/scheduler/src/config.ts)。
@@ -186,6 +186,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`。
 
 ### FR-JOB-005 未知外部效果禁止重放
+
+#1143 首片补充 [PTY 宿主清理证据](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)。通用对账不以 Attempt 终态证明运行退出，新观察仅在精确 owner、先提交凭据撤销、受管销毁确认后结清原终态 marker。独立 unknown 继续闭锁，无合法断点的整 Job 自动恢复未交付。真实 HTTP/PG/Runtime 受控回归接既有 Actions，最终 SHA 待验。
 
 - **规范要求**：当外部效果无法证明未发生（`effect_pending` / `unknown`，含崩溃、超时、取消后的未证实窗口）时，系统必须将 Attempt/Job 标为不可自动重放路径，通常进入 `orphan`/对账/人工路径，清理 Token、沙箱、画布同步和租约；`replay_policy` 不得被本次结算改宽。
 - **决策来源**：未知效果是事实状态，不是普通 transient error；猜测重放可能重复创建资源或修改目标。
@@ -578,6 +580,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-VERIFY-005 Verify 终态与无进展收口
 
+#1133 补齐人工 `needs_human → inconclusive` 决定，权限为 `findings:write`，对象修订/技术状态/最后轮次 CAS、持久 mutation 幂等、新终结轮次和请求身份审计同事务。活动执行、未决效果和开放轮次拒绝，业务 disposition 独立。行为回归接 `pnpm ci:integration:verify-eligibility` 和 `pnpm ci:unit:web-facts`，最终 SHA Actions 待验。
+
 - **规范要求**：Verify 必须将通过、否定、冲突、证据不足、不可判定和需人工映射为明确终态/缺项；否定 evidence 只能在完整结构化证据和成功来源 Job 下进入 refuted，冲突进入 inconclusive，不得用 needs_human 混淆。
 - **决策来源**：终态决定 Hub、Report 和人工动作，错误映射会产生虚假确认或无限循环。
 - **实现状态**：as-built；无进展护栏与默认值见[配置](../../apps/scheduler/src/config.ts)中的 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS`。#1133 后，Verify 补证回弹另有独立刹车：连续 `VERIFY_NO_PROGRESS_LIMIT`（2）次回弹的缺失证据集合完全相同即收口 `needs_human`，round error 与结算 reason 落稳定码 `verify_no_progress`（`apps/scheduler/src/verify-no-progress.ts`）。
@@ -749,6 +753,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### FR-WEB-003 Fact/Finding/Job 详情和人工动作
 
+#1126 的 Job 结果先显示一句运行结论，技术字段折叠到维护者诊断。分类只读取当前 Scheduler 动作和效果记录，历史错误文字不决定恢复能力。恢复按钮同时要求 jobs:control 权限、匹配当前状态的 request_recovery，提交时由原入口重新准入。只读诊断 no_signal 仅表示该分类器没有信号，不表示无需处理或允许重跑。
+
 - **规范要求**：Web 必须分别展示 Fact 证据信任态、Finding verify/disposition/证据链、Job Attempt/Session/工具流/人工消息/用量，并为需要权限的动作显示稳定错误；不得用一个“成功”标签合并这些状态。人工待办和回复界面须显示完整的具体动作、回复方式/选项及回复后的业务计划。L0 维持有界摘要，详细面板按需读取完整 L1 人工节点；任何节点缺少 guidance（包括历史请求和自动生成的平台等待项）时明确显示未提供，不从 reason 猜测或自动回填。Job 列表对 `waiting_human` 投影 Scheduler 当前 `execution_state`；同 Job 的人工节点与等待投影合并为一个人工待办，独立的 unknown effect 对账项仍保持优先并单独可见。凭据说明必须指向已有的安全处理方式，不能要求贴入聊天或虚构配置入口。
 - **决策来源**：不同状态机的责任方不同，用户需要知道执行完成、证据成立和业务处置是否分别完成；一次明确的人工请求应减少用户判断下一步和反复追问所需的注意力。
 - **实现状态**：已有工作台、消息账本、恢复入口和 Scheduler execution-state 投影。本轮补充完整指导读取/呈现、等待项去重与提示约束；最终 SHA 行为及 Actions 验收待核对。
@@ -772,6 +778,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **验证证据**：`pnpm ci:unit:device-lease`、`pnpm ci:integration:device-lease`、`pnpm ci:smoke:device`。
 
 ### FR-DEV-002 创建时冻结设备需求并重新授权
+
+#1133 将统一冻结接入自动 Hub worker intent 与人工 Finding evidence-jobs 两入口，真实 HTTP → Job snapshot → broker grant 回归接 `pnpm ci:integration:device-lease`。无显式设备要求的远端目标继续其受治理路径。
 
 - **规范要求**：Job 创建必须把合法 device_requirement、rig、transport、项目 opt-in 和 allow_egress 冻结到 snapshot；申请租约时必须重新验证目录/配置，缺失或不兼容必须 fail closed，不得回落到其它 rig/transport。
 - **决策来源**：执行期配置可能改变，设备需求和出网是安全前置条件。
@@ -1134,6 +1142,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **规范要求**：系统必须提供健康、就绪和 metrics 端点，端点返回的指标/状态只含受控计数、错误类别和组件 readiness，不得输出 token、Provider secret、完整 prompt 或沙箱原文。
 - **决策来源**：运维探针和监控系统需要机器可读状态而不是秘密副本。
 - **实现状态**：as-built；health/readiness/metrics 路由已注册并有 route surface 约束。
+- **列表延迟尾部（#1136）**：`deepsonar_api_list_query_seconds` 按分页和成功/失败保留样本，有限累积桶包含 30/60/120/300 秒。超过 300 秒的观测仍计入 `+Inf`、`_count` 和 `_sum`；排障时用同标签的 `+Inf` 与 `le="300"` 累积桶在同一时间窗内的增量差监控溢出，不把处于溢出范围的分位数当作准确耗时。
 - **代码入口**：[system routes](../../apps/scheduler/src/domains/system/routes.ts)、[metrics](../../apps/scheduler/src/metrics.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 - **验证证据**：`pnpm ci:unit:runtime-cleanup`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:authz`。
 

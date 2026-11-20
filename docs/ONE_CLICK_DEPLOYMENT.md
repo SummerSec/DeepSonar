@@ -85,12 +85,12 @@ pwsh -NoProfile -File .\deploy\deploy.ps1                  # = up real pull
 
 ### 登录
 
-空库首次启动创建人类管理员（生产必须立刻改密）：
+空库首次启动创建人类管理员，初始用户名为 `admin`。
+- 空库首次启动由 `deploy/bootstrap-admin/password` 初始化唯一首个管理员。新控制面配置由一键脚本生成高强度密码文件，使用属主权限保护，且不会输出密码。部署秘密管理器也可提前安全提供该文件；直接 Compose 启动时须提前准备。
+- 密码文件须为可读的普通 UTF-8 文件，包含 20–200 个字符（可带一个结尾换行），只读挂载给 Scheduler，不提交 Git、不复制到聊天或命令参数。不提供、不可读或不合格会阻断空库启动；不能用未认证 HTTP 注册首个管理员。
+- 已有用户的实例正常启动，不读取此文件，也不会改名、重置密码或吊销会话。旧安装曾用发行版内置密码的管理员应通过管理流程自行更改密码，本变更不代为重置。
 
-| 字段 | 值 |
-|------|-----|
-| 用户名 | `admin` |
-| 密码 | `Deep@Sonar66` |
+**已有 `deploy/.env`、但使用的是空库**（例如迁移了配置但没有迁移数据库）：一键脚本不会为既有配置自动生成密码。首次启动前，保留原 `.env`，通过部署秘密管理器把仅部署属主可访问的密码文件放到 `deploy/bootstrap-admin/password`。也可以使用 [本地开发的随机文件生成步骤](../README.md#本地开发)，将生成目录改为 `deploy/bootstrap-admin`（Windows 用 `Join-Path (Get-Location).Path 'deploy/bootstrap-admin'`）；不用设置本地开发的环境变量，Compose 会固定只读挂载并设置容器内路径。若目录已存在，先确认其归属与访问权限，再安全写入缺失文件，不覆盖已有文件。真正已有用户的数据库升级不需要此步骤。
 
 容器部署 `DEEPSONAR_AUTH_REQUIRED=true`。`DEEPSONAR_ADMIN_TOKEN` 为 API/本机调用引导 Token，与人类会话账号独立。
 
@@ -165,7 +165,7 @@ fake 模式不预拉也不使用 helper。运行时默认在官方 digest 存在
 
 Provision 并发是数据库 claim admission，不是进程内 semaphore：超过全局
 `global_settings.maxConcurrentProvisioning` 的 Job 留在 `pending`，不消耗 `claimed_at`；槽位释放后
-调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。`PROVISION_CONCURRENCY=2` 只在该全局配置
+调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。`PROVISION_CONCURRENCY` 显式数字只在该全局配置
 缺失时作为 fallback。rootless Docker 使用 `vfs` 存储驱动时，GB 级镜像的冷 `create` 会全量复制文件；应把数据库
 `global_settings.maxConcurrentProvisioning` 设为 `1`，并使用生产默认 `PROVISION_TIMEOUT_SEC=900`。只改
 `deploy/.env` 后执行 `docker compose restart` 不会更新既有容器环境，必须执行
@@ -313,6 +313,7 @@ docker compose -p deepsonar --env-file deploy/.env \
 | API 401 | 鉴权开启为预期；配置控制台 Token / 人类登录 |
 | 登录 429 像全站一起被锁 | 官方路径是浏览器 → Web(:8080) → Scheduler。Web 用入站 TCP peer 覆盖 `X-Forwarded-For`，Scheduler 默认只信任 1 跳（`DEEPSONAR_TRUST_PROXY_HOPS=1`）。在 Web 前面再加未纳入该 hop 策略的反向代理时，所有浏览器会共享同一 IP 桶（20 次/5 分钟）。不要把 Scheduler HTTP 暴露到公网；需要真实客户端 IP 时让 Web 直接看到浏览器（或该代理终止 TLS 后把真实 peer 交给 Web） |
 | Silo healthcheck 长时间 starting / `up` 卡住（常见于部分 Podman） | #726：`deploy.sh`/`deploy.ps1` 对 `compose up` 有界等待（`DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC`，默认 600s），超时非零退出并打印容器状态/健康/日志/版本（脱敏）。Podman 或 `DEEPSONAR_COMPOSE_DEPENDS_ON=started` 时附加 `docker-compose.podman-compat*.yml`（`service_started`），但仍用 postgres/silo 真实探测与入口 `:8080/api/health` 门禁；依赖真实不可用不会因 `service_started` 误报成功。`healthy` 可强制保留原 `service_healthy`。与 #101（silo-init 拆词）不同。 |
+| Scheduler 报 `BOOTSTRAP_ADMIN_PASSWORD_FILE_REQUIRED` / `BOOTSTRAP_ADMIN_PASSWORD_FILE_INVALID` / `BOOTSTRAP_ADMIN_PASSWORD_INVALID` | 空库缺少合格的管理员密码文件；按[登录](#登录)准备部署秘密后重启，不删除 `deploy/.env` |
 | Scheduler 不健康 | `./deploy/deploy.sh logs`：库密码、schema 版本、`change-me` 占位符、资源 |
 | real 无 Docker | 确认 real 覆盖层与 sock 挂载 |
 | 部署报 `DEEPSONAR_IMAGE_TAG` / 非 digest 平台镜像引用 | #740 已删除 tag 部署：删除该行，从目标版本 `deploy/.env.example` 复制 `DEEPSONAR_VERSION` 与三条 `DEEPSONAR_*_IMAGE` digest 引用；不要删除整个 `deploy/.env` |
@@ -325,7 +326,7 @@ docker compose -p deepsonar --env-file deploy/.env \
 ## 9. 上线检查
 
 - [ ] `deploy/.env` / `master.key` 无占位符且未进 Git
-- [ ] `DEEPSONAR_AUTH_REQUIRED=true`，已改默认管理员密码
+- [ ] `DEEPSONAR_AUTH_REQUIRED=true`；空库用部署密码初始化，曾用公开初始密码的旧账户已改密
 - [ ] 已建长期 API Token；外部事件 Token 单项目 + `tasks:write`
 - [ ] real：官方 base/audit（及所用专项）均为 digest 且可 pull
 - [ ] real：`DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE` 为 immutable digest 且已被部署脚本预拉

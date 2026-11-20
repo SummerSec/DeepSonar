@@ -38,6 +38,7 @@ import { MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE } from "./model-
 import { PI_MAIN_REQUEST_BUDGET_PATH, PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
 import { createRuntimeWarningReporter, type RuntimeWarning } from "./runtime-warnings.js";
 import { classifyCliSessionResumeError, runtimeErrorText } from "./runtime-error-classification.js";
+import { materializePrivateJobFiles, privateCredentialEnvironment } from "./private-job-files.js";
 import { nativeHumanSessionPath, projectNativeHumanSession, type NativeHumanSession } from "./human-session-import.js";
 
 export { classifyCliSessionResumeError, type CliSessionResumeReason } from "./runtime-error-classification.js";
@@ -63,6 +64,8 @@ export interface RealAgentSpec {
   /** DSH tool presentation preset; ignored by other providers. */
   dshTaskMode?: "standard" | "ptc";
   env: Record<string, string>;
+  /** Host-only current Job authentication. Never forwarded as CLI environment values. */
+  privateCredentials?: { controlToken?: string; gatewayToken?: string; observationalMemoryToken?: string };
   /** Hub 为本 Job 生成的本轮任务消息，等价于各 CLI 的非交互 prompt/input。 */
   input: string;
   /** 平台不可变安全边界；与 /workspace 下的角色说明文件分层。 */
@@ -105,6 +108,8 @@ export interface RealAgentSpec {
   onProgress?: (message: string) => void;
   /** 全量规范化事件回调（text.delta / tool.call.* / run.* 等，未节流，供实时流转发） */
   onEvent?: (event: Record<string, unknown>) => void;
+  /** Trusted host observations. CLI output never invokes this callback. */
+  onProcessDiagnostic?: (observation: import("./runtime-process-diagnostic.js").RuntimeProcessObservation) => Promise<void>;
   /** 上下文压缩摘要；不得携带原始 prompt 或 provider 原文。可返回更新后的身份。 */
   onContextEvent?: (event: Record<string, unknown>) => void | ContextIdentity | Promise<void | ContextIdentity>;
   /** 恢复前由调度器冻结的上下文身份。 */
@@ -1239,6 +1244,38 @@ export function mapCliEvent(
 }
 
 export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
+  const credentials = spec.privateCredentials;
+  const files: Record<string, string> = {};
+  if (credentials?.controlToken) files["control-token"] = credentials.controlToken;
+  if (credentials?.gatewayToken) files["gateway-token"] = credentials.gatewayToken;
+  if (credentials?.observationalMemoryToken) files["om-token"] = credentials.observationalMemoryToken;
+  const workspaceFiles = { ...(spec.workspaceFiles ?? {}) };
+  for (const [filename, content] of Object.entries(workspaceFiles)) {
+    if (filename.endsWith("/.pi/agent/auth.json")) {
+      if (files["pi-auth.json"] && files["pi-auth.json"] !== content) throw new Error("PRIVATE_PI_AUTH_MISMATCH");
+      files["pi-auth.json"] = content;
+      delete workspaceFiles[filename];
+    }
+  }
+  if (!Object.keys(files).length) return runAgentWithPrivateFiles(host, spec);
+  const privateFiles = await materializePrivateJobFiles(host, files);
+  try {
+    await ensureRuntimeHome(host);
+    if (files["pi-auth.json"]) await privateFiles.installPiAuth();
+    await privateFiles.check();
+    const env = privateCredentialEnvironment(spec.env, privateFiles);
+    return await runAgentWithPrivateFiles(host, { ...spec, env, workspaceFiles });
+  } finally {
+    await privateFiles.cleanup().catch(() => {
+      // The dispatcher still destroys this Job's sandbox. Cleanup diagnostics
+      // cannot replace an accepted terminal result or the original startup error.
+      try { spec.onWarning?.({ code: "private_credentials_cleanup_failed", detail: "sandbox_teardown_required" }); }
+      catch { /* A diagnostic callback has no authority over the Job outcome. */ }
+    });
+  }
+}
+
+async function runAgentWithPrivateFiles(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
   const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
   if (spec.agentRuntimeLaunch) {
@@ -1292,7 +1329,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   const cliEnv = runtimeCliEnv(spec.env);
   const piMainBudgetEnabled = spec.provider === "pi" && Boolean(cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
   if (cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
-    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
+    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN_FILE) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
     await host.run(`mkdir -p -- ${shellQuote(RUNTIME_DIR)}`);
     await host.uploadFile(MODEL_REQUEST_POLICY_SOURCE, MODEL_REQUEST_POLICY_PATH);
   }
@@ -1340,7 +1377,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     }
   };
   const adapterContext = {
-    host: observeRuntimeProcesses(host, secretValues, spec.onEvent),
+    host: observeRuntimeProcesses(host, secretValues, spec.onEvent, spec.onProcessDiagnostic),
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
@@ -1366,7 +1403,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     if (checked.status !== "supported" || !checked.content) throw new Error("HUMAN_NATIVE_SESSION_FORMAT");
     importedSessionFile = nativeHumanSessionPath(importedSession);
     await host.run(`mkdir -p -- ${shellQuote(path.posix.dirname(importedSessionFile))}`);
-    await host.uploadFile(checked.content, importedSessionFile);
+    await host.uploadFile(redactSecretValues(checked.content, secretValues), importedSessionFile);
     await spec.onSessionIdentity({sessionId:importedSession.sessionId,
       ...(spec.provider === "pi" ? {sessionFile:importedSessionFile} : {})});
   }
@@ -1490,7 +1527,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   // result 到达后 CLI 在 stream-json 输入模式下驻留等 stdin：门禁未过则催促，否则关 stdin；
   // execd 没有 EOF 控制帧，terminal_result 后有界等待再 kill，避免成功路径挂到 Reaper。
   const stdinCloseKiller = createStdinCloseKiller({
-    kill: () => { void exec.kill().catch(() => {}); },
+    kill: () => { void exec.kill("terminal_result").catch(() => {}); },
     graceMs: spec.stdinCloseKillMs,
   });
   const closeStdin = (reason?: TerminalAttemptCloseReason) => {
@@ -1536,7 +1573,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
         ? new PiRpcChunkAssembler({ onExpire: () => {
             processError ??= new Error("PI_RPC_CHUNK_INCOMPLETE");
             fatalOutputError ??= "PI_RPC_CHUNK_INCOMPLETE";
-            void exec.kill().catch(() => {});
+            void exec.kill("output_capture_failure").catch(() => {});
           } })
         : undefined;
       try {
@@ -1724,7 +1761,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       } catch (error) {
         processError = error;
         if (error instanceof Error && error.message.startsWith("PI_RPC_")) fatalOutputError = error.message;
-        await exec.kill().catch(() => {});
+        await exec.kill("runtime_exception").catch(() => {});
       } finally {
         processError ??= piDriver?.finishError();
         piDriver?.dispose();

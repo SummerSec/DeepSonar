@@ -1,8 +1,8 @@
 /** Real pinned Claude CLI, synthetic provider only; not a Scheduler/launch acceptance. */
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile, mkdir, readdir } from "node:fs/promises";
+import { randomUUID, createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile, readdir } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -31,7 +31,7 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
   let acceptWait:()=>void;
   const waitAccepted=new Promise<void>(resolve=>{acceptWait=resolve;});
   const commandFor=(operation:string)=>{
-    const code=`import urllib.request; r=urllib.request.Request("${url}/control/${operation}",data=b"{}",headers={"Authorization":"Bearer ${operation==='request_human'?'old-control-identity':'new-control-identity'}"}); print(urllib.request.urlopen(r).read().decode())`;
+    const code=`import os,urllib.request; token=open(os.environ["DEEPSONAR_CONTROL_TOKEN_FILE"]).read(); r=urllib.request.Request("${url}/control/${operation}",data=b"{}",headers={"Authorization":"Bearer "+token}); print(urllib.request.urlopen(r).read().decode())`;
     return `python3 -c '${code}'`;
   };
   const server=http.createServer((req,res)=>{void(async()=>{
@@ -71,9 +71,14 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
   };
   const launch=async(home:string,resume?:string)=>{
     await mkdir(home,{recursive:true});
-    const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5","--tools","Bash","--append-system-prompt",resume?"CURRENT_SYSTEM_BOUNDARY":"OLD_SYSTEM_BOUNDARY",...(resume?["--resume",resume]:[])];
+    const credentials=path.join(home,`.deepsonar-credentials-${randomUUID()}`);
+    await mkdir(credentials,{mode:0o700});
+    const gatewayFile=path.join(credentials,"gateway-token"),controlFile=path.join(credentials,"control-token");
+    await writeFile(gatewayFile,resume?"new-human-fixture-key":"old-human-fixture-key",{mode:0o600});
+    await writeFile(controlFile,resume?"new-control-identity":"old-control-identity",{mode:0o600});
+    const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5","--tools","Bash","--settings",JSON.stringify({apiKeyHelper:"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs"}),"--append-system-prompt",resume?"CURRENT_SYSTEM_BOUNDARY":"OLD_SYSTEM_BOUNDARY",...(resume?["--resume",resume]:[])];
     const child=spawn("claude",args,{cwd:root,detached:true,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:path.join(home,".claude"),
-      ANTHROPIC_API_KEY:resume?"new-human-fixture-key":"old-human-fixture-key",ANTHROPIC_BASE_URL:url,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",DISABLE_TELEMETRY:"1",DISABLE_ERROR_REPORTING:"1",MAX_THINKING_TOKENS:"0"},stdio:["pipe","pipe","pipe"]});
+      DEEPSONAR_GATEWAY_TOKEN_FILE:gatewayFile,DEEPSONAR_CONTROL_TOKEN_FILE:controlFile,ANTHROPIC_BASE_URL:url,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",DISABLE_TELEMETRY:"1",DISABLE_ERROR_REPORTING:"1",MAX_THINKING_TOKENS:"0"},stdio:["pipe","pipe","pipe"]});
     let output="",pending="",session="";let failed=false;
     child.stdout!.on("data",chunk=>{output+=chunk;pending+=chunk;const lines=pending.split("\n");pending=lines.pop()!;
       for(const line of lines){try{const event=JSON.parse(line);if(event.session_id)session=event.session_id;if(event.type==="result"){failed=event.is_error===true;child.stdin!.end();}}catch{}}
@@ -141,8 +146,63 @@ async function bytes(req: http.IncomingMessage) {
   return Buffer.concat(chunks);
 }
 
+test("Claude unlimited empty settings authenticate through the trusted file helper", { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "claude-unlimited-auth-"));
+  const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);
+  await mkdir(credentials, { mode: 0o700 });
+  const tokenFile = path.join(credentials, "gateway-token");
+  await writeFile(tokenFile, token, { mode: 0o600 });
+  let requests = 0;
+  const errors: string[] = [];
+  const server = http.createServer((req, res) => {
+    if (req.url === "/gateway/_allowance") {
+      if (req.headers.authorization !== `Bearer ${token}`) errors.push("allowance-authentication");
+      res.writeHead(200, { "content-type": "application/json" }).end('{"remaining_tokens":null,"policy_required":true}');
+      return;
+    }
+    if (req.headers["x-api-key"] !== token) errors.push("native-authentication");
+    requests++;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const events = [
+      { type: "message_start", message: { id: "synthetic-unlimited", type: "message", role: "assistant", model: "claude-sonnet-4-5",
+        content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "UNLIMITED_AUTHENTICATED" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ];
+    for (const event of events) res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  });
+  try {
+    const upstream = await listen(server);
+    const fixture = JSON.parse(await readFile("/acceptance/runtime-fixture.json", "utf8"));
+    const script = path.join(dir, "policy.mjs");
+    await writeFile(script, fixture.policySource);
+    const api = await import(pathToFileURL(script).href);
+    const prepared = await api.prepareClaudeLaunch(
+      "claude -p --output-format json --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools '' --no-session-persistence",
+      { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, ".claude"),
+        DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile,
+        ANTHROPIC_BASE_URL: upstream + "/gateway", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", MAX_THINKING_TOKENS: "0" }, []);
+    assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
+    const result = await run("/bin/bash", ["-c", prepared.command + " 'Return the synthetic authentication result.'"],
+      { cwd: dir, env: { ...process.env, ...prepared.env }, timeout: 45_000, maxBuffer: 1024 * 1024 });
+    assert.match(result.stdout, /UNLIMITED_AUTHENTICATED/u);
+    assert.ok(requests > 0);
+    assert.deepEqual(errors, []);
+  } finally { await close(server); await rm(dir, { recursive: true, force: true }); }
+});
+
 test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-budget tool turn", { timeout: 180_000 }, async t => {
   const dir = await mkdtemp(path.join(tmpdir(), "claude-native-budget-"));
+  const credentials = path.join(dir, '.deepsonar-credentials-' + randomUUID());
+  await mkdir(credentials, { mode: 0o700 });
+  const tokenFile = path.join(credentials, 'gateway-token');
+  await writeFile(tokenFile, token, { mode: 0o600 });
+  const privateAuth = { environment: { DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile } };
   let stage = "image-version";
   let output = "";
   let resultReceived = false;
@@ -317,13 +377,18 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     const upstream = await listen(remote);
     policy = await api.startModelRequestPolicy({ upstream: upstream + "/gateway", token, port: 0 });
     const captureUrl = await listen(capture);
+    const home = path.join(dir, "home");
+    const config = path.join(home, ".claude");
+    await mkdir(config, { recursive: true });
+    const settings = { apiKeyHelper: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs" };
+    await writeFile(path.join(config, "settings.json"), JSON.stringify(settings));
     const prepared = await api.prepareClaudeLaunch(
       "claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash --no-session-persistence",
-      { DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", DEEPSONAR_GATEWAY_TOKEN: token,
-        HOME: "/tmp/claude-budget", CLAUDE_CONFIG_DIR: "/tmp/claude-budget/config",
-        ANTHROPIC_API_KEY: token, ANTHROPIC_BASE_URL: captureUrl + "/gateway",
+      { DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", ...privateAuth.environment,
+        HOME: home, CLAUDE_CONFIG_DIR: config,
+        ANTHROPIC_BASE_URL: captureUrl + "/gateway",
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
-        MAX_THINKING_TOKENS: "0" });
+        MAX_THINKING_TOKENS: "0" }, [settings]);
     assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "4096");
     stage = "native-cli-tool-loop";
     cli = spawn("/bin/bash", ["-c", `mkdir -p "$CLAUDE_CONFIG_DIR" && exec ${prepared.command}`], {

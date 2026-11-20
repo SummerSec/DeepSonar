@@ -27,6 +27,11 @@ export function buildDshProfilePatch(options) {
   add("tools");
   add(options.taskMode === "ptc" ? "ptc-tool-executor" : "native-tool-executor", options.taskMode === "ptc" ? "tool-executor-ptc" : "tool-executor-native");
   add("agent-loop", "agent-loop", { agents: [] });
+  if (options.privateCredentialPath) rows.push({
+    id: "job-credentials", name: "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-credentials/deepsonar-job-credentials.mjs",
+    config: { provider: options.credentialProvider,
+      reference: "DEEPSONAR_JOB_GATEWAY", path: options.privateCredentialPath },
+  });
   add("llm-pi-ai", "llm-pi-ai", options.providerConfig);
   add("sandbox", "sandbox-local");
   add("sandbox-policy", "sandbox-policy", { mode: "danger-full-access", workspaceRoot: options.cwd });
@@ -64,8 +69,8 @@ export function buildDshProfilePatch(options) {
 
 export const DSH_SMOKE_PROVIDER = "deepsonar-smoke";
 export const DSH_SMOKE_MODEL = "cordis-smoke";
-export function buildDshCordisSmokeConfig({ cwd = "/workspace", home = DSH_HOME, taskMode = "standard", baseURL = "http://127.0.0.1:1/gateway" } = {}) {
-  return buildDshProfilePatch({ cwd, home, taskMode, providerConfig: {
-    providers: { [DSH_SMOKE_PROVIDER]: { api: "openai-completions", apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN", baseURL, reasoning: "high", models: [{ id: DSH_SMOKE_MODEL, reasoningEfforts: { high: "high" } }] } },
+export function buildDshCordisSmokeConfig({ cwd = "/workspace", home = DSH_HOME, taskMode = "standard", baseURL = "http://127.0.0.1:1/gateway", privateCredentialPath } = {}) {
+  return buildDshProfilePatch({ cwd, home, taskMode, privateCredentialPath, credentialProvider: DSH_SMOKE_PROVIDER, providerConfig: {
+    providers: { [DSH_SMOKE_PROVIDER]: { api: "openai-completions", apiKeyEnv: "DEEPSONAR_JOB_GATEWAY", baseURL, reasoning: "high", models: [{ id: DSH_SMOKE_MODEL, reasoningEfforts: { high: "high" } }] } },
   } });
 }

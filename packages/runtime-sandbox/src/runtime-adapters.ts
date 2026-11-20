@@ -10,6 +10,8 @@ import { isPiObservationalMemoryExpectedWorkerFailure } from "./pi-observational
 import { isCorrectablePiCompactionError } from "./pi-length-recovery.js";
 import { modelRequestPolicyCommand } from "./model-request-policy.js";
 import { DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
+import { createHash } from "node:crypto";
+import { CLAUDE_PRIVATE_KEY_HELPER_SOURCE, CLAUDE_PRIVATE_HELPER_PATH } from "./private-credential-reader.js";
 
 export type AgentCliId = "claude-code" | "dsh" | "pi";
 
@@ -395,11 +397,17 @@ function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<Agent
   });
 }
 
-function sandboxClaude(
+async function sandboxClaude(
   host: RuntimeHost,
   context: AdapterStartContext,
   sessionId?: string,
 ): Promise<RuntimeProcess> {
+  if (context.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
+    const digest = createHash("sha256").update(CLAUDE_PRIVATE_KEY_HELPER_SOURCE).digest("hex");
+    const guard = `const f=require('node:fs'),c=require('node:crypto');if(c.createHash('sha256').update(f.readFileSync(${JSON.stringify(CLAUDE_PRIVATE_HELPER_PATH)})).digest('hex')!==${JSON.stringify(digest)})process.exit(78)`;
+    const checked = await host.run(`node -e ${shellQuote(guard)}`, { timeoutMs: 10_000 });
+    if (checked.exitCode !== 0) throw new Error("CLAUDE_PRIVATE_HELPER_IMAGE_CONTENT_INVALID");
+  }
   // Claude Code 恢复会话时仍接受相同的 stream-json 输入协议。恢复进程
   // 建立后由 runner 向 stdin 写入恢复消息，因此固定命令只需携带 session ID。
   let command = `claude -p`;
@@ -789,6 +797,8 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     taskMode: context.dshTaskMode,
     cwd: context.cwd,
     governedRequestBudget: Boolean(context.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM),
+    privateCredentialPath: context.env.DEEPSONAR_GATEWAY_TOKEN_FILE,
+    credentialProvider: context.dshProvider.provider,
   }), `${profilePath}/cordis.patch.yml`);
   // Re-materialize every launch so an old home-level override cannot augment the
   // frozen Job composition. The profile itself has no inherited bundles.

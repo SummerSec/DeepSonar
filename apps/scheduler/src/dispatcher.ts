@@ -178,7 +178,8 @@ import {
   openSandboxCreateCircuitStatus,
   recordOpenSandboxProvisionFailure,
   recordOpenSandboxProvisionSuccess,
-  createCircuitProbeFor, shouldLogCreateCircuitPause, type CreateCircuitProbe,
+  createCircuitProbeFor, createCircuitClaimSlots, shouldLogCreateCircuitPause, type CreateCircuitProbe,
+  assertOpenSandboxCreateAdmission, OpenSandboxCreateAdmissionExpiredError,
 } from "./opensandbox-create-circuit.js";
 import {
   OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
@@ -435,13 +436,13 @@ export type { DispatchCounts } from "./dispatch-active-concurrency.js";
 export { dispatchModelKey } from "./dispatch-active-concurrency.js";
 
 /** Number of additional active jobs the effective global cap permits. */
-export function dispatchSlots(maxGlobalJobs: number, totalActive: number): number {
-  return Math.max(0, maxGlobalJobs - totalActive);
+export function dispatchSlots(maxGlobalJobs: number | null, totalActive: number): number {
+  return maxGlobalJobs === null ? Infinity : Math.max(0, maxGlobalJobs - totalActive);
 }
 
 /** 允许进入 claimed/provisioning 阶段的额外 Job 数量。 */
-export function provisionSlots(maxConcurrentProvisioning: number, activeProvisioning: number): number {
-  return Math.max(0, maxConcurrentProvisioning - activeProvisioning);
+export function provisionSlots(maxConcurrentProvisioning: number | null, activeProvisioning: number): number {
+  return maxConcurrentProvisioning === null ? Infinity : Math.max(0, maxConcurrentProvisioning - activeProvisioning);
 }
 
 /**
@@ -475,7 +476,7 @@ export function dispatchSkipReason(
   job: DispatchCandidate,
   counts: DispatchCounts,
   rules: Pick<ProjectRules, "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
-  projectJobLimit: number,
+  projectJobLimit: number | null,
 ): string | null {
   const projectId = String(job.project_id);
   // Historical snapshots may omit agent_cli; use the platform default in quota accounting.
@@ -483,7 +484,7 @@ export function dispatchSkipReason(
   const provider = String(job.credential_provider ?? "");
   const credentialId = String(job.credential_id ?? "");
   const model = snapshotUpstreamModel(job) ?? "";
-  if ((counts.project.get(projectId) ?? 0) >= projectJobLimit) return "project";
+  if (projectJobLimit !== null && (counts.project.get(projectId) ?? 0) >= projectJobLimit) return "project";
   const providerLimit = provider ? rules.maxConcurrentByProvider[provider] : undefined;
   if (providerLimit !== undefined && (counts.provider.get(provider) ?? 0) >= providerLimit) return "provider";
   const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);
@@ -501,8 +502,8 @@ export function dispatchSkipReason(
 
 export function projectJobLimitForCandidate(
   job: Pick<DispatchCandidate, "project_config_json">,
-  globalMaxJobsPerProject: number,
-): number {
+  globalMaxJobsPerProject: number | null,
+): number | null {
   if (!Object.prototype.hasOwnProperty.call(job, "project_config_json")) {
     throw new Error("DISPATCH_PROJECT_CONFIG_MISSING");
   }
@@ -741,9 +742,15 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       (n, row) => n + (["claimed", "provisioning"].includes(String(row.status)) ? Number(row.count) : 0),
       0,
     );
+    if (config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox") {
+      const admission = openSandboxCreateCircuitAllowsClaim();
+      if (!admission.allowed) return stop;
+      createProbe = createCircuitProbeFor(admission);
+    }
     const slots = Math.min(
       dispatchSlots(rules.maxGlobalJobs, totalActive),
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
+      createCircuitClaimSlots(createProbe, activeProvisioning),
     );
     if (slots <= 0) {
       const holders = await tx<{ id: string; status: string; claimed_at: string | null; project_id: string; type: string }[]>`SELECT id, status, claimed_at::text AS claimed_at, project_id::text, type FROM jobs WHERE status IN ('claimed','provisioning') ORDER BY claimed_at NULLS FIRST, id LIMIT 5`;
@@ -885,6 +892,7 @@ export async function retryProvisioningJob(
   jobId: string,
   attempt: Record<string, unknown>,
   errorMessage: string,
+  reason: "provision_retry" | "provision_admission_deferred" = "provision_retry",
 ): Promise<boolean> {
   const retried = await sql.begin(async (txRaw) => {
     const tx = txRaw as unknown as typeof sql;
@@ -912,13 +920,14 @@ export async function retryProvisioningJob(
       FROM job_attempts
       WHERE job_id = ${jobId} AND status <> 'active'`;
     const plan = planAutomaticProvisionRetry(countConsumedProvisionRetries(previous));
-    if (!plan.retry) return false;
+    if (reason === "provision_retry" && !plan.retry) return false;
     const txLifecycle = createSqlJobLifecycleApplication(tx);
     return txLifecycle.retryProvisioning(
       jobId,
       errorMessage,
       (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
       (attempt.resource_labels_json ?? {}) as Record<string, string>,
+      reason,
     );
   });
   if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'provision_retry')`;
@@ -1161,7 +1170,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         env: useReal
           ? {
               DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0",
-              ...platformCapability!.env,
+              DEEPSONAR_API_BASE_URL: platformCapability!.env.DEEPSONAR_API_BASE_URL, DEEPSONAR_JOB_ID: jobId,
               ...(deviceLease?.env ?? {}),
             }
           : undefined,
@@ -1214,6 +1223,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         const provisionStarted = Date.now();
         try {
           await sharedAssetsPreparation?.assertCurrent();
+          if (provider === "opensandbox") assertOpenSandboxCreateAdmission(createProbe);
           provisionAttempted = true;
           handle = await withProvisionTimeout(
             runner.provision(provisionInput),
@@ -1365,8 +1375,10 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     // #1032 P1-3：终态失败以平台稳定错误码开头，不再以 CLI 进程退出文案收尾。
     if (classified.reason === CREDENTIAL_IN_BUSINESS_DATA_REASON) msg = classified.message;
     if (classified.reason === EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON) msg = classified.message;
-    if (!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
-      const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
+    if (!provisionAttempted && !handle && attemptId && activeAttempt &&
+      (isRetryableProvisionFailure(e) || e instanceof OpenSandboxCreateAdmissionExpiredError)) {
+      const reason = e instanceof OpenSandboxCreateAdmissionExpiredError ? "provision_admission_deferred" : "provision_retry";
+      const retried = await retryProvisioningJob(jobId, activeAttempt, msg, reason).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
         return false;
       });

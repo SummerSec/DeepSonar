@@ -140,6 +140,64 @@ if (!testDatabaseUrl) {
           ${`dispatch-limits-${credentialId}`}, 'test'
         )`;
 
+      // Management HTTP writes and the normal SQL dispatcher share the null
+      // contract. Synthetic Jobs only replace sandbox work, never claim.
+      const app = (await import("fastify")).default();
+      const { registerSettingsRoutes } = await import("./domains/settings/routes.js");
+      registerSettingsRoutes(app);
+      const { registerSystemRoutes } = await import("./domains/system/routes.js");
+      registerSystemRoutes(app, {
+        officialImageWarnings: () => [],
+        openSandboxStatus: () => ({ level: "skipped", domain: "", checkedAt: null, error: null }),
+      });
+      try {
+        const patch = async (url: string, rules: Record<string, unknown>) => {
+          const response = await app.inject({ method: "PATCH", url, payload: { rules } });
+          assert.equal(response.statusCode, 200, response.body);
+          return response.json();
+        };
+        const unlimited = { maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null };
+        const saved = await patch("/global-settings", unlimited);
+        for (const key of Object.keys(unlimited)) {
+          assert.equal(saved.rules[key], null);
+          assert.equal(saved.effective_rules[key], null);
+        }
+        const health = await app.inject({ method: "GET", url: "/health" });
+        assert.equal(health.statusCode, 200, health.body);
+        assert.deepEqual(health.json().concurrency_limits, unlimited);
+        for (const key of Object.keys(unlimited)) {
+          const rejected = await app.inject({ method: "PATCH", url: "/global-settings", payload: { rules: { [key]: 0 } } });
+          assert.equal(rejected.statusCode, 400, rejected.body);
+        }
+        const read = await app.inject({ method: "GET", url: "/global-settings" });
+        for (const key of Object.keys(unlimited)) assert.equal(read.json().rules[key], null);
+        await patch(`/projects/${projectIds[0]}/settings`, { maxConcurrentJobs: 3 });
+        const ids = await Promise.all(Array.from({ length: 4 }, () => insertJob(projectIds[0])));
+        const limited = await claimPendingJobs();
+        assert.equal(limited.filter(job => ids.includes(job.id)).length, 3);
+        await sql`DELETE FROM jobs WHERE id = ANY(${ids}::uuid[])`;
+        const paused = await patch(`/projects/${projectIds[0]}/settings`, { maxConcurrentJobs: 0 });
+        assert.equal(paused.effective_rules.maxConcurrentJobs, 0);
+        const resumeIds = await Promise.all(Array.from({ length: 6 }, () => insertJob(projectIds[0])));
+        assert.equal((await claimPendingJobs()).length, 0);
+        const inherited = await patch(`/projects/${projectIds[0]}/settings`, { maxConcurrentJobs: null });
+        assert.equal(inherited.effective_rules.maxConcurrentJobs, null);
+        assert.equal((await claimPendingJobs()).filter(job => resumeIds.includes(job.id)).length, 6,
+          "null removes both former per-project and provisioning defaults");
+        await sql`DELETE FROM jobs WHERE id = ANY(${resumeIds}::uuid[])`;
+        await patch("/global-settings", { ...unlimited, maxConcurrentProvisioning: 1 });
+        const provisionIds = await Promise.all(Array.from({ length: 2 }, () => insertJob(projectIds[0])));
+        assert.equal((await claimPendingJobs()).filter(job => provisionIds.includes(job.id)).length, 1);
+        await patch("/global-settings", unlimited);
+        assert.equal((await claimPendingJobs()).filter(job => provisionIds.includes(job.id)).length, 1);
+        await sql`DELETE FROM jobs WHERE id = ANY(${provisionIds}::uuid[])`;
+        await patch("/global-settings", { ...unlimited, maxConcurrentByAgentCli: { "claude-code": 1 } });
+        const cliIds = await Promise.all(Array.from({ length: 2 }, () => insertJob(projectIds[0])));
+        assert.equal((await claimPendingJobs()).filter(job => cliIds.includes(job.id)).length, 1,
+          "global unlimited still enforces CLI admission");
+        await sql`DELETE FROM jobs WHERE id = ANY(${cliIds}::uuid[])`;
+      } finally { await app.close(); }
+
       // Effective global=4: four pending jobs must be claimed by the real SQL
       // transaction, rather than merely accepted by the pure quota helpers.
       await setRules({
@@ -325,6 +383,11 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
       const { runDispatchFairnessFixture } = await import("./dispatch-fairness.fixture.js");
       await runDispatchFairnessFixture(sql, claimPendingJobs, credentialId);
+
+      await setRules({ maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null });
+      const recoveryPending = await Promise.all(Array.from({ length: 6 }, () => insertJob(projectIds[0])));
+      const { runUnlimitedCreateCircuitFixture } = await import("./dispatch-create-circuit.fixture.js");
+      await runUnlimitedCreateCircuitFixture(sql, claimPendingJobs, recoveryPending);
     } finally {
       if (!databaseClosed) {
         await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;

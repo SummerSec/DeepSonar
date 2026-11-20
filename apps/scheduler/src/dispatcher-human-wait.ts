@@ -4,6 +4,7 @@ import { sql } from "./db.js";
 import { markAttemptInterrupted, settleEffect } from "./domains/job-attempt/application.js";
 import { revokeOldRuntimeGrants } from "./domains/job-control/rerun.js";
 import { pauseHumanExecutionClock } from "./domains/job-control/human-continuation-clock.js";
+import { destroyObservedRuntime } from "./runtime-process-cleanup.js";
 
 /** Preserve ordinary finally cleanup; a refused human-wait close is never a fallback authorization. */
 export async function cleanupDispatcherSandbox(
@@ -11,9 +12,16 @@ export async function cleanupDispatcherSandbox(
   runner: Pick<SandboxRunner, "destroy">,
   input: { jobId: string; attemptId?: string | null; sandboxId: string },
 ): Promise<void> {
-  const [job] = await db`SELECT status FROM jobs WHERE id=${input.jobId}`;
+  const [job] = await db`SELECT status,EXISTS(SELECT 1 FROM job_attempt_effects e
+    WHERE e.job_id=jobs.id AND e.attempt_id=${input.attemptId ?? null}::uuid
+      AND e.effect_kind='agent_run' AND jsonb_array_length(COALESCE(e.intent_json->'host_process_audits','[]'::jsonb))>0) AS observed
+    FROM jobs WHERE id=${input.jobId}`;
   if (job?.status === "waiting_human") {
     if (input.attemptId) await destroyAndSettleHumanWaitRun(db, runner, { ...input, attemptId: input.attemptId });
+    return;
+  }
+  if (job?.observed && input.attemptId) {
+    await destroyObservedRuntime(db, runner, { ...input, attemptId: input.attemptId });
     return;
   }
   await runner.destroy({ sandboxId: input.sandboxId });
@@ -61,6 +69,11 @@ export async function destroyAndSettleHumanWaitRun(
       runtime_grants_revoked: true,
     } });
     if (!settled) throw new Error("HUMAN_WAIT_RUN_SETTLEMENT_CHANGED");
+    await tx`UPDATE job_attempt_effects SET intent_json=intent_json || ${tx.json({ host_cleanup: {
+      schema: "deepsonar.runtime-cleanup/v1", state: "confirmed", sandbox_id: input.sandboxId,
+      attempt_id: input.attemptId, human_event_id: String(human.event_id),
+      reconciled_by: "dispatcher-human-wait-cleanup",
+    } })},updated_at=clock_timestamp() WHERE id=${effect.id}`;
     await tx`UPDATE human_requests SET resources_released_at=clock_timestamp(),process_exited_at=clock_timestamp(),
       checkpoint_status=CASE WHEN manifest_json IS NULL THEN 'blocked' WHEN checkpoint_status='preparing' THEN 'ready' ELSE checkpoint_status END,
       checkpoint_error_code=CASE WHEN manifest_json IS NULL THEN COALESCE(checkpoint_error_code,'HUMAN_CHECKPOINT_UNAVAILABLE') ELSE checkpoint_error_code END

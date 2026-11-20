@@ -2,6 +2,8 @@
 
 #1118 的[持久跨项目公平领取](architecture/06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。
 
+#1133 的[人工技术收口](architecture/09-interface-specs.md#人工结束技术验证1133)新增受权限、CAS、持久幂等与同事务审计保护的无定论终结轮次，并补齐[设备要求冻结](DEVICE_ACCESS.md)的自动和人工补证入口。既有 #1138 无进展刹车继续复用，最终 SHA Actions 待验。
+
 NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁竞争后的认领唤醒)覆盖临时跳过后没有新通知的恢复，保留默认轮询关闭；真实 PostgreSQL 红测已复现，修复最终 SHA 的 Actions 另验，不把它当作历史 CI 持锁者的证据。
 
 #1088 的 [OpenSandbox PTY 退出诊断](AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)区分有效退出帧、WebSocket 中断与宿主主动终止，经原 Evidence 通路保留有界脱敏关闭码和错误原因；不新增重连或任务重跑权限。最终 SHA Actions 待验，历史现场底层原因仍未知。
@@ -25,6 +27,8 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 > **Pi 模型预算与截断（#958）**：[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)记录发现声明/显式配置/CLI 观测分层、创建期冻结、同 Session 有界恢复及压缩无进展停止；不扩大权限/额度，不伪造上下文证据。行为回归与实际锁版本 SDK、HTTP/PG 入口已接既有 Actions，最终 SHA 待验；本地与生产验证均未执行。
 > **#951 完成失败诊断**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。核心缺诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA 另验，全量覆盖和生产归因仍未验证。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
+
+#1123 的[默认不限调度配额](architecture/06-runtime-view.md#默认不限的调度配额1123)使用全局 null 不限、项目 null 继承和项目 0 暂停。显式数字及环境变量保留，缺省采用新 null 契约，设置输入与生效值分开展示；正常 HTTP/claim 与 DOM 回归已接线，最终 SHA Actions 待验。
 
 > **v0.6.16 发布准备（2026-11-07）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)：compare 为 `v0.6.15...v0.6.16`，前一版本取最高既有 tag v0.6.15（其 Release 在 Chrome / ClickHouse 子镜像失败、未形成正式 Release，但仍参与比较，不移动旧 tag）。范围为 #944 与 #958，叠加已合入的 #971–#976、#961 P2/P3、#967、#945、#979，清单见 [CHANGELOG](../CHANGELOG.md)。**2026-11-07 的发布准备基线要求 schema 68**（v0.6.14/v0.6.15 均为 67，schema 68 由 #954/#960 引入，故本版是首个要求 68 的发布；无就地升级路径，非空库须先备份再按 `database/schema.sql` 重建）；该次发布准备不改 schema；后续 #1002 P1-7A 的集成目标见[数据架构](architecture/08-data-architecture.md)，发布时必须按最终源码重核，产品版本只由 tag 注入的 `DEEPSONAR_VERSION` 决定。#984 与 #989 需先合并并通过适用 Actions，之后才打不可变 `v0.6.16`；最终 main Actions 与正式产物成功状态分别核对。
 
@@ -298,3 +302,9 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 > **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，按消息回滚失败输出并保留此前成功文本，空响应判断与去重不跨消息；保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。
 
 #1074 的[项目队列显式人工让位](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)已接 UI/API、持久决定与回复原子回队尾，默认保留席位，首片限定单一人工等待。最终 SHA Actions 另验。
+
+#1032 A1 三 CLI 凭据文件通道及未交付边界见[Gateway 专题](MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。当前 PR 的 Actions 尚待验收。
+
+#1126 的[Job 恢复提示](architecture/05-building-blocks.md#job-恢复提示1126)显示运行结论、折叠技术诊断，并同时核对当前动作和权限；真实组件回归已接现有 Actions，最终 SHA 待验。
+
+#1143 [PTY 清理事实与精确对账](AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存 DELETE 真实结果和宿主 caller，以先撤销凭据、再受管销毁并重核原 owner 的链路收口。独立 unknown 与旧无证据 run 保留，自动整 Job 恢复未交付，最终 SHA Actions 待验。

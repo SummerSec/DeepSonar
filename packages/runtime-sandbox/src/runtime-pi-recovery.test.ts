@@ -16,23 +16,48 @@ test("human native import uses the normal runner resume path with fresh executio
     {type:"message",id:"user",parentId:null,timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep decision"}},
   ].map(row=>JSON.stringify(row)).join("\n")};
   const importedPath=nativeHumanSessionPath(humanSession),uploads=new Map<string,string>(),launches:string[]=[],bindings:unknown[]=[];
+  const order:string[]=["business-restored"];
+  const protocolInputs:string[]=[];
   const process=new PiProcess((command,proc)=>{
     if(command.type==='get_state')proc.emit({type:'response',id:command.id,command:'get_state',success:true,data:{sessionId:id,sessionFile:importedPath,
       isStreaming:false,isCompacting:false,pendingMessageCount:0,messageCount:1,autoCompactionEnabled:true}});
     else if(command.type==='prompt')turn(proc,command);
   });
   const runtime:RuntimeHost={run:async()=>({exitCode:0,stdout:'',stderr:''}),runAsync:async(command,options)=>{
-    launches.push(command);assert.equal(options?.env?.DEEPSONAR_GATEWAY_TOKEN,'new-gateway');return process;
-  },uploadFile:async(content,destination)=>{uploads.set(destination,String(content));},readWorkspaceFile:async()=>Buffer.from(''),writeHumanInboxFile:async()=>{}};
+    if(command.startsWith("python3 -c ")) {
+      if(command.includes(" create "))order.push("fresh-credentials");
+      let stdinClosed = false;
+      const writer: RuntimeProcess = {
+        get stdinClosed() { return stdinClosed; },
+        async write(value) {
+          if (stdinClosed) throw new Error("fixture stdin is closed");
+          protocolInputs.push(value);
+        },
+        async closeStdin() { stdinClosed = true; },
+        async kill() { stdinClosed = true; },
+        async *[Symbol.asyncIterator]() {
+          yield { type: "stdout" as const, chunk: "ok\n" };
+          yield { type: "exit" as const, exitCode: 0 };
+        },
+      };
+      return writer;
+    }
+    order.push("resume");launches.push(command);
+    assert.equal(options?.env?.DEEPSONAR_GATEWAY_TOKEN,undefined);
+    assert.match(options?.env?.DEEPSONAR_GATEWAY_TOKEN_FILE??"",/\.deepsonar-credentials-[a-f0-9-]{36}\/gateway-token$/u);
+    assert.ok(protocolInputs.some(value=>JSON.parse(value)["gateway-token"]==="new-gateway"));
+    return process;
+  },uploadFile:async(content,destination)=>{if(destination===importedPath)order.push("redacted-history");uploads.set(destination,String(content));},readWorkspaceFile:async()=>Buffer.from(''),writeHumanInboxFile:async()=>{}};
   const identity=contextIdentity(createContextState({attempt_id:'new-attempt',adapter_id:'pi',adapter_version:'1.5.2',
     runtime_identity:'sha256:'+'a'.repeat(64),policy:'automatic',input_digest:contextTextDigest('new input')}));
   const extension='/workspace/.deepsonar-home/.pi/agent/extensions/current.ts';
-  const result=await runRealAgent(runtime,{provider:'pi',env:{DEEPSONAR_GATEWAY_TOKEN:'new-gateway'},input:'human reply',systemPrompt:'CURRENT_SYSTEM_BOUNDARY',
+  const result=await runRealAgent(runtime,{provider:'pi',env:{},privateCredentials:{gatewayToken:'new-gateway',controlToken:'new-control'},secretValues:['new-gateway','new-control'],input:'human reply',systemPrompt:'CURRENT_SYSTEM_BOUNDARY',
     contextIdentity:identity,humanSession,piExtensions:[extension],onSessionIdentity:value=>{bindings.push(value);},completionGate:()=>true});
   assert.equal(result.error,undefined);assert.equal(launches.length,1);
   assert.ok(launches[0]!.includes(`--session '${importedPath}'`));assert.ok(launches[0]!.includes(extension));
   assert.equal(uploads.get('/workspace/.deepsonar/system-prompt.txt'),'CURRENT_SYSTEM_BOUNDARY');
   assert.match(uploads.get(importedPath)!,/Keep decision/);assert.doesNotMatch(uploads.get(importedPath)!,/new-gateway/);
+  assert.deepEqual(order,['business-restored','fresh-credentials','redacted-history','resume']);
   assert.ok(bindings.length>=1);assert.equal(process.commands.filter(command=>command.type==='prompt').length,1);
 });
 
@@ -91,6 +116,40 @@ function host(factory: (index: number) => PiProcess, nonempty = true) {
     writeHumanInboxFile: async () => {},
   };
   return { runtime, processes };
+}
+
+for (const outcome of ["success", "failure", "startup"] as const) {
+  test(`#1032 credential cleanup failure preserves the original ${outcome} outcome`, async () => {
+    const warnings: RuntimeWarning[] = [];
+    const fake = host(() => new PiProcess((command, process) => {
+      if (command.type === "get_state") state(process, command);
+      else if (command.type === "prompt") turn(process, command, outcome === "failure" ? "permanent fixture failure" : undefined);
+    }));
+    const originalStart = fake.runtime.runAsync;
+    fake.runtime.runAsync = async (command, options) => {
+      if (command.startsWith("python3 -c ")) return {
+        stdinClosed: false, write: async () => {}, closeStdin: async () => {}, kill: async () => {},
+        async *[Symbol.asyncIterator]() {
+          if (!command.includes(" cleanup ")) yield { type: "stdout" as const, chunk: "ok\n" };
+          yield { type: "exit" as const, exitCode: command.includes(" cleanup ") ? 1 : 0 };
+        },
+      };
+      if (outcome === "startup") throw new Error("original startup failure");
+      return originalStart(command, options);
+    };
+    const run = () => runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "fixture",
+      privateCredentials: { controlToken: "synthetic-control-token" }, completionGate: () => true,
+      onWarning: warning => { warnings.push(warning); throw new Error("diagnostic observer failure"); } });
+    if (outcome === "startup") await assert.rejects(run(), /original startup failure/u);
+    else {
+      const result = await run();
+      assert.equal(result.terminalOutcome, outcome);
+      if (outcome === "success") assert.equal(result.error, undefined);
+      else assert.match(result.error!, /permanent fixture failure/u);
+      assert.equal(fake.processes.length, 1, "cleanup must not cause a new CLI attempt");
+    }
+    assert.ok(warnings.some(warning => warning.code === "private_credentials_cleanup_failed"));
+  });
 }
 
 test("#1083 request-wrapper diagnostic survives the Pi runner without process resume or tool replay", async () => {

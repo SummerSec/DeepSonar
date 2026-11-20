@@ -100,7 +100,7 @@ export async function runCompletionInCliSession(cli: CompletionCli, act: () => P
           adapter_id: "dsh", adapter_version: AGENT_CLI_RUNTIME_ADAPTERS.dsh.version, runtime_identity: "synthetic",
           transform_chain_digest: `sha256:${"a".repeat(64)}` },
         dshProvider: { provider: "synthetic", model: "synthetic", config: { providers: { synthetic: {
-          api: "openai-completions", apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN", baseURL: "http://127.0.0.1:1", models: [{ id: "synthetic" }],
+          api: "openai-completions", apiKeyEnv: "DEEPSONAR_JOB_GATEWAY", baseURL: "http://127.0.0.1:1", models: [{ id: "synthetic" }],
         } } } },
       } : {}),
       onEvent: event => { events.push(String(event.type)); },

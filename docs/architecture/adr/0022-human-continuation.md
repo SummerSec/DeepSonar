@@ -29,4 +29,4 @@
 
 用户已授权在合法检查点与完整原始账本成立时，显式关联新 Job。schema 76 复用第一 Job 作为预算 owner，独立指向唯一当前执行 Job，job_continuations 绑定直接前驱、源 Attempt、请求版本、检查点摘要和新旧回复。执行权限、账本与回执保留实际 Job 身份，原额度、修正次数和硬期限持续累计。
 
-历史回复先独立幂等保存，交接与决策审计同事务。管理操作采用 claim advisory→Canvas→全部预算根→成员 Job→Attempt→request 锁序，Gateway 准入/结算先根后成员。缺证据、未知效果和不受支持的专属分配稳定拒绝。Plan 新 Job 占原 max_tasks 剩余名额，只有精确来源归因且原目标/路线仍有效的失败停止允许受治理恢复。受限原生会话通过同一 continuation 绑定寻找原归档，执行身份属于新 Job。原生边界见 [ADR 0024](0024-restricted-human-session-import.md)。
+历史回复先独立幂等保存，交接与决策审计同事务。管理操作采用 claim advisory→Canvas→全部预算根→成员 Job→Attempt→request 锁序，Gateway 准入/结算先根后成员。缺证据、未知效果和不受支持的专属分配稳定拒绝。Plan 新 Job 占原 max_tasks 剩余名额，只有精确来源归因且原目标/路线仍有效的失败停止允许受治理恢复。受限原生会话通过同一 continuation 绑定寻找原归档，执行身份属于新 Job。原生边界见 [ADR 0025](0025-restricted-human-session-import.md)。

@@ -2,6 +2,8 @@
 
 #1118 的[持久跨项目公平领取](06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。
 
+#1133 将 FR-VERIFY-005 / FR-DEV-002 的人工技术决定与补证设备冻结接到[接口视图](09-interface-specs.md#人工结束技术验证1133)、运行时视图及既有设备专题，新增轮次与持久审计使用现有数据结构。最终 SHA Actions 待验。
+
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
 > 同步日期：2026-11-19
 
@@ -60,7 +62,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 ## 1. 阅读路径与目录
 
-#1074 的 [ADR 0024](adr/0024-restricted-human-session-import.md)在原持久请求与预算边界内增加 Pi/Claude 受限主会话文字导入，DSH unsupported + structured；具体能力矩阵与原生 Actions 接线见[人工续做专题](../HUMAN_CONTINUATION.md)。
+#1074 的 [ADR 0025](adr/0025-restricted-human-session-import.md)在原持久请求与预算边界内增加 Pi/Claude 受限主会话文字导入，DSH unsupported + structured；具体能力矩阵与原生 Actions 接线见[人工续做专题](../HUMAN_CONTINUATION.md)。
 
 | 文件 | 回答的问题 | 状态 |
 | --- | --- | --- |
@@ -162,3 +164,7 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 知识来源登记与历史只读预览的历史收敛见[ADR0021](adr/0021-knowledge-source-preview.md)；用户本轮明确授权的有界项目批次由[ADR0023](adr/0023-project-knowledge-collection.md)取代其中批处理暂缓限制，保留旧knowledge:auto禁用、历史只读与无schema变化。FR-KNOW-001/002、06/08/09/10和trace已同步到collector、Attempt/manifest审计、trial隔离、6×2比较门及activity投影；注意力成本在[专题](../PROJECT_KNOWLEDGE.md#注意力成本)。原候选6d96df59的主CI与Reverse专项已通过，同步main后的候选须独立验收，证据见[专题](../PROJECT_KNOWLEDGE.md#验证与运维)；未合并未部署，真实模型与质量收益未知。
 
 #1074 的[队列显式让位](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)同步 FR-TASK-008、FR-CTRL-006 及运行时/数据/API 视图。schema 75 新增 yielded 与持久请求/回复消费，最终 SHA Actions 另验。
+
+#1032 A1 三 CLI 凭据文件通道及未交付边界见[Gateway 专题](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。当前 PR 的 Actions 尚待验收。
+
+#1143 的 [PTY 清理事实与精确对账](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)扩展 FR-JOB-005 与既有 Job 详情投影。新宿主证据、先撤销凭据再销毁、精确 owner 和失败保留已接线，无合法检查点的自动整 Job 恢复未交付，#1159 + #1167 + #1168 组合按人工续接专题核对，最终 SHA Actions 待验。

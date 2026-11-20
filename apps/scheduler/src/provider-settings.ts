@@ -236,9 +236,10 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     delete settings[PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY];
     const env = asObject(settings.env);
     delete env.ANTHROPIC_API_KEY;
-    env.ANTHROPIC_AUTH_TOKEN = jobToken;
+    delete env.ANTHROPIC_AUTH_TOKEN;
     env.ANTHROPIC_BASE_URL = gatewayBaseUrl;
     settings.env = env;
+    settings.apiKeyHelper = "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs";
     return input.files.map((item) => item.path === source.path
       ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
       : { ...item });
@@ -255,7 +256,7 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     for (const [providerId, rawProvider] of Object.entries(providers)) {
       const provider = asObject(rawProvider);
       provider.baseUrl = gatewayBaseUrl;
-      provider.apiKey = "$DEEPSONAR_GATEWAY_TOKEN";
+      delete provider.apiKey;
       // Pi anthropic-messages 默认只发 x-api-key；现网 Gateway 认 Bearer。
       if (provider.api === "anthropic-messages") provider.authHeader = true;
       providers[providerId] = provider;
@@ -292,7 +293,7 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
       omProvider.models = [omModel];
       omProvider.api = api;
       omProvider.baseUrl = input.observationalMemory.gatewayBaseUrl ?? gatewayBaseUrl;
-      omProvider.apiKey = "$DEEPSONAR_OM_GATEWAY_TOKEN";
+      delete omProvider.apiKey;
       if (api === "anthropic-messages") omProvider.authHeader = true;
       providers[PI_OBSERVATIONAL_MEMORY_PROVIDER] = omProvider;
       auth[PI_OBSERVATIONAL_MEMORY_PROVIDER] = { type: "api_key", key: background };

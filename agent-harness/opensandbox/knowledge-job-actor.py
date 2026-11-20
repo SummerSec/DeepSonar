@@ -16,7 +16,7 @@ def invoke(operation, payload, accepted=True):
         os.environ['DEEPSONAR_API_BASE_URL'].rstrip('/') + '/operations/' + operation,
         data=json.dumps(payload).encode(), method='POST',
         headers={'Content-Type': 'application/json',
-                 'Authorization': 'Bearer ' + os.environ['DEEPSONAR_API_TOKEN'],
+                 'Authorization': 'Bearer ' + Path(os.environ['DEEPSONAR_CONTROL_TOKEN_FILE']).read_text(),
                  'Idempotency-Key': str(uuid.uuid4())})
     if operation == 'mark_job_done':
         request.add_header('X-DeepSonar-Proposal-Revision', '0')

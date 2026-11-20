@@ -5,7 +5,7 @@
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
-#1074 原生人工续做仅允许精确绑定原 request/Attempt/快照/归档摘要的主会话文字，经秘密投影和控制身份过滤后导入新沙箱。未知语义记录、扩展、压缩、分支与上下文编辑明确 structured，DSH unsupported；旧系统/配置/工具执行状态不授权新 Attempt，身份与权限重建。持久 Evidence 记录能力与方式原因，见[ADR 0024](adr/0024-restricted-human-session-import.md)及[人工续做](../HUMAN_CONTINUATION.md)。
+#1074 原生人工续做仅允许精确绑定原 request/Attempt/快照/归档摘要的主会话文字，经秘密投影和控制身份过滤后导入新沙箱。未知语义记录、扩展、压缩、分支与上下文编辑明确 structured，DSH unsupported；旧系统/配置/工具执行状态不授权新 Attempt，身份与权限重建。持久 Evidence 记录能力与方式原因，见[ADR 0025](adr/0025-restricted-human-session-import.md)及[人工续做](../HUMAN_CONTINUATION.md)。
 
 #1002 P1-9 的[同 Job 模型恢复](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)只接受 Kernel 的 scoped no-start 与严格零用量 settlement，不以 Provider 错误或 SDK 文本为 authority。原 Job 锁串行消费既有 effect intent 中的恢复记录，原 owner/lease/deadline/请求及修正额度仍准入；未知效果、旧许可/计数来源缺失、跨 token/Attempt 原引用与已消费引用拒绝。新调用不修改旧 effect 的 never replay policy、不重启 Agent，不退款或补造历史。最终 SHA SQL/SDK Actions 待验。
 
@@ -213,3 +213,6 @@ activity读面同时要求项目scope和projects:read；计数仅来自本项目
 ## 人工等待队列让位（#1074）
 
 让位沿 jobs:control 和项目范围，客户端的条目/请求/revision 不构成权限或退出证明。宿主重验唯一等待、可信封存与回收、效果和费用、有效额度，统一 claim 锁内同事务审计。回复只重新排队，不授权扩额、切快照或抢占运行中任务。恢复仍实时核验授权，历史回复及旧 mutation 不复活取消的 Job。
+
+
+#1032 A1 的三 CLI 私有文件创建、认证读取、清理及现行 P0-1 / P1-3 / P1-4 覆盖边界见[凭据文件通道](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。同 UID 工具可读，A2 未交付。Actions 尚待本 PR 最终提交验收。

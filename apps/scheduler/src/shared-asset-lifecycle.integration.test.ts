@@ -492,6 +492,49 @@ if (!testDatabaseUrl) {
         });
       }
 
+      await t.test("expired create admission defers after consumed retry without replenishing or consuming its budget", async () => {
+        const scope = await fixture();
+        await sql`UPDATE job_attempts SET outcome_json='{"reason":"provision_retry"}' WHERE id=${scope.oldAttempt}`;
+        const { countConsumedProvisionRetries } = await import("./provision-retry-budget.js");
+        for (let turn = 0; turn < 2; turn += 1) {
+          const [attempt] = await sql`SELECT * FROM job_attempts WHERE job_id=${scope.jobId} AND status='active'`;
+          await sql.begin(async txRaw => {
+            const tx = txRaw as unknown as typeof sql;
+            await tx`UPDATE jobs SET status='provisioning' WHERE id=${scope.jobId}`;
+            await lockCurrentProvisioningAttempt(tx, scope.jobId, String(attempt!.id), "preparing");
+            const effectId = `provision:${attempt!.attempt_no}`;
+            await beginEffect(tx, String(attempt!.id), { effectId, kind: "provision", intent: { runner: "not-invoked" } });
+            await settleUnstartedProvisionEffect(tx, String(attempt!.id), effectId, "create admission expired before outbound");
+          });
+          assert.equal(await retryProvisioningJob(scope.jobId, attempt!, "expired admission", "provision_admission_deferred"), true);
+          assert.equal((await sql`SELECT status FROM jobs WHERE id=${scope.jobId}`)[0]!.status, "pending");
+          const history = await sql`SELECT status,outcome_json,state_json FROM job_attempts WHERE job_id=${scope.jobId}`;
+          assert.equal(countConsumedProvisionRetries(history), 1, "defer does not consume or reset the one actual provision retry");
+        }
+        const [current] = await sql`SELECT * FROM job_attempts WHERE job_id=${scope.jobId} AND status='active'`;
+        assert.equal(await retryProvisioningJob(scope.jobId, current!, "real provision failure"), false, "actual retry stays exhausted");
+        const { createSqlJobLifecycleApplication } = await import("./domains/job-lifecycle/application.js");
+        await createSqlJobLifecycleApplication().cancelJob(scope.jobId, "fixture_cancel");
+        assert.equal(await retryProvisioningJob(scope.jobId, current!, "expired admission", "provision_admission_deferred"), false);
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${scope.jobId}`)[0]!.status, "cancelled");
+      });
+
+      await t.test("create admission deferral preserves unknown effects and terminal timeout fencing", async () => {
+        const scope = await fixture();
+        const [attempt] = await sql`SELECT * FROM job_attempts WHERE id=${scope.newAttempt}`;
+        await sql.begin(async txRaw => {
+          const tx = txRaw as unknown as typeof sql;
+          await beginEffect(tx, scope.newAttempt, { effectId: "provision:2", kind: "provision", intent: { runner: "unknown" } });
+          await markEffectUnknown(tx, scope.newAttempt, "provision:2", "opaque create");
+        });
+        assert.equal(await retryProvisioningJob(scope.jobId, attempt!, "expired admission", "provision_admission_deferred"), false);
+        const { createSqlJobLifecycleApplication } = await import("./domains/job-lifecycle/application.js");
+        await sql`UPDATE jobs SET claimed_at=now()-interval '1 hour' WHERE id=${scope.jobId}`;
+        await createSqlJobLifecycleApplication().reapProvisionTimeout(1);
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${scope.jobId}`)[0]!.status, "failed");
+        assert.equal(await retryProvisioningJob(scope.jobId, attempt!, "expired admission", "provision_admission_deferred"), false);
+      });
+
       for (const fence of ["current", "old-attempt", "cancelled", "job-sandbox", "attempt-sandbox", "stopped-registration"] as const) {
         await t.test(`real lease SQL renews only the current exact Attempt and double sandbox binding: ${fence}`, async () => {
           const scope = await fixture();
