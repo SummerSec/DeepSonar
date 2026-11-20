@@ -26,7 +26,7 @@ export async function runDispatchFairnessFixture(db: typeof sql, claim: Claim, c
       maxJobsPerProject: slots, maxConcurrentProvisioning: slots, maxConcurrentByAgentCli: { "claude-code": slots, pi: 0 } })},
       dispatch_scan_served = NULL, dispatch_scan_project_id = NULL WHERE id = 'global'`;
   };
-  const pending = async (projectId: string, priority: number, count = 1, valid = true) => {
+  const pending = async (projectId: string, priority: number, count = 1, valid = true): Promise<string[]> => {
     const rows = Array.from({ length: count }, () => ({ id: randomUUID(), project_id: projectId,
       type: "audit", status: "pending", priority,
       agent_snapshot_json: { ...snapshot, ...(valid ? {} : { agent_cli: "pi" }) } }));

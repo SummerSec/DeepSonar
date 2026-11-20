@@ -109,7 +109,7 @@ export async function runCreateFailureDispatchFixture(
   try {
     Object.assign(config.runtime, { agentMode: "real", provider: "opensandbox" });
     Object.assign(config.runtime.openSandbox, { kubernetes: true, apiKey: "fixture-key" });
-    config.hub.enabled = false;
+    Object.assign(config.hub, { enabled: false });
     runner.provision = controlled.provision.bind(controlled);
     await db`UPDATE global_settings SET rules_json=${db.json({ ...settings!.rules_json,
       maxGlobalJobs: 1, maxJobsPerProject: 1, maxConcurrentProvisioning: 1, hubEnabled: false })} WHERE id='global'`;
@@ -180,7 +180,7 @@ export async function runCreateFailureDispatchFixture(
     runner.provision = provision;
     Object.assign(config.runtime, runtime);
     Object.assign(config.runtime.openSandbox, sandbox);
-    config.hub.enabled = hubEnabled;
+    Object.assign(config.hub, { enabled: hubEnabled });
     await db`UPDATE global_settings SET rules_json=${db.json(settings!.rules_json)} WHERE id='global'`;
     resetOpenSandboxCreateCircuitForTests();
     resetOpenSandboxUploadCircuitForTests();
