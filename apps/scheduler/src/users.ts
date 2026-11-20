@@ -5,16 +5,17 @@
  * - 角色 → scopes：admin / operator / viewer
  */
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { open } from "node:fs/promises";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { consumeLoginAttempt, LoginRateLimitError } from "./login-rate-limit.js";
 
 export type UserRole = "admin" | "operator" | "viewer";
 
-/** Public, first-run credentials for local/demo installations. Production must rotate them immediately. */
-export const DEFAULT_ADMIN_USERNAME = "admin";
-export const DEFAULT_ADMIN_PASSWORD = "Deep@Sonar66";
-const DEFAULT_ADMIN_SEED_LOCK_ID = 726868002;
+/** The initial account name is public; its password is deployment-specific. */
+export const BOOTSTRAP_ADMIN_USERNAME = "admin";
+const BOOTSTRAP_ADMIN_SEED_LOCK_ID = 726868002;
 
 export interface PublicUser {
   id: string;
@@ -124,43 +125,53 @@ export async function countUsers(): Promise<number> {
   return (r?.n as number) ?? 0;
 }
 
-/** True only while the public first-run credentials still work for an active admin row. */
-export async function defaultAdminCredentialsActive(): Promise<boolean> {
-  const [row] = await sql`
-    SELECT password_salt, password_hash
-    FROM users
-    WHERE username = ${DEFAULT_ADMIN_USERNAME} AND status = 'active'`;
-  return Boolean(
-    row && verifyPassword(DEFAULT_ADMIN_PASSWORD, row.password_salt as string, row.password_hash as string),
-  );
+/** Read a bounded, regular UTF-8 file; diagnostics never include its path or contents. */
+async function readBootstrapAdminPassword(secretFile: string | undefined): Promise<string> {
+  if (!secretFile?.trim()) throw new Error("BOOTSTRAP_ADMIN_PASSWORD_FILE_REQUIRED: provision DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE for an empty users table");
+  let password: string;
+  try {
+    const file = await open(secretFile, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    try {
+      const metadata = await file.stat();
+      if (!metadata.isFile() || metadata.size < 1 || metadata.size > 1024) throw new Error();
+      const buffer = Buffer.alloc(1025);
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+      if (bytesRead !== metadata.size) throw new Error();
+      password = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytesRead)).replace(/\r?\n$/, "");
+    } finally {
+      await file.close();
+    }
+  } catch {
+    throw new Error("BOOTSTRAP_ADMIN_PASSWORD_FILE_INVALID: provide a readable, regular bootstrap secret file");
+  }
+  if (password.length < 20 || password.length > 200 || !password.trim() || /[\u0000-\u001f\u007f]/.test(password)) {
+    throw new Error("BOOTSTRAP_ADMIN_PASSWORD_INVALID: use a unique password of 20 to 200 characters without control characters");
+  }
+  return password;
 }
 
-/**
- * Seed the public first-run admin exactly once. The transaction advisory lock
- * serializes multiple scheduler instances during boot; existing users always
- * win, so a restart can never reset a password or recreate the account.
- */
-export async function ensureDefaultAdmin(): Promise<{ created: boolean; user: PublicUser | null }> {
+/** Initialize only on a truly empty users table. Existing users win before secret access. */
+export async function ensureBootstrapAdmin(secretFile = process.env.DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE): Promise<{ created: boolean; user: PublicUser | null }> {
   let created = false;
   let user: PublicUser | null = null;
   await sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(${DEFAULT_ADMIN_SEED_LOCK_ID})`;
+    await tx`SELECT pg_advisory_xact_lock(${BOOTSTRAP_ADMIN_SEED_LOCK_ID})`;
     const [count] = await tx`SELECT COUNT(*)::int AS n FROM users`;
     if (Number(count?.n ?? 0) > 0) return;
 
-    const { salt, hash } = hashPassword(DEFAULT_ADMIN_PASSWORD);
+    const { salt, hash } = hashPassword(await readBootstrapAdminPassword(secretFile));
     const [row] = await tx`
       INSERT INTO users ${tx({
-        username: DEFAULT_ADMIN_USERNAME,
-        display_name: DEFAULT_ADMIN_USERNAME,
+        username: BOOTSTRAP_ADMIN_USERNAME,
+        display_name: BOOTSTRAP_ADMIN_USERNAME,
         password_hash: hash,
         password_salt: salt,
         role: "admin",
         status: "active",
-        created_by: "system:default-admin",
+        created_by: "system:bootstrap-admin",
       })}
       RETURNING *`;
-    if (!row) throw new Error("默认管理员创建失败");
+    if (!row) throw new Error("管理员引导创建失败");
     user = toPublicUser(row as Record<string, unknown>);
     created = true;
 
@@ -170,7 +181,7 @@ export async function ensureDefaultAdmin(): Promise<{ created: boolean; user: Pu
       INSERT INTO audit_logs (
         actor_type, actor_id, action, resource_type, resource_id, after_json
       ) VALUES (
-        'system', 'scheduler', 'auth.default_admin_seed', 'user', ${user.id},
+        'system', 'scheduler', 'auth.bootstrap_admin_seed', 'user', ${user.id},
         ${tx.json({ username: user.username, role: user.role } as never)}
       )`;
   });
