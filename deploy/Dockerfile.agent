@@ -71,7 +71,7 @@ COPY agent-harness/pi-extensions-base-runtime/package-lock.json /opt/deepsonar/p
 COPY agent-harness/dsh-runtime/package.json /opt/deepsonar/dsh/package.json
 COPY agent-harness/dsh-runtime/package-lock.json /opt/deepsonar/dsh/package-lock.json
 COPY agent-harness/dsh-request-budget-install.mjs /opt/deepsonar/dsh-request-budget-install.mjs
-COPY packages/runtime-sandbox/src/dsh-request-budget.ts packages/runtime-sandbox/src/pi-main-request-budget.ts /opt/deepsonar/request-budget-source/
+COPY packages/runtime-sandbox/src/dsh-request-budget.ts packages/runtime-sandbox/src/pi-main-request-budget.ts packages/runtime-sandbox/src/private-credential-reader.ts /opt/deepsonar/request-budget-source/
 
 RUN set -eu; \
   node -e 'const p=require("/opt/deepsonar/base-cli/package-lock.json").packages; for(const [name,version,integrity] of [["@anthropic-ai/claude-code",process.argv[1],process.argv[2]],["@earendil-works/pi-coding-agent",process.argv[3],process.argv[4]]]) if(p["node_modules/"+name]?.version!==version||p["node_modules/"+name]?.integrity!==integrity) throw new Error("BASE_CLI_LOCK_IDENTITY_MISMATCH");' "$CLAUDE_CODE_VERSION" "$CLAUDE_CODE_INTEGRITY" "$PI_CODING_AGENT_VERSION" "$PI_CODING_AGENT_INTEGRITY"; \

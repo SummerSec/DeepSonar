@@ -1,3 +1,4 @@
+import { privateJobFixture } from '../packages/runtime-sandbox/src/private-job-fixture.ts';
 // Run with tsx: imports the actual production profile, never a parallel fixture profile.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -12,6 +13,7 @@ import { DSH_REQUEST_BUDGET_PLUGIN } from '../packages/runtime-sandbox/src/dsh-r
 import { DSH_REQUEST_BUDGET_ARTIFACT_SHA256, DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from '../packages/runtime-sandbox/src/dsh-runtime-image-guard.ts';
 import { installDshRequestBudget } from './dsh-request-budget-install.mjs';
 
+const privateFixtures = [];
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const installRoot = resolve(process.env.DSH_REQUEST_BUDGET_INSTALL_ROOT ?? join(repository, 'agent-harness/dsh-runtime'));
 const bin = join(installRoot, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
@@ -141,19 +143,21 @@ async function launch(baseUrl, label) {
   await mkdir(cwd, { recursive: true });
   await mkdir(profile, { recursive: true });
   await writeFile(join(profile, 'package.json'), DSH_PROFILE_MANIFEST);
-  const patch = buildDshProfilePatch({ cwd, home, governedRequestBudget: true, providerConfig: { providers: {
-    [provider]: { api: 'openai-completions', apiKeyEnv: 'DEEPSONAR_GATEWAY_TOKEN', baseURL: baseUrl,
+  const privateAuth = privateJobFixture({ gateway: token });
+  privateFixtures.push(privateAuth);
+  const patch = buildDshProfilePatch({ cwd, home, governedRequestBudget: true, privateCredentialPath: privateAuth.environment.DEEPSONAR_GATEWAY_TOKEN_FILE, credentialProvider: provider, providerConfig: { providers: {
+    [provider]: { api: 'openai-completions', apiKeyEnv: 'DEEPSONAR_JOB_GATEWAY', baseURL: baseUrl,
       models: [{ id: model, contextWindow: 100000, maxTokens: 4096, reasoningEfforts: false }] },
   } } });
   assert.equal(patch.split(DSH_REQUEST_BUDGET_PLUGIN).length, 2);
   // The only profile change is installation-root relocation; the production plugin tree/config is identical.
-  const relocated = patch.replace(DSH_REQUEST_BUDGET_PLUGIN, artifact);
-  assert.equal(relocated.replace(artifact, DSH_REQUEST_BUDGET_PLUGIN), patch);
+  const relocated = patch.replaceAll('/opt/deepsonar/dsh/', installRoot + '/');
+  assert.equal(relocated.replaceAll(installRoot + '/', '/opt/deepsonar/dsh/'), patch);
   await writeFile(join(profile, 'cordis.patch.yml'), relocated);
   await writeFile(join(home, 'cordis.patch.yml'), '[]\n');
   const processChild = spawn(process.execPath, [bin, '--profile', DSH_PROFILE], { cwd, stdio: ['pipe', 'pipe', 'pipe'], env: {
     PATH: process.env.PATH, HOME: home, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1',
-    DEEPSONAR_GATEWAY_TOKEN: token, DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl,
+    ...privateAuth.environment, DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl,
     DEEPSONAR_DSH_FROZEN_IDENTITY: JSON.stringify({ provider, id: model, api: 'openai-completions', baseUrl }),
   } });
   let stderr = '', buffer = '', sequence = 0;
@@ -264,5 +268,6 @@ try {
   console.log(`DSH real CLI production profile passed: tools, continuation, followup, native overflow compaction, child call, native shutdown cleanup (${requests.length} SDK HTTP requests)`);
 } finally {
   runtime?.kill(); cancelling?.kill(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  for (const fixture of privateFixtures) fixture.close();
   await rm(root, { recursive: true, force: true });
 }

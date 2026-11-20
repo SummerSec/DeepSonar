@@ -1,3 +1,5 @@
+import { lockContinuationBudget } from "./continuation-budget.js";
+
 import { markQueuedTaskClaimed } from "../project-task/task-queue-store.js";
 import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
 import { humanContinuationAdmission } from "./human-continuation-admission.js";
@@ -366,6 +368,8 @@ export async function requeueJob(
         },
       };
     }
+    try { await lockContinuationBudget(tx, jobId); }
+    catch { return { kind: "not_resumable" as const, status: "failed", error_code: "CONTINUATION_EXECUTION_SUPERSEDED" }; }
     const [job] = await tx`
       SELECT id, project_id, canvas_id, finding_id, type, status, payload_json,
              agent_snapshot_json, sandbox_id, priority, timeout_sec

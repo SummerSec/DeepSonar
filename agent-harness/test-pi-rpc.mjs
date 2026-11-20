@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as piFixture from "./fixtures/pi-om-real-rpc.mjs";
 import { runNativePiMainRecovery } from "./fixtures/pi-main-recovery-rpc.mjs";
+import { runHumanNativePiImport } from "./fixtures/human-native-session.mjs";
 import { assertInstalledPiImage } from "./pi-image-packaging.mjs";
 
 const packagingOnly = process.argv.includes("--packaging-only");
@@ -27,6 +28,7 @@ if (process.argv.includes("--inside")) {
     const report = await piFixture.runGrowthProbe();
     console.log(JSON.stringify({ image_identity: identity, ...report }));
   } else {
+    console.log(JSON.stringify(await runHumanNativePiImport()));
     console.log(`Installed image identity: OM ${identity.package.version}, Pi ${identity.pi.version}, wrapper ${identity.wrapper.sha256}`);
     // The fixture's explicit image-proof flag selects the canonical installed
     // package and production wrapper. Host mode remains the only branch that
@@ -64,6 +66,7 @@ if (process.argv.includes("--inside")) {
   const child = spawn(docker, ["run", "--rm", "--network", "none", "--read-only",
     "--name", containerName,
     "--tmpfs", "/tmp:rw,exec,nosuid,size=512m", "--cap-drop", "ALL",
+    "--tmpfs", "/workspace:rw,nosuid,size=64m",
     "--security-opt", "no-new-privileges", "--cpus", "1", "--memory", "1g", "--pids-limit", "256",
     "-v", `${path.join(repo, "agent-harness/test-pi-rpc.mjs")}:/tmp/deepsonar-tests/test-pi-rpc.mjs:ro`,
     "-v", `${path.join(repo, "agent-harness/pi-image-packaging.mjs")}:/tmp/deepsonar-tests/pi-image-packaging.mjs:ro`,
@@ -75,6 +78,7 @@ if (process.argv.includes("--inside")) {
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/runtime-adapters.ts")}:/tmp/deepsonar-runtime/runtime-adapters.ts:ro`,
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/pi-rpc-output.ts")}:/tmp/deepsonar-runtime/pi-rpc-output.ts:ro`,
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/pi-main-request-budget.ts")}:/tmp/deepsonar-runtime/pi-main-request-budget.ts:ro`,
+    "-v", `${path.join(repo, "packages/runtime-sandbox/src/human-session-import.ts")}:/tmp/deepsonar-runtime/human-session-import.ts:ro`,
     "-e", "DEEPSONAR_PI_IMAGE_PROOF=1",
     "-e", "DEEPSONAR_PI_IMAGE_SOURCE_ROOT=/tmp/deepsonar-tests",
     "-e", `DEEPSONAR_PI_WRAPPER_SHA256=${wrapperSha256}`,

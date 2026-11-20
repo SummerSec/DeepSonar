@@ -565,7 +565,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       .filter((name) => /^[A-Z][A-Z0-9_]{0,127}$/.test(name))
       .map((name) => ({ name, source: "role_config" as const })),
     ...providerEnvRefs.map((name) => ({ name, source: "provider_profile" as const })),
-    { name: "DEEPSONAR_GATEWAY_TOKEN", source: "gateway" as const },
+    { name: "DEEPSONAR_GATEWAY_TOKEN_FILE", source: "gateway" as const },
   ].filter((item, index, all) => all.findIndex((candidate) => candidate.name === item.name && candidate.source === item.source) === index);
   const nativeOptions = {
     claude_code: agentCli === "claude-code"

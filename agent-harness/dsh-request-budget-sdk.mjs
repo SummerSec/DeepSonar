@@ -1,3 +1,7 @@
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 // CI-only real pinned DSH adapter + SDK, loopback upstream and synthetic token.
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -47,7 +51,11 @@ const baseUrl = 'http://127.0.0.1:' + server.address().port + '/gateway';
 const model = Object.freeze({ provider: 'synthetic', id: 'synthetic-model', name: 'synthetic-model', api: 'openai-completions', baseUrl,
   input: ['text'], reasoning: false, contextWindow: 100000, maxTokens: 256, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
 process.env.DEEPSONAR_DSH_FROZEN_IDENTITY = JSON.stringify(model);
-process.env.DEEPSONAR_GATEWAY_TOKEN = 'synthetic-dsh-token';
+const credentialRoot = mkdtempSync(join(tmpdir(), 'dsh-sdk-auth-'));
+const credentialDirectory = join(credentialRoot, '.deepsonar-credentials-' + randomUUID());
+mkdirSync(credentialDirectory, { mode: 0o700 });
+process.env.DEEPSONAR_GATEWAY_TOKEN_FILE = join(credentialDirectory, 'gateway-token');
+writeFileSync(process.env.DEEPSONAR_GATEWAY_TOKEN_FILE, 'synthetic-dsh-token', { mode: 0o600 });
 process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM = baseUrl;
 const provider = { id: model.provider, name: model.provider, baseUrl, getModels: () => [model],
   auth: { apiKey: { name: 'synthetic', resolve: async ({ credential }) => ({ auth: { apiKey: credential.key }, source: 'synthetic' }) } },
@@ -92,6 +100,7 @@ try {
   assert.ok(denied.some(chunk => JSON.stringify(chunk).includes('BUDGET_EXHAUSTED')), JSON.stringify(denied));
   console.log('DSH registered main/direct service requests passed real SDK synthetic-upstream checks');
 } finally {
+  rmSync(credentialRoot, { recursive: true, force: true });
   await ctx.fiber.dispose();
   server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));

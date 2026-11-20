@@ -1,5 +1,64 @@
 import test from "node:test";
+import { projectNativeHumanSession, nativeHumanSessionCapability } from "./human-session-import.js";
 import assert from "node:assert/strict";
+
+test("human native import keeps conversation identities but excludes old runtime authority", () => {
+  const id = "75e625d4-ed23-46b3-a4ca-a82bdb1d6022";
+  const source = [
+    {type:"session",version:3,id,cwd:"/workspace",timestamp:"2026-11-19T00:00:00Z"},
+    {type:"message",id:"system",parentId:null,timestamp:"2026-11-19T00:00:00Z",message:{role:"system",content:"old Control identity"}},
+    {type:"session_info",id:"metadata",parentId:"system",timestamp:"2026-11-19T00:00:00Z",name:"display name"},
+    {type:"message",id:"user",parentId:"metadata",timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep the unfinished decision"}},
+  ].map(value=>JSON.stringify(value)).join("\n");
+  const result=projectNativeHumanSession("pi","1.5.2",id,source);
+  assert.equal(result.status,"supported");
+  assert.ok(result.content?.includes("unfinished decision"));
+  assert.ok(!result.content?.includes("old Control identity"));
+  assert.ok(!result.content?.includes("private"));
+  const records=result.content!.trim().split("\n").map(line=>JSON.parse(line));
+  assert.equal(records[1].parentId,null);
+  assert.equal(nativeHumanSessionCapability("dsh","0").status,"unsupported");
+  assert.equal(projectNativeHumanSession("pi","0",id,source).status,"unsupported");
+  assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n{bad").status,"rejected");
+  for(const type of ["custom","compaction","future_context_state"])
+    assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n"+JSON.stringify({type,id:"extra",parentId:"user"})).status,"unsupported");
+  const claude=JSON.stringify({type:"future_state",uuid:id,sessionId:id});
+  assert.equal(projectNativeHumanSession("claude-code","2.1.312",id,claude).reason,"unknown_session_record_type");
+  for (const type of ["image", "future_context_block"]) {
+    const content = [{type:"text",text:"Known text"},{type,data:"Context must not disappear"}];
+    const pi = source + "\n" + JSON.stringify({type:"message",id:"next",parentId:"user",message:{role:"user",content}});
+    assert.equal(projectNativeHumanSession("pi","1.5.2",id,pi).reason,"unverified_session_content_block");
+    const claudeMessage = {type:"user",uuid:"user",parentUuid:null,sessionId:id,message:{role:"user",content}};
+    assert.equal(projectNativeHumanSession("claude-code","2.1.312",id,JSON.stringify(claudeMessage)).reason,"unverified_session_content_block");
+  }
+});
+test("Claude pinned storage metadata and execution attachments cannot import old authority",()=>{
+  const id="75e625d4-ed23-46b3-a4ca-a82bdb1d6022";
+  const user={type:"user",uuid:"user",parentUuid:null,sessionId:id,message:{role:"user",content:"Keep decision"}};
+  const attachment={type:"attachment",uuid:"config",parentUuid:"user",sessionId:id,attachment:{type:"prompt_snapshot",systemPrompt:"OLD_SYSTEM"}};
+  const assistant={type:"assistant",uuid:"answer",parentUuid:"config",sessionId:id,message:{role:"assistant",content:"Saved answer"}};
+  const rows=[user,attachment,assistant,{type:"last-prompt",sessionId:id,leafUuid:"answer"},
+    ...["atis-latch","cost-state","api-request-shape","api-request-blob","api-request","tools-used"].map(type=>({type,sessionId:id,secret:"OLD_AUTHORITY"}))];
+  const project=(values:unknown[])=>projectNativeHumanSession("claude-code","2.1.312",id,values.map(row=>JSON.stringify(row)).join("\n"));
+  const imported=project(rows);assert.equal(imported.status,"supported");
+  assert.doesNotMatch(imported.content!,/OLD_SYSTEM|OLD_AUTHORITY/);
+  assert.equal(JSON.parse(imported.content!.trim().split("\n")[1]!).parentUuid,"user");
+  assert.equal(project([...rows,{type:"last-prompt",sessionId:id,leafUuid:"user",rewound:true}]).reason,"transformed_context_requires_structured");
+  for(const type of ["queued_command","file","invoked_skills","future_context"])
+    assert.equal(project([user,{...attachment,attachment:{type,content:"must not disappear"}}]).reason,"unverified_context_attachment");
+  const queue={type:"queue-operation",sessionId:id,operation:"enqueue"};
+  assert.equal(project([queue,user,{...queue,operation:"dequeue"}]).status,"supported");
+  assert.equal(project([user,{...queue,content:"Unconsumed task instruction"}]).reason,"unverified_queued_prompt");
+  assert.equal(project([user,{...queue,operation:"future_queue_operation"}]).reason,"unverified_queued_prompt");
+  const queued={...queue,content:"Keep decision"};
+  const dequeue={...queue,operation:"dequeue"};
+  assert.equal(project([queued,dequeue,user]).status,"supported");
+  assert.equal(project([queued,dequeue,{...user,message:{role:"user",content:[{type:"text",text:"Keep decision"}]}}]).status,"supported");
+  for(const values of [[queued,user],[queued,dequeue],[user,queued,dequeue],
+    [queued,dequeue,{...user,message:{role:"user",content:"Different decision"}}],
+    [queued,queued,dequeue,user],[queued,queue,dequeue,user]])
+    assert.equal(project(values).reason,"unverified_queued_prompt");
+});
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";

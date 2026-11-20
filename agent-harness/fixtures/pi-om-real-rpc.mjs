@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -197,6 +197,14 @@ function configure(root, port, wrapper, scenario) {
   const workspace = path.join(root, "workspace");
   mkdirSync(path.join(workspace, ".pi/extensions"), { recursive: true });
   mkdirSync(home, { recursive: true });
+  const credentialDirectory = path.join(root, `.deepsonar-credentials-${randomUUID()}`);
+  mkdirSync(credentialDirectory, { mode: 0o700 });
+  const gatewayTokenFile = path.join(credentialDirectory, "gateway-token");
+  const controlTokenFile = path.join(credentialDirectory, "control-token");
+  writeFileSync(gatewayTokenFile, "offline-main", { flag: "wx", mode: 0o600 });
+  writeFileSync(controlTokenFile, "offline-control", { flag: "wx", mode: 0o600 });
+  const credentialEnv = { DEEPSONAR_GATEWAY_TOKEN_FILE: gatewayTokenFile,
+    DEEPSONAR_CONTROL_TOKEN_FILE: controlTokenFile };
   const hostile = { "observational-memory": { passive: true, debugLog: true, observeAfterTokens: 99999999,
     model: { provider: "untrusted", id: "override" } } };
   writeFileSync(path.join(home, "settings.json"), JSON.stringify({ ...hostile,
@@ -220,7 +228,7 @@ function configure(root, port, wrapper, scenario) {
   writeFileSync(extension, `import fs from "node:fs"; import os from "node:os"; import path from "node:path";
     import { createGovernedObservationalMemoryExtension } from ${JSON.stringify(wrapper)};
     export default function(pi) { ${mutate} ${bootstrap} }`);
-  return { home, workspace, extension };
+  return { home, workspace, extension, credentialEnv };
 }
 
 export async function runRealPiRpc() {
@@ -247,7 +255,8 @@ export async function runRealPiRpc() {
       // acceptance always imports the installed production wrapper directly.
       writeFileSync(wrapper, readFileSync(originalWrapper, "utf8")
         .replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`)
-        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY)));
+        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY))
+        .replace('"/opt/deepsonar/dsh/deepsonar-private-reader.mjs"', JSON.stringify("data:text/javascript;base64," + Buffer.from(readFileSync(path.join(REPO, "packages/runtime-sandbox/src/private-credential-reader.ts"), "utf8").split("String.raw`\n")[1].split("`;")[0]).toString("base64"))));
     }
     for (const scenario of PI_RPC_SCENARIOS) {
       const scenarioRoot = path.join(root, scenario);
@@ -258,7 +267,7 @@ export async function runRealPiRpc() {
         const paths = configure(scenarioRoot, gateway.port, wrapper.replaceAll("\\", "/"), scenario);
         const start = (sessionFile) => new RpcClient(cli, ["--provider", "offline-main", "--model", MODEL,
           "-e", paths.extension, ...(sessionFile ? ["--session", sessionFile] : [])], {
-          cwd: paths.workspace, env: { ...process.env, HOME: paths.home, USERPROFILE: paths.home,
+          cwd: paths.workspace, env: { ...process.env, ...paths.credentialEnv, HOME: paths.home, USERPROFILE: paths.home,
             PI_CODING_AGENT_DIR: paths.home, PI_OBSERVATIONAL_MEMORY_PASSIVE: "1", TEMP: scenarioRoot, TMPDIR: scenarioRoot },
         }, boundary.PiJsonlFramer, (line) => boundary.parsePiJsonlRecord(line, 8 * 1024 * 1024));
         client = start();
@@ -429,7 +438,8 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
       wrapper = path.join(root, "tested-wrapper.ts");
       writeFileSync(wrapper, readFileSync(originalWrapper, "utf8")
         .replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`)
-        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY)));
+        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY))
+        .replace('"/opt/deepsonar/dsh/deepsonar-private-reader.mjs"', JSON.stringify("data:text/javascript;base64," + Buffer.from(readFileSync(path.join(REPO, "packages/runtime-sandbox/src/private-credential-reader.ts"), "utf8").split("String.raw`\n")[1].split("`;")[0]).toString("base64"))));
     }
     const scenarioRoot = path.join(root, "growth");
     mkdirSync(scenarioRoot);
@@ -442,7 +452,7 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
     const paths = configure(scenarioRoot, gateway.port, wrapper.replaceAll("\\", "/"), "success");
     const start = (sessionFile) => new RpcClient(cli, ["--provider", "offline-main", "--model", MODEL,
       "-e", paths.extension, ...(sessionFile ? ["--session", sessionFile] : [])], {
-      cwd: paths.workspace, env: { ...process.env, HOME: paths.home, USERPROFILE: paths.home,
+      cwd: paths.workspace, env: { ...process.env, ...paths.credentialEnv, HOME: paths.home, USERPROFILE: paths.home,
         PI_CODING_AGENT_DIR: paths.home, PI_OBSERVATIONAL_MEMORY_PASSIVE: "1", TEMP: scenarioRoot, TMPDIR: scenarioRoot },
     }, boundary.PiJsonlFramer, (line) => {
       // Frame size is the number of bytes that actually crossed the pipe, not the

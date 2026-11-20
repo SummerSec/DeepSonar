@@ -55,7 +55,7 @@ test("DSH runtime projection routes third-party profiles through the Job Gateway
   assert.equal(runtime.model, "gpt-5.6");
   const profile = runtime.config.providers.xxxx!;
   assert.equal(profile.baseURL, "http://deepsonar-gateway:3100/gateway");
-  assert.equal(profile.apiKeyEnv, "DEEPSONAR_GATEWAY_TOKEN");
+  assert.equal(profile.apiKeyEnv, "DEEPSONAR_JOB_GATEWAY");
   assert.equal(profile.reasoning, "max");
   assert.equal((profile.models as Array<Record<string, unknown>>)[0]?.contextWindow, 256_000);
   assert.equal(JSON.stringify(runtime.config).includes("127.0.0.1"), false);
@@ -112,7 +112,7 @@ test("DSH adapter owns Gateway projection; other CLIs do not", () => {
     reasoning: "max",
   });
   assert.equal(runtime.config.providers.xxxx?.baseURL, "http://deepsonar-gateway:3100/gateway");
-  assert.equal(runtime.config.providers.xxxx?.apiKeyEnv, "DEEPSONAR_GATEWAY_TOKEN");
+  assert.equal(runtime.config.providers.xxxx?.apiKeyEnv, "DEEPSONAR_JOB_GATEWAY");
   assert.equal(JSON.stringify(runtime.config).includes("127.0.0.1"), false);
 });
 

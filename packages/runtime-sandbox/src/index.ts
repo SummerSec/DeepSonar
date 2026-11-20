@@ -291,6 +291,8 @@ export { DEFAULT_SHARED_ASSETS_HELPER_IMAGE, DockerSharedAssetsVolumeManager, No
 export type { SharedAssetsVolumeManager, SharedAssetVolumeFile } from "./shared-assets-volume.js";
 export { KubernetesSharedAssetsVolumeManager, readDefaultStorageClass } from "./kubernetes-shared-assets-volume.js";
 export { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
+export { projectNativeHumanSession, nativeHumanSessionCapability, nativeHumanSessionPath } from "./human-session-import.js";
+export type { NativeHumanSession } from "./human-session-import.js";
 export type {
   AgentCliSessionAdapter,
   SessionArtifact,

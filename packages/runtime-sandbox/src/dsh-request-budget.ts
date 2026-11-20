@@ -15,7 +15,7 @@ export function frozenDshIdentity(env = process.env) {
   let identity;
   try { identity = JSON.parse(env.DEEPSONAR_DSH_FROZEN_IDENTITY); } catch { fail('DSH_BUDGET_IDENTITY_MISSING'); }
   if (!identity || !['provider','id','api','baseUrl'].every(key => typeof identity[key] === 'string' && identity[key])) fail('DSH_BUDGET_IDENTITY_INVALID');
-  return launchIdentity = Object.freeze({ ...identity, baseUrl: endpoint(identity.baseUrl), gatewayRoot: endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM), token: env.DEEPSONAR_GATEWAY_TOKEN });
+  return launchIdentity = Object.freeze({ ...identity, baseUrl: endpoint(identity.baseUrl), gatewayRoot: endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM), token: readPrivateCredential(env.DEEPSONAR_GATEWAY_TOKEN_FILE) });
 }
 export function assertDshSdkIdentity(model, options, identity) {
   if (!identity || model.provider !== identity.provider || model.id !== identity.id || model.api !== identity.api

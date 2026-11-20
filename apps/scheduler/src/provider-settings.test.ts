@@ -147,7 +147,7 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
   assert.equal(routed[0]?.path, ".pi/agent/models.json");
   assert.equal(routed[1]?.path, ".pi/agent/auth.json");
   assert.equal(routed[2]?.path, ".pi/agent/settings.json");
-  assert.match(routed[0]!.content, /DEEPSONAR_GATEWAY_TOKEN/);
+  assert.doesNotMatch(routed[0]!.content, /DEEPSONAR_GATEWAY_TOKEN|deepsonarjob_12345678_test-token-value/);
   assert.doesNotMatch(routed[0]!.content, /long-lived|api\.openai\.com/);
   assert.doesNotMatch(routed[0]!.content, /"authHeader": true/);
   assert.match(routed[1]!.content, /deepsonarjob_12345678_test-token-value/);
@@ -244,7 +244,7 @@ test("OM materialization isolates its frozen model, auth and settings for every 
     const models = JSON.parse(routed.find((file) => file.path === ".pi/agent/models.json")!.content);
     const memory = models.providers[PI_OBSERVATIONAL_MEMORY_PROVIDER];
     assert.equal(memory.baseUrl, input.gatewayBaseUrl);
-    assert.equal(memory.apiKey, "$DEEPSONAR_OM_GATEWAY_TOKEN");
+    assert.equal(memory.apiKey, undefined);
     assert.equal(memory.api, api);
     assert.deepEqual(memory.models, [{ id: "fixture-model", contextWindow: 128_000 }]);
     assert.equal(memory.authHeader, api === "anthropic-messages" ? true : undefined);
@@ -334,7 +334,7 @@ test("Pi anthropic-messages 网关改写补 authHeader 以便现网 Gateway 认 
   };
   assert.equal(models.providers.anthropic.api, "anthropic-messages");
   assert.equal(models.providers.anthropic.authHeader, true);
-  assert.equal(models.providers.anthropic.apiKey, "$DEEPSONAR_GATEWAY_TOKEN");
+  assert.equal(models.providers.anthropic.apiKey, undefined);
 });
 
 test("Pi official multi-provider settings keep the default model on its declared route", () => {
@@ -685,9 +685,10 @@ test("restricted Claude config replaces direct credentials with the Job Gateway"
     gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway/",
     jobToken: "deepsonarjob_12345678_test-token-value",
   });
-  const settings = JSON.parse(routed!.content) as { env: Record<string, string> };
+  const settings = JSON.parse(routed!.content) as { env: Record<string, string>; apiKeyHelper?: string };
   assert.equal(settings.env.ANTHROPIC_API_KEY, undefined);
-  assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, "deepsonarjob_12345678_test-token-value");
+  assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(settings.apiKeyHelper, "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs");
   assert.equal(settings.env.ANTHROPIC_BASE_URL, "http://deepsonar-gateway-proxy:3100/gateway");
   assert.doesNotMatch(routed!.content, /long-lived|provider\.example/);
 });

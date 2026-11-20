@@ -433,6 +433,9 @@ if (!testDatabaseUrl) {
         }
       }
       await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
+      const { runDispatchFairnessFixture } = await import("./dispatch-fairness.fixture.js");
+      await runDispatchFairnessFixture(sql, claimPendingJobs, credentialId);
+
       await setRules({ maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null });
       const recoveryPending = await Promise.all(Array.from({ length: 6 }, () => insertJob(projectIds[0])));
       const { runUnlimitedCreateCircuitFixture } = await import("./dispatch-create-circuit.fixture.js");

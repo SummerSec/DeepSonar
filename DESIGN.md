@@ -2,6 +2,8 @@
 
 #1133 补齐人工技术收口与设备冻结。Finding 详情允许有 findings:write 权限的操作者对 needs_human 显式记录无定论决定，按对象修订、状态、最后轮次做 CAS，新增终结轮次并同事务写审计。补证两个入口复用画布设备要求冻结与授权，远端测试按明确目标执行。补证无进展刹车尊重既有关闭开关，见[运行时规则](docs/architecture/06-runtime-view.md#verify-补证无进展开关1133)。工程验收以最终 SHA Actions 为准，详见[接口边界](docs/architecture/09-interface-specs.md#人工结束技术验证1133)。
 
+#1118 的[持久跨项目公平领取](docs/architecture/06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。
+
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
 > 同步日期：2026-11-20
 
@@ -18,7 +20,9 @@
 
 > **#979 运行镜像治理**：DSH 与 Pi OM 在启动前核对镜像内治理代码，旧快照保持不可变；[诊断与恢复](docs/RUNTIME_IMAGE_GOVERNANCE_979.md)区分代码修复、OCI 内容证据与正式发布。
 
-#1074 的[人工断点续做](docs/HUMAN_CONTINUATION.md)以持久请求和累计执行时钟区分等待、封存与执行：人工超时只记 overdue，旧资源经可信回收后关闭 Attempt；晚回复先保存，准入后恢复业务文件并在 structured 新会话继续。终态历史不授权复活，原额度/硬期限/未决效果不豁免，最终 SHA Actions 另验。
+#1074 的[人工断点续做](docs/HUMAN_CONTINUATION.md)以持久请求和累计执行时钟区分等待、封存与执行：人工超时只记 overdue，旧资源经可信回收后关闭 Attempt；晚回复先保存，准入后恢复业务文件与累计已 ACK 的有界文字决定，按能力矩阵使用 structured 或精确绑定的受限原生会话继续。历史 failed 显式续做使用新 Job 与原预算链，原额度/硬期限/未决效果持续约束，最终 SHA Actions 另验。
+
+业务文件清单 v2 仅恢复所有者读写及原所有者执行能力（0600/0700），上传前校验路径、上传后核验内容与权限，失败阻断启动。
 
 #1094 的[平台 HTTP bootstrap](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)消除 operation allowlist 与 CLI 原生工具的提示歧义；不增加工具代理、控制通道或权限，历史 Job 不自动重跑，模型效果仍未验证。
 
@@ -344,7 +348,7 @@ OCI 镜像导入在扫描创建事务内持有与凭据删除互斥的凭据行�
 
 Pi 单次模型错误先等待原进程内部重试与执行结算，不在消息错误时提前结束 Job；重试按消息回滚失败输出并保留此前成功文本，空响应判断不借用历史输出；实际后续成功消息才清除待判定错误，最终失败与完成回执边界见 [#1072](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)。运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。真实进程失败不因已接受完成被吞掉；唯一窄例外（#1045）是 CLI 在宿主已持久接受完成后以普通非零码退出、且终态错误精确等于完成拒绝身份，仅剥离本机生成的退出码前缀，信号退出（≥128）、stderr 尾文与其它文本仍失败。限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
 
-#1032 首片在 Pi 主执行与 OM 的 SDK 调用前共用精确凭据替换，覆盖工具 env/认证文件/错误与来源文本，不修改原 Session 或认证选项；OM 内容准入同时绑定 wrapper 与共享源码。Gateway 原字节守卫保持，尚未实现同 UID 认证隔离或整个 Issue 的诊断/审计要求；[范围与验收](docs/MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)区分源码、待验 Actions 与未执行生产。
+#1032 首片在 Pi 主执行与 OM 的 SDK 调用前共用精确凭据替换，覆盖工具 env/认证文件/错误与来源文本，不修改原 Session 或认证选项；OM 内容准入同时绑定 wrapper 与共享源码。Gateway 原字节守卫保持。现行已包含 credential_in_business_data 的稳定不可重试分类与五处拒绝审计，A1 三 CLI 私有文件通道见同专题，同 UID 认证隔离 A2 与全部 CLI 上下文投影仍未交付；[范围与验收](docs/MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)区分源码、待验 Actions 与未执行生产。
 
 **Pi 模型预算与截断（#958）：** `/models` 限制作为 `provider_declared` 元数据保留，创建时逐字段冻结显式配置、声明、客户端选值及来源到 `model_budget`，Pi 投影 `contextWindow/maxTokens`；未观测的 CLI 默认保持未知，声明不证明真实容量。`length` 的 text/tool/thinking-only 不进入通用完成 nudge，改为同一精确 Session 的有界状态查询、必要压缩与短反馈；每步复用原完成/修正生命周期、lease/deadline、预算和未知效果守卫。压缩 start/end 不证明进展，不补造上下文摘要；耗尽保留截断和具体诊断，已接受完成/人工等待仍是权威。详情与 Actions 入口见[预算与恢复专题](docs/PI_MODEL_BUDGET_RECOVERY.md)，最终 SHA 待验，不宣称上游容量或生产重跑通过。
 

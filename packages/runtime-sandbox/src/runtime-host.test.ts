@@ -8,6 +8,7 @@ test("workspace reads reject reserved control and CLI roots before provider I/O"
   assert.throws(() => assertReadableWorkspacePath("/tmp/result.txt"), /path_forbidden/);
   assert.throws(() => assertReadableWorkspacePath("/workspace/.deepsonar/secret"), /path_forbidden/);
   assert.throws(() => assertReadableWorkspacePath("/workspace/.deepsonar-home/id"), /path_forbidden/);
+  assert.throws(() => assertReadableWorkspacePath("/workspace/.deepsonar-credentials-11111111-1111-4111-8111-111111111111/gateway-token"), /path_forbidden/);
   assert.throws(() => assertReadableWorkspacePath("/workspace/.claude/settings.json"), /path_forbidden/);
   assert.throws(() => assertReadableWorkspacePath("/workspace/.codex/auth.json"), /path_forbidden/);
   assert.throws(() => assertReadableWorkspacePath("/workspace/.opencode/config.json"), /path_forbidden/);

@@ -1,3 +1,4 @@
+import { continuationBudgetScope } from "./domains/job-control/continuation-budget.js";
 import { sql } from "./db.js";
 import { RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
 
@@ -32,7 +33,8 @@ export function resolveRequestBudget(rows: readonly Record<string, unknown>[], w
 
 /** Caller holds the Job lock. Expired/revoked generations remain authoritative. */
 export async function readHistoricalRequestBudget(db: typeof sql, jobId: string, workload: string, plan?: RequestPlan | null) {
+  const { jobIds } = await continuationBudgetScope(db, jobId);
   const rows = await db`SELECT workload, used_requests, max_requests, request_total_limit
-    FROM job_tokens WHERE job_id=${jobId} ORDER BY id FOR UPDATE`;
+    FROM job_tokens WHERE job_id=ANY(${jobIds}::uuid[]) ORDER BY id FOR UPDATE`;
   return resolveRequestBudget(rows, workload, plan);
 }

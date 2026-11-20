@@ -1,3 +1,4 @@
+import { privateJobFixture } from "./private-job-fixture.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
@@ -258,12 +259,13 @@ async function wrapperFixture(error?: string, receipt: Record<string, unknown> =
   const loaded = await import(new URL("../../../agent-harness/fixtures/pi-om-boundary-unit.mjs", import.meta.url).href);
   const { createGovernedObservationalMemoryExtension: create, config } = await loaded.loadGovernedBoundary();
   const root = mkdtempSync(path.join(tmpdir(), "om-wrapper-unit-"));
+  const privateAuth = privateJobFixture();
   const oldEnv = { TEMP: process.env.TEMP, TMPDIR: process.env.TMPDIR, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
     PI_OBSERVATIONAL_MEMORY_PASSIVE: process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE,
-    DEEPSONAR_GATEWAY_TOKEN: process.env.DEEPSONAR_GATEWAY_TOKEN,
-    DEEPSONAR_API_TOKEN: process.env.DEEPSONAR_API_TOKEN };
-  process.env.DEEPSONAR_GATEWAY_TOKEN = "synthetic-main-token";
-  process.env.DEEPSONAR_API_TOKEN = "synthetic-control-token";
+    DEEPSONAR_GATEWAY_TOKEN_FILE: process.env.DEEPSONAR_GATEWAY_TOKEN_FILE,
+    DEEPSONAR_CONTROL_TOKEN_FILE: process.env.DEEPSONAR_CONTROL_TOKEN_FILE };
+  process.env.DEEPSONAR_GATEWAY_TOKEN_FILE = privateAuth.environment.DEEPSONAR_GATEWAY_TOKEN_FILE;
+  process.env.DEEPSONAR_CONTROL_TOKEN_FILE = privateAuth.environment.DEEPSONAR_CONTROL_TOKEN_FILE;
   process.env.TEMP = root;
   process.env.TMPDIR = root;
   process.env.PI_CODING_AGENT_DIR = "/untrusted/home";
@@ -306,10 +308,10 @@ async function wrapperFixture(error?: string, receipt: Record<string, unknown> =
     } },
   };
   try { create(config)(pi); }
-  catch (error) { for (const [key, value] of Object.entries(oldEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value; throw error; }
+  catch (error) { privateAuth.close(); for (const [key, value] of Object.entries(oldEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value; throw error; }
   return { config, create, context, pi, calls, messages, entries, tools, commands, root, receiptRequests,
     async event(name: string) { let result: unknown; for (const handler of hooks.get(name) ?? []) result = await handler({}, context); return result; },
-    close() { receiptServer.closeAllConnections(); receiptServer.close(); for (const [key, value] of Object.entries(oldEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    close() { privateAuth.close(); receiptServer.closeAllConnections(); receiptServer.close(); for (const [key, value] of Object.entries(oldEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
       rmSync(root, { recursive: true, force: true }); },
   };
 }

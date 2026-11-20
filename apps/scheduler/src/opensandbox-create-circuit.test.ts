@@ -195,7 +195,7 @@ test("#1046 dispatcher wires the circuit into claims, provision failures and rec
   const source = readDispatcher();
   assert.ok(source.includes("OPENSANDBOX_CREATE_CIRCUIT_OPEN"), "claim pause must log the circuit code");
   const gate = source.indexOf("openSandboxCreateCircuitAllowsClaim(createCircuit)");
-  const claimScan = source.indexOf("type ClaimCursor");
+  const claimScan = source.indexOf("type ClaimPage");
   assert.ok(gate > 0 && gate < claimScan, "the gate must run before claim scanning");
   assert.ok(source.includes("recordOpenSandboxProvisionFailure("), "provision failures must feed the circuit");
   assert.ok(source.includes("recordOpenSandboxProvisionSuccess(createProbe)"),

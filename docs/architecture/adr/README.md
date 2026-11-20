@@ -5,6 +5,8 @@
 
 新增 [0022 人工等待断点续做](0022-human-continuation.md)：持久请求、有限封存与资源回收、先保存回复再受治理续做，以及原累计预算/硬期限不刷新。
 
+[0025 受限原生会话导入](0025-restricted-human-session-import.md)扩展 0022 的 structured 范围，固定 Pi/Claude 仅导入经过滤的主会话文字，执行身份由新 Attempt 重建，DSH unsupported，最终 SHA Actions 单独验收。
+
 ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」不再只留在 issue 讨论和索引表格里。目录总览与维护流程见 [`../README.md`](../README.md)。事实仍以 [`docs/architecture/README.md`](../README.md)、相关架构视图、代码、schema、OpenAPI 和测试为准；`DESIGN.md` 与 [`docs/README.md`](../../README.md) 提供摘要和专题状态。
 
 ---

@@ -173,7 +173,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Scheduler 必须在持久化 claim、全局/项目并发和 lease 约束内领取 Job；#1123 三项全局并发配额缺省且未配环境变量时为 null（不限），显式 null 覆盖环境变量，显式数字保留，0 拒绝；项目 null 继承，0 暂停新领取。Lease 续期必须绑定有效 Job/Attempt，过期或迟到回调不得重新取得执行权。
 - **决策来源**：多 Scheduler 副本、重试和迟到网络回调不能造成双执行或跨项目资源占用。
-- **实现状态**：as-built；claim 使用持久状态和锁，Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
+- **实现状态**：as-built；claim 使用持久状态和锁，跨项目按持久服务序号公平轮转，项目内沿持久游标按优先级循环扫描，前页资格变化在回绕后重新核验；有界扫描位置跨 Scheduler 与重启推进，拒绝资格不消耗服务轮次（#1118）。Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
 - **代码入口**：[Dispatch 控制](../../apps/scheduler/src/task-execution-control.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[全局设置](../../apps/scheduler/src/config.ts)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:integration:dispatch-limits`；人工并发抢同一 Job 并核对最多一个 Attempt。
 
@@ -215,7 +215,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-008 Reaper 与终态幂等
 
-- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。stall 的在飞 `tool.call` 豁免不是无上限：豁免仅持续到同一 per-image floor 派生的 in-flight 预算（`max(floor×2, 3600)`，#1086；数值入口仍为 [stall policy](../../apps/scheduler/src/domains/job-lifecycle/stall-policy.ts)），超龄按稳定原因 `reaper_inflight_tool_stalled` 收口。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
+#1074 历史 failed 的显式新 Job 续做以合法检查点和完整原账本准入，Plan 另耗派发名额，跨 Job 原预算与绝对修正期限持续累计。详见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)，最终组合 SHA Actions 待验。
+
+- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。stall 的在飞 `tool.call` 豁免不是无上限：豁免仅持续到同一 per-image floor 派生的 in-flight 预算（`max(floor×2, 3600)`，#1086；数值入口仍为 [stall policy](../../apps/scheduler/src/domains/job-lifecycle/stall-policy.ts)），超龄按稳定原因 `reaper_inflight_tool_stalled` 收口。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。业务文件清单 v2 必填最小权限 mode（0600/0700），仅保留源所有者执行位，安全恢复失败阻断启动；旧清单不改写且拒绝恢复。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。

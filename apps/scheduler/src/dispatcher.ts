@@ -1,6 +1,7 @@
+import { lockContinuationBudget } from "./domains/job-control/continuation-budget.js";
 import { cleanupDispatcherSandbox } from "./dispatcher-human-wait.js";
 import { humanExecutionStartedAt } from "./domains/job-control/human-continuation-clock.js";
-import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanOrRepairBoundary } from "./domains/job-control/human-continuation-dispatch.js";
+import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanOrRepairBoundary, lockCurrentProvisioningAttempt } from "./domains/job-control/human-continuation-dispatch.js";
 import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
 import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
@@ -65,6 +66,8 @@ import {
   settleAttemptTerminal,
   updateAttemptResource,
 } from "./domains/job-attempt/index.js";
+
+export { lockCurrentProvisioningAttempt };
 
 const DISPATCHER_EXCEPTION_FALLBACK = "exception";
 
@@ -591,6 +594,7 @@ function logPlatformClaimsPaused(reason: string | null): void {
  * 在调度器 advisory lock 下抢占 pending Job，但不执行 provision 或 Agent。
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
+import { nextFairProject, finishFairProjectVisit, advanceFairProjectScan, FAIR_PROJECT_VISITS_PER_TICK, FAIR_PENDING_PAGE_SIZE } from "./dispatch-fairness.js";
 import { logClaimSkip, logClaimStarved } from "./dispatch-claim-diagnostics.js";
 export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCircuitProbe | null }[]> {
   let createProbe: CreateCircuitProbe | null = null; // claim-time half-open probe identity
@@ -642,15 +646,14 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     }
     createProbe = createCircuitProbeFor(createAdmission); // bound here, not sampled at outcome time
   }
-  type ClaimCursor = { priority: number; createdAt: string; id: string };
-  type ClaimPage = { claimed: { id: string }[]; cursor: ClaimCursor | null; more: boolean };
-  const pendingPageSize = 500;
+  type ClaimPage = { claimed: { id: string }[]; more: boolean };
+  const skippedProjects: string[] = [];
   const claimedJobs: { id: string; probe: CreateCircuitProbe | null }[] = [];
-  let cursor: ClaimCursor | null = null;
+
   // Each bounded page commits before discovering another Canvas. Only actual
   // claims consume quota; skipped busy rows cannot reserve the remaining slots.
   const claimPage = (): Promise<ClaimPage> => sql.begin(async (tx): Promise<ClaimPage> => {
-    const stop: ClaimPage = { claimed: [], cursor: null, more: false };
+    const stop: ClaimPage = { claimed: [], more: false };
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
     // #740 平台级认领暂停：与暂停 API 取同一把 advisory 锁，任何副本都先看到已提交的暂停；缺行则 fail closed。
     // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
@@ -702,6 +705,8 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       return stop;
     }
 
+    const project = await nextFairProject(tx as unknown as typeof sql, skippedProjects);
+    if (!project) return stop;
     const counts = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
     type PendingCandidate = DispatchCandidate & { id: string; priority: number; created_at_key: string; canvas_project_id: string | null };
     const claimed: { id: string }[] = [];
@@ -733,27 +738,37 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     };
     // 只冻结本页的身份提示；资格判定在排好序的画布/项目锁与 Job SKIP LOCKED 复读之后以权威结果为准。
     const selected: PendingCandidate[] = await tx<PendingCandidate[]>`${projection}
-      WHERE j.status = 'pending'
-      ${cursor ? tx`AND (
-        j.priority < ${cursor.priority}
-        OR (j.priority = ${cursor.priority} AND j.created_at > ${sql.typed(cursor.createdAt, 25)}::timestamptz)
-        OR (j.priority = ${cursor.priority} AND j.created_at = ${sql.typed(cursor.createdAt, 25)}::timestamptz AND j.id > ${cursor.id}::uuid)
+      WHERE j.status = 'pending' AND j.project_id = ${project.id}::uuid
+      ${project.scan_job_id ? tx`AND (
+        j.priority < ${project.scan_priority}
+        OR (j.priority = ${project.scan_priority} AND j.created_at > ${sql.typed(project.scan_created_at!, 25)}::timestamptz)
+        OR (j.priority = ${project.scan_priority} AND j.created_at = ${sql.typed(project.scan_created_at!, 25)}::timestamptz AND j.id > ${project.scan_job_id}::uuid)
       )` : tx``}
       ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
-      LIMIT ${pendingPageSize}`;
-    if (selected.length === 0) return stop;
-    const last: PendingCandidate = selected[selected.length - 1]!;
-    const nextCursor: ClaimCursor = { priority: Number(last.priority), createdAt: String(last.created_at_key), id: String(last.id) };
+      LIMIT ${FAIR_PENDING_PAGE_SIZE}`;
+    const last = selected.at(-1);
     // 在任何 Job/Attempt 之前先锁所有候选 Canvas；本事务提交并释放锁之前不从后页补充。
     const canvasIds = [...new Set(selected.map((job) => job.canvas_id).filter(Boolean))] as string[];
     const lockedCanvases = await tx<{ id: string }[]>`
       SELECT id FROM canvases WHERE id = ANY(${canvasIds}::text[])
       ORDER BY id FOR SHARE SKIP LOCKED`;
     // Project settings also linearize before the authoritative Job re-read.
-    await tx`SELECT id FROM projects WHERE id = ANY(${selected.map((job) => String(job.project_id))}::uuid[])
-      ORDER BY id FOR SHARE`;
+    const lockedProjects = await tx`SELECT id FROM projects WHERE id = ${project.id}::uuid AND status = 'active'
+      FOR UPDATE SKIP LOCKED`;
+    if (lockedProjects.length === 0) {
+      skippedProjects.push(project.id);
+      await advanceFairProjectScan(tx as unknown as typeof sql, project);
+      noteClaimContentionWake();
+      return { claimed: [], more: true };
+    }
+    // Budget roots precede every child Job. SKIP LOCKED retains the claim pump's contention behavior.
+    const budgetRoots = await tx<{ id: string }[]>`SELECT root.id FROM jobs root
+      WHERE root.id IN (SELECT COALESCE(budget_owner_job_id,id) FROM jobs
+        WHERE id=ANY(${selected.map(job => job.id)}::uuid[])) ORDER BY root.id FOR UPDATE SKIP LOCKED`;
     const pending = await tx<PendingCandidate[]>`${projection}
       WHERE j.status = 'pending' AND j.id = ANY(${selected.map((job) => job.id)}::uuid[])
+        AND COALESCE(j.budget_owner_job_id,j.id)=ANY(${budgetRoots.map(row => row.id)}::uuid[])
+        AND COALESCE((SELECT budget_execution_job_id FROM jobs WHERE id=COALESCE(j.budget_owner_job_id,j.id)),j.id)=j.id
         AND (j.canvas_id IS NULL OR j.canvas_id = ANY(${lockedCanvases.map((canvas) => canvas.id)}::text[]))
         AND EXISTS (
           SELECT 1 FROM jsonb_to_recordset(${tx.json(selected.map((job) => ({
@@ -767,7 +782,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     const graphBatch = await loadGraphEligibilityBatch(tx as unknown as typeof sql, pending);
     for (const job of pending) {
       // Re-check scope, pause/schedule, graph and quotas from locked rows before CAS.
-      if (claimed.length >= slots) break;
+      if (claimed.length >= 1) break;
       if (!(await eligible(job, graphBatch))) continue;
       const row = await lifecycle.claimPendingJob(job.id);
       if (!row) continue;
@@ -783,9 +798,15 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       claimed.push({ id: row.id as string });
       accumulateDispatchCounts([{ ...job, count: 1 }], counts);
     }
-    return { claimed, cursor: nextCursor, more: selected.length === pendingPageSize && claimed.length < slots };
+    await finishFairProjectVisit(tx as unknown as typeof sql, project, last,
+      selected.length === FAIR_PENDING_PAGE_SIZE, claimed.length > 0);
+    if (claimed.length === 0) {
+      skippedProjects.push(project.id);
+      if (selected.length === FAIR_PENDING_PAGE_SIZE) noteClaimContentionWake();
+    }
+    return { claimed, more: true };
   });
-  while (true) {
+  for (let visits = 0; visits < FAIR_PROJECT_VISITS_PER_TICK; visits += 1) {
     let page: ClaimPage;
     try {
       page = await claimPage();
@@ -797,7 +818,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     }
     claimedJobs.push(...page.claimed.map((job) => ({ ...job, probe: createProbe })));
     if (!page.more) break;
-    cursor = page.cursor;
+    if (visits === FAIR_PROJECT_VISITS_PER_TICK - 1) noteClaimContentionWake();
   }
   return claimedJobs;
 }
@@ -931,20 +952,6 @@ async function retryContextWindowExceededJob(
   });
   if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'context_window_exceeded_retry')`;
   return Boolean(retried);
-}
-
-/** Job before Attempt; both provision admission and mount settlement fence the same owner. */
-export async function lockCurrentProvisioningAttempt(
-  db: typeof sql, jobId: string, attemptId: string, phase: "preparing" | "provision.effect_pending",
-): Promise<void> {
-  const [job] = await db`
-    SELECT j.status, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
-    FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
-  const attempt = await getActiveAttempt(db, jobId, true);
-  if (job?.status !== "provisioning" || job.latest_attempt_id !== attemptId || attempt?.id !== attemptId
-    || attempt.cancel_requested !== false || attempt.phase !== phase) {
-    throw new SharedAssetLifecycleConflictError("stale_attempt");
-  }
 }
 
 async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = null) {
@@ -1112,7 +1119,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         env: useReal
           ? {
               DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0",
-              ...platformCapability!.env,
+              DEEPSONAR_API_BASE_URL: platformCapability!.env.DEEPSONAR_API_BASE_URL, DEEPSONAR_JOB_ID: jobId,
               ...(deviceLease?.env ?? {}),
             }
           : undefined,
@@ -1245,7 +1252,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     // 立即唤醒 dispatcher，让 pending Job 无需等待轮询或终态事件即可占用槽位。
     kickDispatcher();
     await sql.begin(async (tx) => {
-      await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
+      await lockContinuationBudget(tx as unknown as typeof sql, jobId);
       await assertContinuationExecutionOwner(tx as unknown as typeof sql, jobId, attemptId!);
       const started = await beginEffect(tx as unknown as typeof sql, attemptId!, {
         effectId: `agent_run:${String(attempt.attempt_no)}`,

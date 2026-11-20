@@ -49,7 +49,9 @@ runner `onEvent` 进入现有 normalized Evidence，关闭码缺失明确未知�
 
 ## 人工等待后的新执行（#1074）
 
-人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
+人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件、累计已 ACK 文字决定和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
+
+业务文件清单 v2 仅恢复所有者读写及原所有者执行能力（0600/0700），上传前校验路径、上传后核验内容与权限，失败阻断启动。
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -329,9 +331,26 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 
 项目 FIFO 队列在 Dispatcher 的全局 claim 事务锁内判定执行资格，实际 claim 后才标记当前占位。当前 Canvas 的内部 Job 可并行，下一 Canvas 等待治理 root/report 收敛、所有活动 Job 结束与效果结清。失败/取消保留队首并暂停，恢复必须确认当前失败项 ID；手动暂停只挡后续任务。Scheduler 按有界公平轮转对账，重启读取持久记录，硬重试在同一 claim 事务中以新条目 ID 排尾，保留暂停且废止旧失败项确认。Finding 报告再生成不创建任务新代际；终态 membership 保持不变，原报告权限和资源门不变。详见[队列专题](../PROJECT_TASK_QUEUE.md)。
 
+## 历史 failed 新 Job 与预算归属
+
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
+
 ## 人工等待显式释放 FIFO 席位（#1074）
 
 默认人工等待占位，用户显式让位将唯一等待 Canvas 标记 yielded。回复保存事务持有 claim advisory 锁、Canvas→Job→Attempt→请求锁，原子回队尾一次，保留完成代际。轮到且无其他 active、队列未暂停才由原 requeueJob 准入取得席位和唯一后继，Dispatcher 再验。暂停、取消、断点过期、撤权、退出/效果/预算门仍生效，详见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+
+## 持久跨项目公平领取（#1118）
+
+Scheduler 在现有 claim advisory 锁内，先按项目 dispatch_last_served、项目 ID 选项目，再按项目内 priority 降序、created_at 与 Job ID 升序选候选。成功 claim 与项目服务序号更新同事务，序号来自 global_settings 的单调计数器。多个 Scheduler 与重启共用数据库顺序。资格拒绝不计服务，项目内优先级不能持续压住其他合格项目。
+
+每个 tick 最多访问 32 个项目，每次最多读取 64 个 pending Job。global_settings 保存项目扫描位置，projects 保存项目内 keyset 位置，分页跨 tick 与进程推进。扫描项目行遇锁时同样推进全局扫描位置，保留已有延后唤醒。成功领取后重新从最久未服务项目比较，未成功项目在当前 tick 内跳过。下一轮继续未完成页，页尾后回绕，资格变化会重新核验。项目内优先级限定在沿当前持久游标的扫描顺序。前页任务在扫描期间恢复资格或新增高优先级任务时，当前页仍先完成，回绕或成功领取重置游标后重新考虑前缀。此暂时越过前缀的行为保证有限页能持续推进。有限项目持续合格、席位持续释放且行锁最终可用时，所有项目都能获得服务。该条件性活性不构成吞吐或等待时间 SLA。
+
+锁序沿用 claim advisory → Canvas → Project → budget root → Job → Attempt。Project 以 SKIP LOCKED 取得写锁后重核 active，取消、暂停、FIFO、图资格、账号、CLI、预算 owner、lease 与 provision 门保持权威。每个事务最多成功领取一个 Job，提交释放已有锁后再发现下一项目。扫描只读身份提示，不提前占用轮次。没有新增配置、管理 API 或 Web 操作。
+
+真实 PostgreSQL 回归接入 `pnpm ci:integration:dispatch-limits`，由现有 gate-db-core 调用。覆盖五项目两席位连续补充高优先级、项目内优先级、513 个无资格候选后的可领取任务、37 项目跨 tick 扫描、项目资格变化、独立进程重启与并发正常 claim。仅 Actions 运行，最终 SHA 结果另验。
+
+
+#1032 A1 的三 CLI 私有文件创建、认证读取、清理及现行 P0-1 / P1-3 / P1-4 覆盖边界见[凭据文件通道](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。同 UID 工具可读，A2 未交付。Actions 尚待本 PR 最终提交验收。
 
 ## 默认不限的调度配额（#1123）
 

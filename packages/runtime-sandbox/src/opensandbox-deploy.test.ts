@@ -310,7 +310,9 @@ test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () =>
   assert.match(poc, /registerGateway/);
   assert.match(poc, /mintJobToken/);
   assert.match(poc, /encryptSecret/);
-  assert.match(poc, /DEEPSONAR_GATEWAY_TOKEN/);
+  assert.match(poc, /materializePrivateJobFiles\(host, \{/);
+  assert.match(poc, /"gateway-token": token\.plaintext/);
+  assert.match(poc, /privateCredentialEnvironment\(gatewayEnv, privateFiles\)/);
   assert.match(poc, /network: "restricted"/);
   assert.match(poc, /DEEPSONAR_ALLOW_EGRESS: "0"/);
   assert.doesNotMatch(poc, /network: "egress"/);

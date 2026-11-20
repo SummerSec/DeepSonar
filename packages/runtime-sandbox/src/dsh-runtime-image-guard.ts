@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { DSH_REQUEST_BUDGET_PLUGIN, DSH_REQUEST_BUDGET_SOURCE, DSH_REQUEST_BUDGET_VENDOR_SHA256 } from "./dsh-request-budget.js";
+import { DSH_PRIVATE_CREDENTIALS_SOURCE } from "./private-credential-reader.js";
 
 // Scheduler-owned pin for the installer output at the canonical image path.
 // The real-install regression must match this pin when the installer changes.
@@ -28,6 +29,8 @@ try {
   }
   const sdk = JSON.parse(fs.readFileSync("/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai/package.json", "utf8"));
   if (sdk.name !== "@earendil-works/pi-ai" || sdk.version !== manifest.sdkVersion) throw new Error("SDK mismatch");
+  if (hash(fs.readFileSync("/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-credentials/deepsonar-job-credentials.mjs"))
+    !== ${JSON.stringify(createHash("sha256").update(DSH_PRIVATE_CREDENTIALS_SOURCE).digest("hex"))}) throw new Error("credential plugin mismatch");
   process.stdout.write("DSH_REQUEST_BUDGET_IMAGE_READY\\n");
 } catch {
   process.stderr.write("DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID\\n");

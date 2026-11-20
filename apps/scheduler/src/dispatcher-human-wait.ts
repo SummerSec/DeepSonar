@@ -69,6 +69,11 @@ export async function destroyAndSettleHumanWaitRun(
       runtime_grants_revoked: true,
     } });
     if (!settled) throw new Error("HUMAN_WAIT_RUN_SETTLEMENT_CHANGED");
+    await tx`UPDATE job_attempt_effects SET intent_json=intent_json || ${tx.json({ host_cleanup: {
+      schema: "deepsonar.runtime-cleanup/v1", state: "confirmed", sandbox_id: input.sandboxId,
+      attempt_id: input.attemptId, human_event_id: String(human.event_id),
+      reconciled_by: "dispatcher-human-wait-cleanup",
+    } })},updated_at=clock_timestamp() WHERE id=${effect.id}`;
     await tx`UPDATE human_requests SET resources_released_at=clock_timestamp(),process_exited_at=clock_timestamp(),
       checkpoint_status=CASE WHEN manifest_json IS NULL THEN 'blocked' WHEN checkpoint_status='preparing' THEN 'ready' ELSE checkpoint_status END,
       checkpoint_error_code=CASE WHEN manifest_json IS NULL THEN COALESCE(checkpoint_error_code,'HUMAN_CHECKPOINT_UNAVAILABLE') ELSE checkpoint_error_code END

@@ -1,3 +1,4 @@
+import { DSH_PRIVATE_CREDENTIALS_SOURCE } from "./private-credential-reader.js";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -18,6 +19,7 @@ test("DSH image preflight rejects old, incomplete and mismatched governed plugin
   const manifest = { version: 1, vendorVersion: "0.2.2-rc.1", sdkVersion: "1.5.2",
     vendorSha256: hash(vendor), artifactSha256: hash(artifact), helperSha256: hash(DSH_REQUEST_BUDGET_SOURCE) };
   const valid = new Map([
+    ["/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-credentials/deepsonar-job-credentials.mjs", DSH_PRIVATE_CREDENTIALS_SOURCE],
     [root + "/package.json", JSON.stringify({ name: "@deepseek-ai/dsh-llm-pi-ai", version: "0.2.2-rc.1" })],
     [manifestPath, JSON.stringify(manifest)],
     [root + "/lib/index.js", vendor], [root + "/lib/deepsonar-index.js", artifact],
@@ -83,7 +85,8 @@ test("#1083 raw TypeScript policy loads through DSH installer and OM data-module
   // Match the installer's raw source -> strip -> data import chain. A regular
   // TypeScript import resolves sibling modules and conceals broken image inputs.
   const mainSource = readFileSync(new URL("./pi-main-request-budget.ts", import.meta.url), "utf8");
-  const mainUrl = dataModule(stripTypeScriptTypes(mainSource));
+  const readerUrl = dataModule(stripTypeScriptTypes(readFileSync(new URL("./private-credential-reader.ts", import.meta.url), "utf8")));
+  const mainUrl = dataModule(stripTypeScriptTypes(mainSource).replace('"./private-credential-reader.js"', JSON.stringify(readerUrl)));
   const dshSource = stripTypeScriptTypes(readFileSync(new URL("./dsh-request-budget.ts", import.meta.url), "utf8"))
     .replace('"./pi-main-request-budget.js"', JSON.stringify(mainUrl));
   const generated = await import(dataModule(dshSource));

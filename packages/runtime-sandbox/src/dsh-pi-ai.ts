@@ -6,7 +6,8 @@ import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "./dsh-reque
 export { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt };
 
 export const DSH_PI_AI_PLUGIN = "@deepseek-ai/dsh-llm-pi-ai";
-export const DSH_GATEWAY_KEY_ENV = "DEEPSONAR_GATEWAY_TOKEN";
+/** Official credential reference resolved by the Job-only store, never an env fallback. */
+export const DSH_GATEWAY_KEY_ENV = "DEEPSONAR_JOB_GATEWAY";
 export const DSH_PI_AI_PROTOCOLS = ["openai-completions", "openai-responses", "anthropic-messages"] as const;
 export type DshPiAiProtocol = (typeof DSH_PI_AI_PROTOCOLS)[number];
 
