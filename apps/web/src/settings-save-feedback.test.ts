@@ -55,3 +55,24 @@ test("project rules expose a claim-time concurrent job quota", () => {
   assert.match(quota, /该项目所有任务共享此额度/);
   assert.match(quota, /保存项目配额/);
 });
+
+test("global rules expose an independent scheduler quota editor (#1123)", () => {
+  assert.match(panel, /GlobalJobQuotaSection/);
+  const section = readFileSync(new URL("./components/GlobalJobQuotaSection.tsx", import.meta.url), "utf8");
+  assert.match(section, /调度器总并发硬上限/);
+  assert.match(section, /maxGlobalJobs/);
+  assert.match(section, /maxJobsPerProject/);
+  assert.match(section, /maxConcurrentProvisioning/);
+});
+
+test("project quota shows when the project cap tightens below the global hard cap (#1127)", () => {
+  const quota = readFileSync(new URL("./components/ProjectJobQuotaSection.tsx", import.meta.url), "utf8");
+  assert.match(quota, /已被项目设置收紧（未达到全局硬上限）/);
+  assert.match(quota, /rules\.maxConcurrentJobs < rules\.maxJobsPerProject/);
+});
+
+test("project quota explains when the global cap clamps the stored project setting (#1127)", () => {
+  const quota = readFileSync(new URL("./components/ProjectJobQuotaSection.tsx", import.meta.url), "utf8");
+  assert.match(quota, /项目设置超过全局硬上限，当前按全局硬上限运行/);
+  assert.match(quota, /storedQuota > rules\.maxJobsPerProject/);
+});

@@ -296,7 +296,7 @@ python scripts/deepsonar-api.py jobs rerun-current <jobId>
 | 可信镜像版本 | `runtime_image_versions.trust_status=trusted` 且 `image_ref` 含 `@sha256:` |
 | 官方 digest 引导 | `DEEPSONAR_OFFICIAL_BASE_IMAGE` / `DEEPSONAR_OFFICIAL_AUDIT_IMAGE`（tag 不会被静默信任） |
 | 本地镜像存在 | Docker 已有对应 digest（可 `docker tag` 别名） |
-| 并发默认 | `MAX_GLOBAL_JOBS=20`、`MAX_JOBS_PER_PROJECT=5`（库 `rules_json` 优先） |
+| 并发默认 | 三项全局配额默认 null 不限；显式 `MAX_GLOBAL_JOBS`、`MAX_JOBS_PER_PROJECT`、`PROVISION_CONCURRENCY` 为 1–1000，库显式 null 或数字优先 |
 | schema 基线 | 对照同一 checkout 的 [schema.sql](../../database/schema.sql)与 [SCHEMA_VERSION](../../apps/scheduler/src/schema-version.ts)，并核对目标部署的源码/镜像版本及启动校验结果；`/schema` 用于核对 HTTP 契约，不代替数据库版本检查。非空库不符即 fail closed，无增量 migration；需授权备份后重建 |
 | 鉴权 | `DEEPSONAR_AUTH_REQUIRED=true` 时需 Bearer；应急用 `DEEPSONAR_ADMIN_TOKEN`（不落库） |
 | 证据目录 | `BLOB_DIR`（默认 `./data/blobs`）可写；共享资产 CAS 见 `BLOB_STORE=fs` 或 `s3`（`docs/SHARED_ASSET_BLOB_STORE.md`）；改 `apps/scheduler/src` 会触发 tsx watch 重载 |

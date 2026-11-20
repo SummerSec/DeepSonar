@@ -88,6 +88,43 @@ function fakeDb(result: unknown, projectResult?: unknown) {
   }) as unknown as typeof sql;
 }
 
+test("stored null overrides finite environment and omission preserves explicit environment", async () => {
+  const previous = { ...config.limits };
+  try {
+    Object.assign(config.limits, { maxGlobalJobs: 20, maxJobsPerProject: 5, maxConcurrentProvisioning: 2 });
+    const inherited = await globalRules(fakeDb([{ rules_json: {} }]));
+    assert.deepEqual([inherited.maxGlobalJobs, inherited.maxJobsPerProject, inherited.maxConcurrentProvisioning], [20, 5, 2]);
+    const unlimited = await globalRules(fakeDb([{ rules_json: { maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null } }]));
+    assert.deepEqual([unlimited.maxGlobalJobs, unlimited.maxJobsPerProject, unlimited.maxConcurrentProvisioning], [null, null, null]);
+  } finally { Object.assign(config.limits, previous); }
+});
+
+test("null global caps preserve independent project, CLI, provider and account gates", async () => {
+  const rules = await globalRules(fakeDb([{ rules_json: {
+    maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null,
+    maxConcurrentByAgentCli: { pi: 1 }, maxConcurrentByProvider: { openai: 2 },
+  } }]));
+  assert.equal(rules.maxGlobalJobs, null);
+  assert.equal(rules.maxJobsPerProject, null);
+  assert.equal(rules.maxConcurrentProvisioning, null);
+  assert.equal(dispatchSlots(null, 1001), Infinity);
+  assert.equal(provisionSlots(null, 1001), Infinity);
+  assert.deepEqual(effectiveProjectJobLimit(null, null), { limit: null, source: "global" });
+  assert.deepEqual(effectiveProjectJobLimit(null, 3), { limit: 3, source: "project" });
+  assert.deepEqual(effectiveProjectJobLimit(null, 0), { limit: 0, source: "project" });
+  const candidate = { project_id: "p", agent_cli: "pi", credential_provider: "openai",
+    credential_id: "c", model: "m", credential_metadata: { max_concurrent: 1 } };
+  const counts = emptyCounts();
+  assert.equal(dispatchSkipReason(candidate, counts, rules, null), null);
+  assert.equal(dispatchSkipReason(candidate, counts, rules, 0), "project");
+  counts.cli.set("pi", 1);
+  assert.equal(dispatchSkipReason(candidate, counts, rules, null), "agent_cli");
+  counts.credential.set("c", 1);
+  assert.equal(dispatchSkipReason(candidate, counts, rules, null), "credential");
+  counts.provider.set("openai", 2);
+  assert.equal(dispatchSkipReason(candidate, counts, rules, null), "provider");
+});
+
 test("effective global caps allow four claude-code jobs when project cap is four", async () => {
   const rules = await globalRules(
     fakeDb([
@@ -238,17 +275,16 @@ test("globalRules reads changed settings on the next claim without a process res
   assert.equal(changed.maxConcurrentProvisioning, 5);
 });
 
-test("invalid persisted caps fall back and project rules cannot widen global caps", async () => {
-  const global = await globalRules(
-    fakeDb([
-      {
-        rules_json: { maxGlobalJobs: -1, maxJobsPerProject: 1001 },
-      },
-    ]),
-  );
+test("missing caps inherit explicit env and invalid persisted caps reject dispatch", async () => {
+  const global = await globalRules(fakeDb([{ rules_json: {} }]));
   assert.equal(global.maxGlobalJobs, config.limits.maxGlobalJobs);
-  assert.equal(global.maxJobsPerProject, config.limits.maxJobsPerProject);
+  assert.equal(global.maxJobsPerProject, config.limits.maxJobsPerProject === null
+    ? config.limits.maxGlobalJobs : config.limits.maxGlobalJobs === null
+      ? config.limits.maxJobsPerProject : Math.min(config.limits.maxGlobalJobs, config.limits.maxJobsPerProject));
   assert.equal(global.maxConcurrentProvisioning, config.limits.maxConcurrentProvisioning);
+  for (const invalid of [-1, 0, 1001, "4", true, {}]) {
+    await assert.rejects(globalRules(fakeDb([{ rules_json: { maxGlobalJobs: invalid } }])), /Invalid concurrency limit/);
+  }
   assert.equal(global.maxNoProgressRounds, 2);
   const noProgressOff = await globalRules(fakeDb([{ rules_json: { maxNoProgressRounds: 0 } }]));
   assert.equal(noProgressOff.maxNoProgressRounds, 0);
@@ -258,7 +294,7 @@ test("invalid persisted caps fall back and project rules cannot widen global cap
   const finiteHub = await globalRules(fakeDb([{ rules_json: { maxHubRounds: 3 } }]));
   assert.equal(finiteHub.maxHubRounds, 3);
   await assert.rejects(globalRules(fakeDb([{ rules_json: { maxHubRounds: -1 } }])), /Invalid maxHubRounds/);
-  assert.equal(asConcurrencyLimit("not-a-number", 6), 6);
+  assert.throws(() => asConcurrencyLimit("not-a-number", 6));
 
   const project = await rulesForProject(
     fakeDb(
@@ -274,13 +310,13 @@ test("invalid persisted caps fall back and project rules cannot widen global cap
   assert.equal(project.maxConcurrentProvisioning, config.limits.maxConcurrentProvisioning);
 });
 
-test("concurrency caps reject boolean/object/null and only accept JSON numbers", () => {
-  assert.equal(asConcurrencyLimit(true, 6), 6);
-  assert.equal(asConcurrencyLimit({}, 6), 6);
-  assert.equal(asConcurrencyLimit(null, 6), 6);
+test("concurrency caps accept null and reject invalid finite values", () => {
+  assert.throws(() => asConcurrencyLimit(true, 6));
+  assert.throws(() => asConcurrencyLimit({}, 6));
+  assert.equal(asConcurrencyLimit(null, 6), null);
   assert.throws(() => parseConcurrencyRulesPatch({ maxGlobalJobs: true }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxGlobalJobs: {} }));
-  assert.throws(() => parseConcurrencyRulesPatch({ maxGlobalJobs: null }));
+  assert.deepEqual(parseConcurrencyRulesPatch({ maxGlobalJobs: null }), { maxGlobalJobs: null });
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentProvisioning: true }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentProvisioning: 0 }));
   assert.throws(() => parseConcurrencyRulesPatch({ maxConcurrentProvisioning: 1001 }));

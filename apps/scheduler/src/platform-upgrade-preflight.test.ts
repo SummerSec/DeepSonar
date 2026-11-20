@@ -28,6 +28,30 @@ function fixture(): PreflightSnapshot {
 function codes(snapshot: PreflightSnapshot): string[] {
   return validatePlatformUpgradeSnapshot(snapshot).blocking_errors.map((error) => error.code);
 }
+
+test("quota preflight accepts unlimited defaults and explicit values without migrating stored configuration", () => {
+  for (const rules of [{}, { maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null },
+    { maxGlobalJobs: 20, maxJobsPerProject: 5, maxConcurrentProvisioning: 2 }]) {
+    const snapshot = fixture();
+    snapshot.global_settings[0].rules_json = rules;
+    snapshot.projects[0].config_json = { rules: { maxConcurrentJobs: 0 } };
+    const before = JSON.stringify(snapshot);
+    assert.deepEqual(codes(snapshot), []);
+    assert.equal(JSON.stringify(snapshot), before);
+  }
+  for (const key of ["MAX_GLOBAL_JOBS", "MAX_JOBS_PER_PROJECT", "PROVISION_CONCURRENCY"]) {
+    for (const value of ["", "  ", "3"]) {
+      const snapshot = fixture(); snapshot.environment[key] = value;
+      assert.deepEqual(codes(snapshot), []);
+    }
+    for (const value of ["0", "-1", "1.5", "1001", "private-invalid"]) {
+      const snapshot = fixture(); snapshot.environment[key] = value;
+      const result = validatePlatformUpgradeSnapshot(snapshot);
+      assert.ok(result.blocking_errors.some(error => error.location === `environment.${key}`));
+      assert.equal(JSON.stringify(result).includes("private-invalid"), false);
+    }
+  }
+});
 function encryptedFixture(plaintext = "private-credential", key = Buffer.from("a".repeat(64), "hex")) {
   const nonce = Buffer.alloc(12, 3), cipher = createCipheriv("aes-256-gcm", key, nonce);
   return {ciphertext: Buffer.concat([cipher.update(plaintext), cipher.final()]).toString("base64"), nonce: nonce.toString("base64"), auth_tag: cipher.getAuthTag().toString("base64")};

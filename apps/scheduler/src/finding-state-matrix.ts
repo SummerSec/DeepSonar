@@ -95,7 +95,7 @@ export const FINDING_STATE_MATRIX: readonly FindingStateRow[] = [
     dimension: "verify_status",
     value: "inconclusive",
     owner: "Scheduler",
-    writer: "预算/无进展/冲突护栏",
+    writer: "预算/无进展/冲突护栏；findings:write 人工 CAS 决定（新增独立轮次）",
     meaning: "证据不足但已终止（未证实，不是已排除）；不创建 human 节点",
     report: "未证实章节；不进 SARIF",
     terminal: true,

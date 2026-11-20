@@ -9,7 +9,7 @@ import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js"
 import { materializeReportInput } from "./report-input.js";
 import { assertCurrentRuntimeImageKey } from "@deepsonar/shared-types";
 import { randomUUID } from "node:crypto";
-import { createHash } from "node:crypto";
+import { attemptSnapshotIdentity } from "./domains/job-attempt/snapshot-identity.js";
 import { config, managesHostDockerRuntime } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
@@ -172,7 +172,8 @@ import {
   openSandboxCreateCircuitStatus,
   recordOpenSandboxProvisionFailure,
   recordOpenSandboxProvisionSuccess,
-  createCircuitProbeFor, shouldLogCreateCircuitPause, type CreateCircuitProbe,
+  createCircuitProbeFor, createCircuitClaimSlots, shouldLogCreateCircuitPause, type CreateCircuitProbe,
+  assertOpenSandboxCreateAdmission, OpenSandboxCreateAdmissionExpiredError,
 } from "./opensandbox-create-circuit.js";
 import {
   OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
@@ -224,29 +225,6 @@ export { CHROME_RUNTIME_IMAGE_KEYS } from "./domains/role-runtime-snapshot/index
 /** 在执行的 job（优雅退出 drain 用，§12.2） */
 const inFlight = new Set<Promise<void>>();
 
-function attemptSnapshotIdentity(snapshot: unknown): Record<string, string> {
-  const value = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
-    ? snapshot as Record<string, unknown>
-    : {};
-  const runtimeImage = value.runtime_image && typeof value.runtime_image === "object" && !Array.isArray(value.runtime_image)
-    ? value.runtime_image as Record<string, unknown>
-    : {};
-  const adapter = value.agent_runtime && typeof value.agent_runtime === "object" && !Array.isArray(value.agent_runtime)
-    ? value.agent_runtime as Record<string, unknown>
-    : {};
-  const identity = {
-    ...(typeof value.agent_cli === "string" ? { agent_cli: value.agent_cli } : {}),
-    ...(typeof value.snapshot_sha256 === "string" ? { snapshot_sha256: value.snapshot_sha256 } : {}),
-    ...(typeof adapter.adapter_id === "string" ? { adapter_id: adapter.adapter_id } : {}),
-    ...(typeof adapter.adapter_version === "string" ? { adapter_version: adapter.adapter_version } : {}),
-    ...(typeof runtimeImage.image_ref === "string" ? { runtime_image_ref: runtimeImage.image_ref } : {}),
-    ...(typeof runtimeImage.image_key === "string" ? { runtime_image_key: runtimeImage.image_key } : {}),
-  };
-  if (!identity.snapshot_sha256) {
-    identity.snapshot_sha256 = createHash("sha256").update(JSON.stringify(value)).digest("hex");
-  }
-  return identity;
-}
 
 export interface GraphEligibilityState {
   activeHub?: boolean;
@@ -435,13 +413,13 @@ export type { DispatchCandidate, DispatchCounts } from "./dispatch-active-concur
 export { dispatchModelKey, dispatchSkipReason } from "./dispatch-active-concurrency.js";
 
 /** Number of additional active jobs the effective global cap permits. */
-export function dispatchSlots(maxGlobalJobs: number, totalActive: number): number {
-  return Math.max(0, maxGlobalJobs - totalActive);
+export function dispatchSlots(maxGlobalJobs: number | null, totalActive: number): number {
+  return maxGlobalJobs === null ? Infinity : Math.max(0, maxGlobalJobs - totalActive);
 }
 
 /** 允许进入 claimed/provisioning 阶段的额外 Job 数量。 */
-export function provisionSlots(maxConcurrentProvisioning: number, activeProvisioning: number): number {
-  return Math.max(0, maxConcurrentProvisioning - activeProvisioning);
+export function provisionSlots(maxConcurrentProvisioning: number | null, activeProvisioning: number): number {
+  return maxConcurrentProvisioning === null ? Infinity : Math.max(0, maxConcurrentProvisioning - activeProvisioning);
 }
 
 /**
@@ -468,8 +446,8 @@ export function scanDispatchPages<T>(
 
 export function projectJobLimitForCandidate(
   job: Pick<DispatchCandidate, "project_config_json">,
-  globalMaxJobsPerProject: number,
-): number {
+  globalMaxJobsPerProject: number | null,
+): number | null {
   if (!Object.prototype.hasOwnProperty.call(job, "project_config_json")) {
     throw new Error("DISPATCH_PROJECT_CONFIG_MISSING");
   }
@@ -708,9 +686,15 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       (n, row) => n + (["claimed", "provisioning"].includes(String(row.status)) ? Number(row.count) : 0),
       0,
     );
+    if (config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox") {
+      const admission = openSandboxCreateCircuitAllowsClaim();
+      if (!admission.allowed) return stop;
+      createProbe = createCircuitProbeFor(admission);
+    }
     const slots = Math.min(
       dispatchSlots(rules.maxGlobalJobs, totalActive),
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
+      createCircuitClaimSlots(createProbe, activeProvisioning),
     );
     if (slots <= 0) {
       const holders = await tx<{ id: string; status: string; claimed_at: string | null; project_id: string; type: string }[]>`SELECT id, status, claimed_at::text AS claimed_at, project_id::text, type FROM jobs WHERE status IN ('claimed','provisioning') ORDER BY claimed_at NULLS FIRST, id LIMIT 5`;
@@ -836,6 +820,7 @@ export async function retryProvisioningJob(
   jobId: string,
   attempt: Record<string, unknown>,
   errorMessage: string,
+  reason: "provision_retry" | "provision_admission_deferred" = "provision_retry",
 ): Promise<boolean> {
   const retried = await sql.begin(async (txRaw) => {
     const tx = txRaw as unknown as typeof sql;
@@ -863,13 +848,14 @@ export async function retryProvisioningJob(
       FROM job_attempts
       WHERE job_id = ${jobId} AND status <> 'active'`;
     const plan = planAutomaticProvisionRetry(countConsumedProvisionRetries(previous));
-    if (!plan.retry) return false;
+    if (reason === "provision_retry" && !plan.retry) return false;
     const txLifecycle = createSqlJobLifecycleApplication(tx);
     return txLifecycle.retryProvisioning(
       jobId,
       errorMessage,
       (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
       (attempt.resource_labels_json ?? {}) as Record<string, string>,
+      reason,
     );
   });
   if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'provision_retry')`;
@@ -1179,6 +1165,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         const provisionStarted = Date.now();
         try {
           await sharedAssetsPreparation?.assertCurrent();
+          if (provider === "opensandbox") assertOpenSandboxCreateAdmission(createProbe);
           provisionAttempted = true;
           handle = await withProvisionTimeout(
             runner.provision(provisionInput),
@@ -1330,8 +1317,10 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     // #1032 P1-3：终态失败以平台稳定错误码开头，不再以 CLI 进程退出文案收尾。
     if (classified.reason === CREDENTIAL_IN_BUSINESS_DATA_REASON) msg = classified.message;
     if (classified.reason === EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON) msg = classified.message;
-    if (!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
-      const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
+    if (!provisionAttempted && !handle && attemptId && activeAttempt &&
+      (isRetryableProvisionFailure(e) || e instanceof OpenSandboxCreateAdmissionExpiredError)) {
+      const reason = e instanceof OpenSandboxCreateAdmissionExpiredError ? "provision_admission_deferred" : "provision_retry";
+      const retried = await retryProvisioningJob(jobId, activeAttempt, msg, reason).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
         return false;
       });

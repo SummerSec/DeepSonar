@@ -165,7 +165,7 @@ fake 模式不预拉也不使用 helper。运行时默认在官方 digest 存在
 
 Provision 并发是数据库 claim admission，不是进程内 semaphore：超过全局
 `global_settings.maxConcurrentProvisioning` 的 Job 留在 `pending`，不消耗 `claimed_at`；槽位释放后
-调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。`PROVISION_CONCURRENCY=2` 只在该全局配置
+调度器显式唤醒 pending 队列，重新 claim 后才进入 `running`。`PROVISION_CONCURRENCY` 显式数字只在该全局配置
 缺失时作为 fallback。rootless Docker 使用 `vfs` 存储驱动时，GB 级镜像的冷 `create` 会全量复制文件；应把数据库
 `global_settings.maxConcurrentProvisioning` 设为 `1`，并使用生产默认 `PROVISION_TIMEOUT_SEC=900`。只改
 `deploy/.env` 后执行 `docker compose restart` 不会更新既有容器环境，必须执行

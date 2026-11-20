@@ -31,13 +31,13 @@ export function RepairFeedbackPanel({
         boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${meta.tone} 18%, transparent)`,
       }}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[12px] font-medium">{meta.label}</span>
-        {feedback.stage && <span className="font-mono text-[10px] text-zinc-500">阶段 {feedback.stage}</span>}
-      </div>
+      <p className="text-sm leading-6 text-zinc-200">{feedback.summary}</p>
+      <details className="mt-2 text-[12px] text-zinc-400">
+        <summary className="cursor-pointer py-2 focus-visible:outline focus-visible:outline-2">技术诊断（维护者）</summary>
+        <p>{meta.label}{feedback.stage && ` · ${feedback.stage}`}</p>
       <dl className="mt-3 grid gap-2 text-[12px] text-zinc-300 sm:grid-cols-2">
-        <Datum label="字段路径" value={feedback.field_path ?? "未从当前错误解析到字段"} />
-        <Datum label="期望" value={feedback.expected ?? "当前没有结构化期望形状"} />
+        {feedback.field_path && <Datum label="字段路径" value={feedback.field_path} />}
+        {feedback.expected && <Datum label="期望" value={feedback.expected} />}
         {showObserved && <Datum label="当前观测" value={feedback.observed!} wide />}
         {showAccepted && <Datum label="已接受效果" value={feedback.accepted_effects.join(" · ")} />}
         {showAlternatives && <Datum label="可用替代" value={feedback.alternatives.join("；")} />}
@@ -59,8 +59,10 @@ export function RepairFeedbackPanel({
         </ol>
       )}
       <p className="mt-3 text-[12px] leading-5 text-zinc-400">{feedback.next_step}</p>
+      </details>
       {recoveryActions && recoveryActions.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2" aria-label="确认后继续">
+          <p className="w-full text-[12px] text-zinc-300">可以选择重新执行，提交时系统会再次检查条件。</p>
           {recoveryActions.map((action) => (
             <button
               key={action.id}
@@ -74,13 +76,6 @@ export function RepairFeedbackPanel({
             </button>
           ))}
         </div>
-      )}
-      {!meta.allowUnconditionalRetry && !recoveryActions?.length && (
-        <p className="mt-2 text-[11px] leading-5 text-zinc-500">
-          {feedback.category === "unknown_external_effect"
-            ? "这不是普通失败。未确认外部效果前，界面不会提供无条件重试。"
-            : "不要无上下文重放这次运行。"}
-        </p>
       )}
     </section>
   );

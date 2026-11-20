@@ -354,6 +354,37 @@ if (!testDatabaseUrl) {
           await sql`UPDATE global_settings SET rules_json=${sql.json(beforeRules.rules_json)} WHERE id='global'`;
         }
       });
+      await t.test("#1078 full homogeneous pool freezes a releasable peer rather than a paused default", async () => {
+        const { createJob } = await import("./core.js");
+        const { claimPendingJobs } = await import("./dispatcher.js");
+        const paused = await insertCredential("claude-code");
+        const busy = await insertCredential("claude-code");
+        await setConfig({ enabled_credential_ids: [paused, busy], default_credential_id: paused,
+          default_agent_cli: "claude-code", default_model_ref: "claude-sonnet-4" });
+        await sql`UPDATE credentials SET public_metadata_json='{"max_concurrent":1}' WHERE id=${busy}`;
+        try {
+          for (const metadata of [{ max_concurrent: 0 }, { model_concurrency: { "claude-sonnet-4": 0 } }]) {
+            await sql`UPDATE credentials SET public_metadata_json=${sql.json(metadata as never)} WHERE id=${paused}`;
+            const occupying = (await createJob({ projectId, canvasId, type: "audit" })).job!;
+            assert.equal(occupying.agent_snapshot_json.credential_id, busy);
+            assert.ok((await claimPendingJobs()).some(row => row.id === occupying.id));
+            const queued = (await createJob({ projectId, canvasId, type: "audit" })).job!;
+            assert.equal(queued.status, "pending");
+            assert.equal(queued.agent_snapshot_json.credential_id, busy);
+            const decision = queued.agent_snapshot_json.credential_selection;
+            assert.equal(decision.reason, "capacity_wait");
+            assert.equal(decision.selected_credential_id, busy);
+            assert.ok(!(await claimPendingJobs()).some(row => row.id === queued.id), "the peer is still full");
+            await sql`UPDATE jobs SET status='succeeded' WHERE id=${occupying.id}`;
+            assert.ok((await claimPendingJobs()).some(row => row.id === queued.id), "the queued Job can use the released slot");
+            const [stored] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${queued.id}`;
+            assert.deepEqual(stored.agent_snapshot_json.credential_selection, decision, "claim does not rewrite the frozen route");
+            await sql`UPDATE jobs SET status='succeeded' WHERE id=${queued.id}`;
+          }
+        } finally {
+          await sql`UPDATE jobs SET status='succeeded' WHERE agent_snapshot_json->>'credential_id'=ANY(${[paused, busy]}::text[])`;
+        }
+      });
       const { HubIntentPayload } = await import("@deepsonar/shared-types");
       const intent = { from: [], role: "audit", description: "Inspect the test fixture", prompt: "Inspect this isolated test fixture and record structured evidence." };
       assert.equal(HubIntentPayload.safeParse(intent).success, true);

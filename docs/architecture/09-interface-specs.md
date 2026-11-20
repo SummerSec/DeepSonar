@@ -7,6 +7,14 @@
 
 Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用途、当前 Finding 实际引用及待处理原因（#1019）。列表采用有界范围查询，详情再读取既有留存证据与当前 Plan 判据；截断与无法确认明确呈现未知。投影不提供写入权限，人工信任、技术验证与完成判据仍走原契约。详见[证据追踪](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
 
+## 人工结束技术验证（#1133）
+
+`PATCH /findings/:id/verify-status` 的 `inconclusive` 分支复用 `findings:write` 和项目隔离。原因必填，`expected` 必须包含用户实际看到的 `verify_status`、`subject_revision` 和 `latest_round_id`，未知修订或无轮次显式为 null。共享严格契约位于 [finding-verification.ts](../../packages/shared-types/src/finding-verification.ts)，详情返回 `verification_control` 提供这组比较值。无画布的历史详情仍可读，其 `verification_control` 为 null，界面隐藏结束按钮，写操作拒绝为 `FINDING_CANVAS_INVALID`。
+
+仅 `needs_human` 且无活动 Job/Attempt、未决效果和开放验证轮次允许结束。Canvas 锁下先识别持久 mutation 重试，再检查 CAS。同编号同操作者同决定返回原结果，异内容或过期值返回 409。成功新增 `attempt=max+1`、无 Verify Job 的终结轮次，记录操作者、脱敏原因、对象修订和来源轮次，保留旧轮次及业务 disposition。状态、同 Finding verification blocker、轮次和请求身份审计同事务提交，审计失败整体回滚。
+
+界面只给 `findings:write` 展示“以无定论结束”，原因必填并确认，409 刷新后由人重新决定。Finding 或比较版本变化时清除旧草稿、待确认请求和幂等编号，旧确认/响应不能操作新对象。详情状态与比较值在同 scope Canvas/Finding 锁下读取。收口不重新排队 Hub 或重置执行时钟，后续执行沿既有受治理人工/修复准入路径，无合法 checkpoint 时只保存 Finding 决定。工程回归接入 `ci:integration:verify-eligibility` 与 `ci:unit:web-facts`，最终 SHA Actions 验证另行记录。
+
 ## 任务下发契约（#767）
 
 `POST /projects/{id}/tasks` 可选提交 `task_contract`；类型/版本错误按既有校验错误处理。共享 [TaskContract schema](../../packages/shared-types/src/task-contract.ts) 是字段与模板的唯一机器来源。201 成功返回 `task_contract_warnings`；已提供契约的 objective/targets/scope/evidence/acceptance 基本完整性或必要条件阻塞返回 `409 task_contract_blocked`、`task_contract_blockers` 和 warnings，且不创建 Canvas/Job。每项有 `code/path/message/suggestion`，用于明确补充什么、哪些条件尚不能执行；它们不是完整度分数，也不代表自然语言意图已被理解。未提交契约的自由文本任务继续接受并返回未评估提示，工程场景不强套审计模板。
@@ -312,3 +320,17 @@ Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_con
 summary分别计登记、已纳入整理、跳过、待采集、active Memory/Skill、draft、completed/blocked work及本项目拥有并消费的usage/feedback；pending排除collected/skipped去重并集。反馈success仅为模型报告；来源登记不等于产物，collected含排队不等于生效。items只含工作状态/安全原因、累计Job/时间、当前Job/Canvas、时间戳、最新提案状态和source_count；来源数按采集审计关联work_ref，显式work在无链接且有originJob时回退1。页面在目录前紧凑展示，详情按需展开、复用原刷新、隔离迟到响应，不新增轮询或人工激活入口。注意力成本见[专题表格](../PROJECT_KNOWLEDGE.md#注意力成本)。
 
 Control的evaluation_plan增加每例显式task_inputs，平台校验引用已在work冻结；assignment.source_mode标识project_collection，工具/网络隔离只可收紧。trial不接收评分rubric；evaluator/reviewer读取精确proposal绑定的evaluation输入。publish_shared_asset返回真实version.id/content_sha256用于Evidence引用，不能以operation ID代替版本。target comparator fail的容许不放宽candidate或安全组的pass门，也不允许unexecuted激活。契约见[共享schema](../../packages/shared-types/src/project-knowledge.ts)与[发布回执](../../apps/scheduler/src/shared-asset-publish-control.ts)。本轮源码与回归已接线，Actions尚未运行，未合并、未部署、未执行真实模型收益验证。
+
+## 人工等待显式让位入口（#1074）
+
+POST /projects/{id}/task-queue/yield 使用 jobs:control 与项目范围，输入取共享 ProjectTaskQueueYieldInput 严格契约。mutation_id 绑定 expected_item_id、request_id 与 expected_revision，同编号内容冲突 409。响应沿原有界队列投影，新增 yielded 和 yield_request。Web 队列提供显式按钮及暂存分组。回复仍走既有消息 API，保存后原子排队尾，202 只证明回复保存，执行等待原准入。具体限制与注意力成本见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+
+## 不限配额接口（#1123）
+
+`PATCH /global-settings` 的三个并发键接受 null 或 1–1000 整数，0、负数、小数、字符串和越界数返回 400 并指出字段。`rules` 是已存声明，`effective_rules` 是含环境变量及有限全局上限约束的生效投影。未修改字段不应回写生效值。显式 null 持久化，覆盖环境变量限制。
+
+项目设置 `maxConcurrentJobs=null` 清除项目覆盖并继承，0 暂停新 claim。全局不限时允许显式有限项目值。项目列表 `max_concurrent_jobs`、Dashboard `global_cap` 均可为 null，Dashboard 无有限分母时 utilization 为 null。`GET /health` 的 `concurrency_limits` 提供三个当前全局生效值，各字段 null 为不限，整个对象 null 表示读数不可用。健康端点权限及就绪条件沿用既有规则。
+
+## PTY 清理证据详情（#1143）
+
+GET `/jobs/{id}` 增加可选 `process_diagnostics`，沿用 `tasks:read` 与项目归属权限，上限 64 条。它通过原 effect 的宿主审计引用读取精确进程终止、DELETE 与 sandbox 销毁结果。`host_kill_caller` 表示实际宿主调用来源，退出码未知保持 null。字段与恢复限制见 [PTY 清理专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。

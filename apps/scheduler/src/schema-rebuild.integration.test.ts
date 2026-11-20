@@ -300,6 +300,11 @@ if (testDatabaseUrl) {
 }
 
 if (testDatabaseUrl) {
+  test("#1074 maintenance requires an unexpired checkpoint, trusted exit and settled ownership", async () => {
+    const { runHumanMaintenanceFixture } = await import("./schema-rebuild-human-fixture.js");
+    await runHumanMaintenanceFixture(testDatabaseUrl);
+  });
+
   test("#1002 rebuild preserves runtime and narrow ACLs without widening PUBLIC or role identity", async () => {
     const { runRebuildAclFixture } = await import("./schema-rebuild-acl-fixture.js");
     await runRebuildAclFixture(testDatabaseUrl);

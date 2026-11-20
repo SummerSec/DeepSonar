@@ -415,7 +415,15 @@ export async function resolveProviderCredentialForJob(
     || a.id.localeCompare(b.id));
   if (ranked[0]) return select(ranked[0], ranked[0].id === defaultId ? "default" : "capacity");
   if (input.allowCapacityWait) {
-    const waiting = existing ?? preferred ?? [...selectable].sort((a, b) => a.id.localeCompare(b.id))[0]!;
+    // A zero quota cannot clear by releasing occupancy. Prefer a temporarily
+    // full peer for a new Job, without rotating frozen or heterogeneous identities.
+    const canWait = !existing && homogeneous ? selectable.filter(row => {
+      const { credential, model, provider } = capacities.get(row.id)!;
+      return credential.limit !== 0 && model.limit !== 0 && provider.limit !== 0;
+    }) : [];
+    const waitingPool = canWait.length > 0 ? canWait : selectable;
+    const waiting = existing ?? waitingPool.find(row => row.id === defaultId)
+      ?? [...waitingPool].sort((a, b) => a.id.localeCompare(b.id))[0]!;
     return select(waiting, "capacity_wait");
   }
   throwResolve("provider_credential_all_at_capacity", {

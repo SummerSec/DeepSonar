@@ -111,7 +111,7 @@ export class PiRpcDriver {
   private fail(code: string): void {
     this.error ??= new Error(code);
     this.dispose();
-    void this.process.kill().catch(() => {});
+    void this.process.kill("pi_rpc_failure").catch(() => {});
   }
 
   private command(command: Record<string, unknown>, timeoutMs = this.timeoutMs): Promise<void> {

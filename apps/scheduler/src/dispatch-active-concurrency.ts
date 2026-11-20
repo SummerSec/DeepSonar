@@ -101,7 +101,7 @@ export function dispatchSkipReason(
   job: DispatchCandidate,
   counts: DispatchCounts,
   rules: Pick<ProjectRules, "maxConcurrentByProvider" | "maxConcurrentByAgentCli">,
-  projectJobLimit: number,
+  projectJobLimit: number | null,
 ): string | null {
   const projectId = String(job.project_id);
   // Historical snapshots may omit agent_cli; use the platform default in quota accounting.
@@ -109,7 +109,7 @@ export function dispatchSkipReason(
   const provider = String(job.credential_provider ?? "");
   const credentialId = String(job.credential_id ?? "");
   const model = snapshotUpstreamModel(job) ?? "";
-  if ((counts.project.get(projectId) ?? 0) >= projectJobLimit) return "project";
+  if (projectJobLimit !== null && (counts.project.get(projectId) ?? 0) >= projectJobLimit) return "project";
   const providerLimit = provider ? rules.maxConcurrentByProvider[provider] : undefined;
   if (providerLimit !== undefined && (counts.provider.get(provider) ?? 0) >= providerLimit) return "provider";
   const credentialPolicy = credentialConcurrencyPolicy(job.credential_metadata);

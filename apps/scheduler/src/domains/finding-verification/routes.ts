@@ -1,4 +1,7 @@
 import { readCandidatePage } from "../project-finding-research/candidate-read.js";
+import { FindingVerifyStatusBody } from "@deepsonar/shared-types";
+import { DeviceNotAuthorizedError, freezeSnapshotDeviceRequirement } from "../device/index.js";
+import { closeFindingInconclusive, readFindingVerificationSnapshot } from "./operator-verification.js";
 import { searchFindingLexical } from "../project-finding-research/lexical-search.js";
 import { readFeatureStatus } from "../project-finding-research/store.js";
 import type { FastifyInstance } from "fastify";
@@ -26,13 +29,6 @@ import { projectFindingResearch } from "../finding-research/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { recordJobSharedAssets } from "../shared-assets/index.js";
-
-const FindingNeedsHumanBody = z
-  .object({
-    verify_status: z.literal("needs_human"),
-    reason: z.string().trim().min(1).max(2000).optional(),
-  })
-  .strict();
 
 const ManualVerifyBody = z
   .object({ reason: z.string().trim().min(1).max(2000).optional() })
@@ -149,12 +145,16 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
 
   app.patch("/findings/:id/verify-status", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const parsed = FindingNeedsHumanBody.safeParse(req.body);
+    const parsed = FindingVerifyStatusBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({
         error: "人工验证收口请求无效",
         error_code: "FINDING_VERIFY_STATUS_INVALID",
       });
+    }
+    if (parsed.data.verify_status === "inconclusive") {
+      const result = await closeFindingInconclusive(req, id, parsed.data);
+      return reply.code(result.status).send(result.body);
     }
     const reason = parsed.data.reason ?? "人工收口";
     let result;
@@ -421,11 +421,17 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       if (activeEvidenceJob) {
         return { kind: "active_exists" as const, active_job_id: activeEvidenceJob.id as string };
       }
-      const snapshot = await freezeAgentSnapshotNetworkPolicy(
+      let snapshot = await freezeAgentSnapshotNetworkPolicy(
         tx,
         canvasId,
         await resolveAgentSnapshotForJob(tx, finding.project_id as string, role, [id]),
       );
+      try {
+        snapshot = await freezeSnapshotDeviceRequirement(tx, String(finding.project_id), canvasId, snapshot);
+      } catch (error) {
+        if (error instanceof DeviceNotAuthorizedError) return { kind: "device_denied" as const };
+        throw error;
+      }
       const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
         tx, { projectId: String(finding.project_id), type: role }, snapshot);
       const description = role === "review" ? "人工发起独立复核" : "人工发起运行实测";
@@ -504,6 +510,9 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     if (result.kind === "not_found") {
       return reply.code(404).send({ error: "Finding 不存在", error_code: "FINDING_NOT_FOUND" });
     }
+    if (result.kind === "device_denied") {
+      return reply.code(403).send({ error: "画布设备要求尚未获得平台授权，请由管理员核对设备接入配置。", error_code: "device_not_authorized" });
+    }
     if (result.kind === "invalid_canvas") {
       return reply.code(409).send({ error: "Finding 缺少同项目、同画布 canonical 节点", error_code: "FINDING_CANVAS_INVALID" });
     }
@@ -581,21 +590,9 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
 
   app.get("/findings/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const [finding] = await sql`
-      SELECT f.*, p.name AS project_name, j.canvas_id, j.type AS source_job_type,
-             j.status AS source_job_status, c.title AS canvas_title,
-             EXISTS (
-               SELECT 1 FROM jobs waiting_job
-               WHERE waiting_job.canvas_id = j.canvas_id
-                 AND waiting_job.status = 'waiting_human'
-                 AND waiting_job.type = 'hub_reason'
-             ) AS has_waiting_human
-      FROM findings f
-      JOIN projects p ON p.id = f.project_id
-      JOIN jobs j ON j.id = f.job_id
-      LEFT JOIN canvases c ON c.id = j.canvas_id
-      WHERE f.id = ${id}`;
-    if (!finding) return reply.code(404).send({ error: "finding not found" });
+    const snapshot = await readFindingVerificationSnapshot(id);
+    if (!snapshot) return reply.code(404).send({ error: "finding not found" });
+    const { finding, control } = snapshot;
     const [verification_jobs, source_events, comments, links, verification_rounds, researchRow] = await Promise.all([
       sql`SELECT id, type, status, error, started_at, finished_at, created_at, payload_json
           FROM jobs WHERE finding_id = ${id} ORDER BY created_at`,
@@ -632,6 +629,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
     const fact_evidence_trace = await loadFactEvidenceTrace(sql, finding, verification_rounds);
     return {
       finding: { ...finding, ...research },
+      verification_control: control,
       project_research_features: await readFeatureStatus(id, String(finding.project_id)),
       research,
       cluster_members: clusterMembers,

@@ -215,18 +215,18 @@ export interface ProjectRules {
   maxIntentsPerDecision: number;
   allowEgress: boolean;
   /** Scheduler-wide active job cap. The persisted global rule is authoritative; env is bootstrap fallback. */
-  maxGlobalJobs: number;
+  maxGlobalJobs: number | null;
   /** Scheduler-wide per-project active job cap. The persisted global rule is authoritative; env is bootstrap fallback. */
-  maxJobsPerProject: number;
+  maxJobsPerProject: number | null;
   /**
    * Claim-time effective active-job cap for this project.
    * `min(global.maxJobsPerProject, project.maxConcurrentJobs ?? global.maxJobsPerProject)`.
    */
-  maxConcurrentJobs: number;
+  maxConcurrentJobs: number | null;
   /** Whether the effective project job cap came from a project override or the global default. */
   maxConcurrentJobsSource: ConcurrentJobsSource;
   /** Scheduler 全局 provisioning admission 上限，项目规则不得覆盖。 */
-  maxConcurrentProvisioning: number;
+  maxConcurrentProvisioning: number | null;
   /** 全局 Provider 总并发；优先于 Credential / 模型 / Agent CLI 配额。 */
   maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层不得覆盖。 */
@@ -293,14 +293,19 @@ function asCliLimits(v: unknown, fallback: Record<string, number>): Record<strin
   return out;
 }
 
-/**
- * Normalize a scheduler concurrency cap. Caps are deliberately bounded so a
- * malformed value in JSONB cannot disable resource protection. A value of 0
- * is reserved for Agent CLI limits (pause that CLI); global/project caps must
- * remain positive.
- */
-export function asConcurrencyLimit(v: unknown, fallback: number): number {
-  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1000 ? v : fallback;
+/** null is unlimited; only an absent key inherits the bootstrap value. */
+export function asConcurrencyLimit(v: unknown, fallback: number | null): number | null {
+  if (v === undefined) return fallback;
+  if (v === null) return null;
+  if (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1000) return v;
+  throw new Error("Invalid concurrency limit: expected null or integer 1-1000");
+}
+
+/** Intersect optional caps without using Infinity in stored or API values. */
+export function minimumConcurrencyLimit(left: number | null, right: number | null): number | null {
+  if (left === null) return right;
+  if (right === null) return left;
+  return Math.min(left, right);
 }
 
 /** 0 pauses new claims for that project; omit/invalid inherits the global per-project cap. */
@@ -309,18 +314,18 @@ export function parseProjectJobQuota(v: unknown): number | undefined {
 }
 
 export function effectiveProjectJobLimit(
-  globalMaxJobsPerProject: number,
+  globalMaxJobsPerProject: number | null,
   projectMaxConcurrentJobs: unknown,
-): { limit: number; source: ConcurrentJobsSource } {
+): { limit: number | null; source: ConcurrentJobsSource } {
   const parsed = parseProjectJobQuota(projectMaxConcurrentJobs);
   if (parsed === undefined) return { limit: globalMaxJobsPerProject, source: "global" };
-  return { limit: Math.min(globalMaxJobsPerProject, parsed), source: "project" };
+  return { limit: minimumConcurrencyLimit(globalMaxJobsPerProject, parsed), source: "project" };
 }
 
 export function projectJobQuotaFromConfig(
   configJson: unknown,
-  globalMaxJobsPerProject: number,
-): { limit: number; source: ConcurrentJobsSource } {
+  globalMaxJobsPerProject: number | null,
+): { limit: number | null; source: ConcurrentJobsSource } {
   const cfg = configJson && typeof configJson === "object" && !Array.isArray(configJson)
     ? (configJson as Record<string, unknown>)
     : {};
@@ -598,11 +603,11 @@ function envDefaultRules(): ProjectRules {
     maxHubRounds: config.hub.maxRounds,
     maxIntentsPerDecision: config.hub.maxIntents,
     allowEgress: true,
-    maxGlobalJobs: asConcurrencyLimit(config.limits.maxGlobalJobs, 20),
-    maxJobsPerProject: asConcurrencyLimit(config.limits.maxJobsPerProject, 5),
-    maxConcurrentJobs: asConcurrencyLimit(config.limits.maxJobsPerProject, 5),
+    maxGlobalJobs: asConcurrencyLimit(config.limits.maxGlobalJobs, null),
+    maxJobsPerProject: asConcurrencyLimit(config.limits.maxJobsPerProject, null),
+    maxConcurrentJobs: asConcurrencyLimit(config.limits.maxJobsPerProject, null),
     maxConcurrentJobsSource: "global",
-    maxConcurrentProvisioning: asConcurrencyLimit(config.limits.maxConcurrentProvisioning, 2),
+    maxConcurrentProvisioning: asConcurrencyLimit(config.limits.maxConcurrentProvisioning, null),
     maxConcurrentByProvider: {},
     maxConcurrentByAgentCli: {},
   };
@@ -618,7 +623,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
   if (Object.hasOwn(raw, "maxHubRounds") && maxHubRounds === null) throw new Error("Invalid maxHubRounds");
   const maxNoProgressRounds = Number(raw.maxNoProgressRounds);
   const maxGlobalJobs = asConcurrencyLimit(raw.maxGlobalJobs, base.maxGlobalJobs);
-  const maxJobsPerProject = Math.min(maxGlobalJobs, asConcurrencyLimit(raw.maxJobsPerProject, base.maxJobsPerProject));
+  const maxJobsPerProject = minimumConcurrencyLimit(maxGlobalJobs, asConcurrencyLimit(raw.maxJobsPerProject, base.maxJobsPerProject));
   const maxConcurrentProvisioning = asConcurrencyLimit(raw.maxConcurrentProvisioning, base.maxConcurrentProvisioning);
   return {
     minVerifySeverity: min,

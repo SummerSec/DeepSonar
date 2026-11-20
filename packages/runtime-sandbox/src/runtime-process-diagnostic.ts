@@ -7,6 +7,20 @@ export interface ProcessErrorDiagnostic {
   cause?: ProcessErrorDiagnostic;
 }
 
+export type RuntimeKillCaller = "terminal_result" | "pi_rpc_failure" | "output_capture_failure" | "runtime_exception" | "transport_cleanup" | "terminal_close" | "unspecified_host";
+export interface RuntimeCleanupDiagnostic {
+  outcome: "confirmed" | "http_error" | "transport_error" | "timeout";
+  http_status: number | null;
+  requested_at: string;
+  completed_at: string;
+}
+export interface RuntimeProcessObservation {
+  process_sequence: number;
+  process_id: string | null;
+  diagnostic: RuntimeProcessDiagnostic;
+  cleanup: RuntimeCleanupDiagnostic | null;
+}
+
 /** Host observations only: neither an exit receipt nor permission to replay effects. */
 export interface RuntimeProcessDiagnostic {
   source: "opensandbox_pty";
@@ -18,6 +32,7 @@ export interface RuntimeProcessDiagnostic {
   server_error?: string;
   server_error_code?: string;
   host_kill_requested: boolean;
+  host_kill_caller?: RuntimeKillCaller;
   close_requested: boolean;
 }
 
@@ -55,7 +70,8 @@ export function projectProcessError(value: unknown, secrets: readonly string[], 
 }
 
 export class RuntimeProcessFailure extends Error {
-  constructor(readonly code: string, readonly diagnostic: RuntimeProcessDiagnostic) {
+  constructor(readonly code: string, readonly diagnostic: RuntimeProcessDiagnostic,
+    readonly processId?: string, readonly cleanup?: RuntimeCleanupDiagnostic) {
     super(code);
     this.name = "RuntimeProcessFailure";
   }
@@ -96,6 +112,7 @@ export function observeRuntimeProcesses(
   host: RuntimeHost,
   secrets: readonly string[],
   onEvent?: (event: Record<string, unknown>) => void,
+  onProcessDiagnostic?: (observation: RuntimeProcessObservation) => Promise<void>,
 ): RuntimeHost {
   let sequence = 0;
   return {
@@ -105,43 +122,55 @@ export function observeRuntimeProcesses(
     writeHumanInboxFile: (file, bytes) => host.writeHumanInboxFile(file, bytes),
     async runAsync(command, options) {
       const processSequence = ++sequence;
-      let published = false;
-      const publish = (diagnostic?: RuntimeProcessDiagnostic, processId?: string) => {
-        if (!diagnostic || published) return;
-        published = true;
-        // The transport already redacts before bounding; repeat exact-value redaction
-        // here for custom hosts, without exposing arbitrary Error objects or stacks.
-        const event = { type: "runtime.diagnostic", code: "OPENSANDBOX_PTY_TERMINATION",
-          process_sequence: processSequence, ...(processId ? { process_id: safeProcessDiagnosticText(processId, secrets, 128) } : {}), ...diagnostic };
-        onEvent?.(redactDiagnosticValues(event, secrets) as Record<string, unknown>);
+      let publication: Promise<void> | undefined;
+      const publish = (diagnostic?: RuntimeProcessDiagnostic, processId?: string, cleanup?: RuntimeCleanupDiagnostic): Promise<void> => {
+        if (publication) return publication;
+        if (!diagnostic) return Promise.resolve();
+        publication = (async () => {
+          // The transport already redacts before bounding; repeat exact-value redaction
+          // here for custom hosts, without exposing arbitrary Error objects or stacks.
+          const event = { type: "runtime.diagnostic", code: "OPENSANDBOX_PTY_TERMINATION",
+            process_sequence: processSequence, ...(processId ? { process_id: safeProcessDiagnosticText(processId, secrets, 128) } : {}), ...diagnostic };
+          onEvent?.(redactDiagnosticValues(event, secrets) as Record<string, unknown>);
+          if (processId && secrets.some(secret => secret && processId.includes(secret))) throw new Error("RUNTIME_PROCESS_ID_INVALID");
+          await onProcessDiagnostic?.({ process_sequence: processSequence,
+            process_id: processId ?? null,
+            diagnostic: redactDiagnosticValues(diagnostic, secrets) as RuntimeProcessDiagnostic, cleanup: cleanup ?? null });
+        })();
+        return publication;
       };
       let exec: RuntimeProcess;
       try {
         exec = await host.runAsync(command, { ...options, diagnosticSecrets: [...secrets, ...(options?.diagnosticSecrets ?? [])] });
       } catch (error) {
-        publish(runtimeProcessFailure(error)?.diagnostic);
+        const failure = runtimeProcessFailure(error);
+        await publish(failure?.diagnostic, failure?.processId, failure?.cleanup);
         throw error;
       }
-      const terminal = () => publish(exec.getTerminationDiagnostic?.(), exec.id);
+      const terminal = () => publish(exec.getTerminationDiagnostic?.(), exec.id, exec.getCleanupDiagnostic?.());
       return {
         id: exec.id,
         get stdinClosed() { return exec.stdinClosed; },
         ...(exec.getTerminationDiagnostic ? { getTerminationDiagnostic: () => exec.getTerminationDiagnostic!() } : {}),
+        ...(exec.getCleanupDiagnostic ? { getCleanupDiagnostic: () => exec.getCleanupDiagnostic!() } : {}),
         async write(data) {
           try { await exec.write(data); }
           catch (error) {
-            if (runtimeProcessFailure(error)) await exec.kill().catch(() => {});
-            terminal();
+            if (runtimeProcessFailure(error)) await exec.kill("transport_cleanup").catch(() => {});
+            await terminal();
             throw error;
           }
         },
         closeStdin: () => exec.closeStdin(),
-        async kill() { try { await exec.kill(); } finally { terminal(); } },
+        async kill(caller) { try { await exec.kill(caller); } finally { await terminal(); } },
         ...(exec.resize ? { resize: (cols: number, rows: number) => exec.resize!(cols, rows) } : {}),
         async *[Symbol.asyncIterator]() {
           try { yield* exec; }
-          catch (error) { await exec.kill().catch(() => {}); throw error; }
-          finally { terminal(); }
+          catch (error) { await exec.kill("transport_cleanup").catch(() => {}); throw error; }
+          finally {
+            if (exec.getTerminationDiagnostic) await exec.kill("transport_cleanup").catch(() => {});
+            await terminal();
+          }
         },
       };
     },
