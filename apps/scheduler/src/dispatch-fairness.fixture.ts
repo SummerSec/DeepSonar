@@ -10,6 +10,7 @@ type Claim = () => Promise<{ id: string }[]>;
 /** Uses the public SQL claim entry point, including attempts, quotas and locks. */
 export async function runDispatchFairnessFixture(db: typeof sql, claim: Claim, credentialId: string): Promise<void> {
   const projects = Array.from({ length: 37 }, () => randomUUID()).sort();
+  const wrapCanvasId = `fairness-wrap-${randomUUID()}`;
   const snapshot = { agent_cli: "claude-code", credential_provider: "anthropic", credential_id: credentialId, model: "fairness-model" };
   const childClaim = async () => {
     const source = `const {claimPendingJobs}=await import(${JSON.stringify(new URL("./dispatcher.ts", import.meta.url).href)});
@@ -142,8 +143,71 @@ export async function runDispatchFairnessFixture(db: typeof sql, claim: Claim, c
     assert.deepEqual(concurrent.flat().map(row => row.id), [a]);
     await release();
     assert.deepEqual((await childClaim()).map(row => row.id), [b]);
+
+    // Exactly one full page is skipped by a real Canvas lock. Its empty tail
+    // must schedule a wrapped scan without a manual claim or a Job notification.
+    await clear();
+    await rules(1);
+    await db`INSERT INTO canvases (id, project_id, title)
+      VALUES (${wrapCanvasId}, ${projects[0]!}, 'Fairness wrapped wake')`;
+    const lockedJobs = await pending(projects[0]!, 1000, 64);
+    await db`UPDATE jobs SET canvas_id = ${wrapCanvasId} WHERE id = ANY(${lockedJobs}::uuid[])`;
+    const [beforeWake] = await db`SELECT dispatch_service_sequence::text AS sequence FROM global_settings WHERE id = 'global'`;
+    const { bindScheduleWake, unbindScheduleWake } = await import("./schedule-wake.js");
+    const wakeResults: { id: string }[][] = [];
+    let wakeRun = Promise.resolve();
+    let wakeError: unknown;
+    let allowWake!: () => void;
+    // A slow CI database may fire the timer before the initial assertions finish.
+    const unlocked = new Promise<void>(resolve => { allowWake = resolve; });
+    const blocker = await db.reserve();
+    let lockHeld = false;
+    try {
+      await blocker`BEGIN`;
+      lockHeld = true;
+      await blocker`SELECT id FROM canvases WHERE id = ${wrapCanvasId} FOR UPDATE`;
+      bindScheduleWake(() => {
+        wakeRun = wakeRun.then(async () => {
+          await unlocked;
+          wakeResults.push(await claim());
+        }).catch(error => { wakeError = error; });
+      });
+      assert.deepEqual(await claim(), [], "the locked Canvas skips all 64 candidates");
+      const [blocked] = await db`SELECT dispatch_scan_job_id, dispatch_last_served::text AS served
+        FROM projects WHERE id = ${projects[0]!}`;
+      assert.ok(blocked!.dispatch_scan_job_id, "the full skipped page persists its cursor");
+      assert.equal(blocked!.served, "0", "a skipped page consumes no service turn");
+      await blocker`ROLLBACK`;
+      lockHeld = false;
+      allowWake();
+      // After unlock, only the real merged timer callback can claim. The test
+      // reads state and waits, without writing Jobs, issuing NOTIFY or calling claim.
+      const deadline = Date.now() + 5_000;
+      while (!wakeResults.some(rows => rows.length > 0) && !wakeError && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.ifError(wakeError);
+      assert.ok(wakeResults.length >= 2, "empty-tail wake must be followed by a wrapped automatic scan");
+      assert.deepEqual(wakeResults[0], [], "the first automatic visit only clears the exhausted cursor");
+      const claimed = wakeResults.flat();
+      assert.equal(claimed.length, 1, "automatic wrapped claim preserves the global/project/provision cap");
+      assert.ok(lockedJobs.includes(claimed[0]!.id));
+      const [persisted] = await db`SELECT count(*)::int AS count FROM jobs
+        WHERE id = ANY(${lockedJobs}::uuid[]) AND status = 'claimed'`;
+      assert.equal(persisted!.count, 1, "the automatic claim is durable");
+      const [afterWake] = await db`SELECT dispatch_service_sequence::text AS sequence FROM global_settings WHERE id = 'global'`;
+      assert.equal(BigInt(afterWake!.sequence) - BigInt(beforeWake!.sequence), 1n,
+        "skipped pages and empty-tail wrap consume no service turns; only the real claim does");
+    } finally {
+      unbindScheduleWake();
+      if (lockHeld) await blocker`ROLLBACK`;
+      blocker.release();
+      allowWake();
+      await wakeRun;
+    }
   } finally {
     await clear();
+    await db`DELETE FROM canvases WHERE id = ${wrapCanvasId}`;
     await deleteProjectsLeavingAuditShells(db, projects);
   }
 }

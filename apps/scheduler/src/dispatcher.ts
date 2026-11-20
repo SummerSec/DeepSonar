@@ -802,7 +802,8 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       selected.length === FAIR_PENDING_PAGE_SIZE, claimed.length > 0);
     if (claimed.length === 0) {
       skippedProjects.push(project.id);
-      if (selected.length === FAIR_PENDING_PAGE_SIZE) noteClaimContentionWake();
+      // An exhausted persisted cursor still owes the previously skipped prefix a visit.
+      if (selected.length === FAIR_PENDING_PAGE_SIZE || project.scan_job_id) noteClaimContentionWake();
     }
     return { claimed, more: true };
   });
