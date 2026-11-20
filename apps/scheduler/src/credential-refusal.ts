@@ -8,9 +8,9 @@
  * 对 `openai-responses`（非 Anthropic Pi 配置的默认 provider）经
  * `formatProviderError` 产出 `<provider> API error (400): <body>`。Claude 保留
  * HTTP 400 JSON 外壳时按精确 error.type 识别。上述封装均映射为稳定错误码，并且该失败
- * **永不进入任何自动重试预算**（provision / 流截断 / 上下文窗口）：token
- * 一旦进入模型可见面对当前 Attempt 即为永久拒绝，只有平台侧（后续
- * #1032 P0-2 认证隔离）能修复发生条件，模型无法 un-see。
+ * **永不进入任何自动重试预算**（provision / 流截断 / 上下文窗口）。宿主须先
+ * 修复对应工具/SDK 投影或认证材料，再按原恢复门决定后继。模型是否实际接收
+ * 内容以 Gateway 的接受与出站事实为准。
  */
 export const CREDENTIAL_IN_BUSINESS_DATA_REASON = "credential_in_business_data";
 
