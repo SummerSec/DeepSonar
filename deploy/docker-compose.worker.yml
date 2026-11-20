@@ -39,13 +39,20 @@ services:
       - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
       # Official server only checks /.dockerenv; Podman needs this marker (#422).
       - ./opensandbox/dockerenv:/.dockerenv:ro
+      # OpenSandbox 就绪探针脚本也走只读挂载。
+      - ./opensandbox/readiness-probe.py:/etc/opensandbox/readiness-probe.py:ro
       - opensandbox-data:/var/lib/opensandbox
     ports:
       - "${OPEN_SANDBOX_BIND:-0.0.0.0}:${OPEN_SANDBOX_HOST_PORT:-18081}:8080"
     healthcheck:
-      test: ["CMD", "/app/.venv/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      # #1046 P1-4（选定方案 1）：readiness = 带鉴权的管理面 List（GET /sandboxes，
+      # 只读幂等；401/403/5xx/慢 List 均判 unhealthy）。/health 仅作存活性信号。
+      test:
+        - CMD
+        - /app/.venv/bin/python3
+        - /etc/opensandbox/readiness-probe.py
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 20
 
   worker-agent:
