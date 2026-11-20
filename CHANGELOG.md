@@ -1,5 +1,27 @@
 ## [Unreleased]
 
+## [0.6.22] - 2026-11-20
+
+### 新增
+
+- **持久跨项目公平领取（#1118）**：项目领取引入单调服务序号与有界持久扫描游标，单项目长链积压不再长期占满 provisioning 槽位；扫描到整圈后唤醒被跳过的候选，游标只用于候选扫描，不构成 Job 授权。真实 PG 与独立进程回归接既有 dispatch-limits Actions。
+- **历史断点续跑绑定原始预算（#1074）**：续做后继 Job 通过 `budget_owner_job_id` / `budget_execution_job_id` 关联原始预算与执行身份，历史断点在人工回复后按原额度续做，不再凭新 Job 重置预算。
+- **项目知识按批次累积**：项目知识推进改为有界批次，无产出的批次可停止，避免无收敛的重复累积。
+
+### 修复
+
+- **Job 凭据移出进程环境（#1032，#1167，#1169）**：Pi 网关令牌、控制通道令牌与三个 CLI 的 Job 凭据改由 0600 私有文件通道传递；读取端校验单链接、属主与权限位。DSH 与 Claude 出口对已知运行时凭据同样拦截，凭据不再出现在模型可见环境或工具回显里。
+- **Gateway 未确认用量可诊断（#1082，#1161）**：改用量的确认逻辑接受「累计 delta 缺失」时不再把整条流判为未上报，未确认的请求写入有界非敏感审计；模型看板新增 `unconfirmed_models`，零 token 行不再被隐藏。
+- **OpenSandbox 就绪与 create 熔断（#1046，#1119）**：三个 compose 覆写的 healthcheck 改为带鉴权的管理面 List（5 秒超时，`/health` 退回 liveness）；`/health` 暴露 create 熔断状态，熔断按探针 episode 计数且只保留已知失败码。
+- **验证无进展护栏可显式关闭（#1133）**：无进展上限为 2，关闭该守卫后不再收口到 `needs_human`，其它按原因收口的行为不变。
+- **升级候选库代际回收（#1124）**：新增代际回收执行体与策略文档，回收前先校验候选库与备份回执，保留仍被 Compose 容器引用的数据库。
+- **其它稳定性修复**：凭据拒绝计数与终态持久化、Claude 工具输出投影、OpenSandbox 管理面探针回归对齐、DSH/Claude 加速器声明、PowerShell 缓存路径。
+
+### 升级与验收范围
+
+- **数据库 schema 75 → 77**：76 新增预算 owner（`jobs.budget_owner_job_id` / `budget_execution_job_id`）与 `job_continuations`；77 在保留 76 的基础上新增公平领取字段（`projects.dispatch_last_served`、三列原子扫描游标、`global_settings` 单调计数器）及对应索引。非空库没有增量迁移链，升级前先备份并按受治理的基线重建流程预演，保留现有 `deploy/.env` 与显式配置；空库按新 schema 初始化。
+- 工程验收以最终提交的 GitHub Actions 为准；不包括生产部署、历史任务重跑或真实模型验收。
+
 ## [0.6.21] - 2026-11-20
 
 ### 新增
@@ -1767,3 +1789,4 @@
 [0.6.19]: https://github.com/SummerSec/DeepSonar/compare/v0.6.18...v0.6.19
 [0.6.20]: https://github.com/SummerSec/DeepSonar/compare/v0.6.19...v0.6.20
 [0.6.21]: https://github.com/SummerSec/DeepSonar/compare/v0.6.20...v0.6.21
+[0.6.22]: https://github.com/SummerSec/DeepSonar/compare/v0.6.21...v0.6.22
