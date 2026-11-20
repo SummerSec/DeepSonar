@@ -1,7 +1,8 @@
 import { CheckCircle, File, PaperPlaneTilt, UploadSimple, X } from "@phosphor-icons/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api, type CanvasHumanMessage, type CanvasNode } from "./api";
+import { api, type CanvasHumanMessage, type CanvasNode, type CreateCanvasHumanMessage } from "./api";
 import { HumanRequestDetails } from "./HumanRequestDetails";
+import { useHumanMessageRequest } from "./use-human-message-request";
 import {
   HUMAN_MESSAGE_MAX_LENGTH,
   humanMessageAssetKey,
@@ -48,15 +49,28 @@ export function HumanMessageComposer({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
+  const [draftRequest, setDraftRequest] = useState<Extract<CreateCanvasHumanMessage["target"], { kind: "request" }> | null>(null);
   const trimmed = body.trim();
-  const jobTarget = nodeEligible ? humanMessageTargetForNode(selectedNode, jobs) : null;
-  const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
+  const jobId = selectedNode?.job_id ?? (typeof selectedNode?.body_json.job_id === "string" ? selectedNode.body_json.job_id : null);
   const waitingJob = selectedNode?.status === "waiting_human"
-    || jobs?.some(job => job.id === selectedNode?.job_id && job.status === "waiting_human");
-  const waitingForCurrentRequest = targetKind === "job" && (waitingJob || intervention?.pending)
-    && (!intervention || intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true);
+    || jobs?.some(job => job.id === jobId && job.status === "waiting_human");
+  const request = useHumanMessageRequest(canvasId, targetKind === "job" && waitingJob ? jobId : null, intervention?.node.updated_at);
+  useEffect(() => {
+    if (!draftRequest && request.target) setDraftRequest(request.target);
+  }, [draftRequest, request.target]);
+  const requestChanged = Boolean(request.target && draftRequest && (request.target.request_id !== draftRequest.request_id
+    || request.target.expected_revision !== draftRequest.expected_revision));
+  const jobTarget = nodeEligible ? waitingJob || draftRequest ? request.target : humanMessageTargetForNode(selectedNode, jobs) : null;
+  const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
+  const waitingForCurrentRequest = targetKind === "job" && (Boolean(draftRequest && !waitingJob)
+    || Boolean(waitingJob && (!request.target || !draftRequest || requestChanged))
+    || Boolean(intervention?.pending && (intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true)));
   const canSubmit = Boolean(projectId && target && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy && !waitingForCurrentRequest);
-  const targetTitle = target?.kind === "hub" ? "Hub" : target?.kind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
+  const targetTitle = targetKind === "hub" ? "Hub" : targetKind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
+  const currentPayload = targetKind === "job" && waitingJob ? request.request?.payload : null;
+  const showCurrentRequest = targetKind === "job" && waitingJob;
+  const canvasDetailFailed = intervention?.pending && intervention.detailStatus === "error";
+  const retryRequest = () => { request.retry(); onRetryIntervention?.(); setError(""); };
   const totalBytes = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
 
   const addFiles = (incoming: FileList | null) => {
@@ -123,27 +137,32 @@ export function HumanMessageComposer({
         </header>
 
         <div className="human-message-composer-body">
-          {targetKind === "job" && waitingJob && !intervention && (
-            <p role="alert">尚未取得此运行的人工请求，请等待画布刷新后重新打开回复，核对完整问题再发送。</p>
-          )}
-          {intervention && (
+          {(intervention || showCurrentRequest) && (
             <section className="rounded-xl bg-amber-400/[.04] p-3 ring-1 ring-amber-300/15" aria-label="关联人工请求">
-              <div className="font-mono text-[10px] text-amber-300">关联请求 · {humanInterventionKindLabel(intervention.node)}</div>
+              <div className="font-mono text-[10px] text-amber-300">关联请求 · {intervention ? humanInterventionKindLabel(intervention.node) : "当前人工请求"}</div>
               <HumanRequestDetails
-                reason={intervention.reason}
-                guidance={intervention.guidance ?? null}
-                guidanceStatus={intervention.guidanceStatus ?? "loading"}
-                detailStatus={intervention.detailStatus ?? "loading"}
-                detailVersionMatches={intervention.detailVersionMatches === true}
-                detailError={intervention.detailError}
-                safetyMessage={humanInterventionSafetyMessage(intervention.node)}
-                onRetry={onRetryIntervention}
+                reason={currentPayload?.reason ?? intervention?.reason ?? ""}
+                guidance={currentPayload ? currentPayload.guidance ?? null : intervention?.guidance ?? null}
+                guidanceStatus={showCurrentRequest ? request.status === "loaded" ? currentPayload?.guidance ? "available" : "missing" : request.status : intervention?.guidanceStatus ?? "loading"}
+                detailStatus={canvasDetailFailed ? "error" : showCurrentRequest ? request.status : intervention?.detailStatus ?? "loading"}
+                detailVersionMatches={showCurrentRequest ? request.status === "loaded" && (!intervention || intervention.detailVersionMatches === true) : intervention?.detailVersionMatches === true}
+                detailError={canvasDetailFailed ? intervention.detailError : showCurrentRequest ? request.error : intervention?.detailError}
+                safetyMessage={intervention ? humanInterventionSafetyMessage(intervention.node) : null}
+                onRetry={showCurrentRequest ? retryRequest : onRetryIntervention}
               />
               <p className="mt-2 text-[10px] leading-5 text-zinc-500">
                 本消息等待投递；若运行正在等待此回复，平台核验当前权限和恢复条件后，才会重新排队。消息送达、Agent 确认和任务完成分别更新。
               </p>
             </section>
           )}
+          {targetKind === "job" && draftRequest && !waitingJob && <div className="human-message-feedback" role="alert">
+            当前运行已不再等待人工回复，暂停发送。草稿和附件已保留，不会自动作为普通运行消息发送；请核对运行状态，或显式选择其他消息目标。
+          </div>}
+          {showCurrentRequest && requestChanged && <div className="human-message-feedback" role="alert">
+            人工问题或版本已变化。草稿和附件已保留，请核对上方当前问题，确认后再发送。
+            <button type="button" disabled={busy || !request.target || Boolean(intervention?.pending && (intervention.detailStatus !== "loaded" || !intervention.detailVersionMatches))}
+              onClick={() => setDraftRequest(request.target)}>确认用此草稿回复当前问题</button>
+          </div>}
           <fieldset disabled={busy}>
             <legend>发送目标</legend>
             {!nodeEligible && (
@@ -172,7 +191,9 @@ export function HumanMessageComposer({
             <p>附件会先作为项目共享资产完整上传，再一次性引用；任一上传失败都不会发送残缺消息。</p>
           </div>
 
-          {error && <div className="human-message-feedback is-error" role="alert">{error}</div>}
+          {error && <div className="human-message-feedback is-error" role="alert">{error}
+            {showCurrentRequest && <button type="button" disabled={busy} onClick={retryRequest}>重新读取当前请求</button>}
+          </div>}
           {progress && <div className="human-message-feedback" aria-live="polite"><CheckCircle size={14} /> {progress}</div>}
         </div>
 
