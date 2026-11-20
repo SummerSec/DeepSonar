@@ -870,8 +870,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **规范要求**：日志、events、audit_logs、Evidence 和 usage ledger 不得保存 Authorization/Cookie/Provider key/Job token 或完整 prompt/completion；可见错误只能返回脱敏摘要和形状。模型请求上下文不得携带已知运行时凭据，证据层事后脱敏不能替代模型出口防护。
 - **决策来源**：审计可见性不能以复制长期秘密和客户源码为代价。
 - **实现状态**：audit_logs append-only，Gateway usage 只保存计费/workload 维度和受控计数。OM wrapper、新导出/RPC 副本及历史 Session HTTP preview/download 均在截断或发送前按 Pi header/manifest 结构脱敏；immutable archive metadata 保持不变，projection bytes/SHA/ContentDigest 单独报告。历史 HTTP 出口已有定向集成证据，本地实际镜像 RPC 与生产内容守卫另有直接证据，集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)；不推导质量或成本收益。
-- **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)、[Pi SDK context projection](../../packages/runtime-sandbox/src/pi-main-request-budget.ts)。
-- **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:authz`、`pnpm ci:unit:credential-compatibility`；人工抽查日志与 evidence。
+- **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)、[Pi SDK context projection](../../packages/runtime-sandbox/src/pi-main-request-budget.ts)、[DSH SDK context projection](../../packages/runtime-sandbox/src/dsh-request-budget.ts)、[Claude 本地准入](../../packages/runtime-sandbox/src/model-request-policy.ts)。
+- **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:authz`、`pnpm ci:unit:credential-compatibility`；人工抽查日志与 evidence。#1032 普通文本文件读取覆盖 DSH 生成前精确投影和 Claude 原字节命中的本地拒绝，新增回归接 `pnpm ci:unit:runtime-sandbox`、`pnpm ci:integration:request-budget-sdk` 与 `pnpm ci:integration:claude-request-budget`，具体范围见[出口契约](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)。最终 SHA Actions 待验，A2 不作为本轮强制验收。
 
 ### NFR-SEC-004 镜像与模块供应链
 

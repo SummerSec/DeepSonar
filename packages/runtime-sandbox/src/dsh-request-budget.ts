@@ -1,4 +1,5 @@
-import { PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
+import { PI_MAIN_REQUEST_BUDGET_SOURCE, redactPiContextSecrets } from "./pi-main-request-budget.js";
+import { stripTypeScriptTypes } from "node:module";
 
 export const DSH_REQUEST_BUDGET_PLUGIN = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/deepsonar-index.js";
 export const DSH_REQUEST_BUDGET_VENDOR_SHA256 = "1a3ae58f9b4493e15459cc5000ec80f21b5d3f4a9dea6ffb6bc28e5b8817ae8a";
@@ -8,8 +9,16 @@ export const DSH_REQUEST_BUDGET_VENDOR_SHA256 = "1a3ae58f9b4493e15459cc5000ec80f
 const shared = PI_MAIN_REQUEST_BUDGET_SOURCE
   .replace(/^import .* from '@earendil-works\/pi-ai\/compat';\n/mu, "")
   .split("export function createPiMainRequestBudgetExtension")[0];
-export const DSH_REQUEST_BUDGET_SOURCE = shared + String.raw`
+// The image installer strips raw TS while Scheduler imports compiled JS.
+// Print the shared function consistently before hashing the generated helper.
+const contextProjection = stripTypeScriptTypes(redactPiContextSecrets.toString(), { mode: "transform" });
+export const DSH_REQUEST_BUDGET_SOURCE = shared + "\n" + contextProjection + String.raw`
 let launchIdentity;
+export function redactDshContext(context, identity, env = process.env) {
+  const secrets = [identity.token, readPrivateCredential(env.DEEPSONAR_CONTROL_TOKEN_FILE, true),
+    readPrivateCredential(env.DEEPSONAR_OM_GATEWAY_TOKEN_FILE, true)].filter(Boolean);
+  return redactPiContextSecrets(context, secrets);
+}
 export function frozenDshIdentity(env = process.env) {
   if (launchIdentity) return launchIdentity;
   let identity;

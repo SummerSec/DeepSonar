@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -37,6 +37,10 @@ const server = http.createServer(async (request, response) => {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
   const body = JSON.parse(Buffer.concat(chunks));
+  for (const secret of ['synthetic-dsh-token', 'synthetic-dsh-control', 'synthetic-dsh-om']) {
+    assert.ok(!JSON.stringify(body).includes(secret), 'registered prepared/direct SDK context must exclude Job credentials');
+  }
+  assert.ok(JSON.stringify(body).includes('[REDACTED]'));
   requests.push(body);
   assert.equal(body.model, 'synthetic-model');
   assert.equal(body.stream_options.include_usage, true);
@@ -56,6 +60,10 @@ const credentialDirectory = join(credentialRoot, '.deepsonar-credentials-' + ran
 mkdirSync(credentialDirectory, { mode: 0o700 });
 process.env.DEEPSONAR_GATEWAY_TOKEN_FILE = join(credentialDirectory, 'gateway-token');
 writeFileSync(process.env.DEEPSONAR_GATEWAY_TOKEN_FILE, 'synthetic-dsh-token', { mode: 0o600 });
+process.env.DEEPSONAR_CONTROL_TOKEN_FILE = join(credentialDirectory, 'control-token');
+process.env.DEEPSONAR_OM_GATEWAY_TOKEN_FILE = join(credentialDirectory, 'om-token');
+writeFileSync(process.env.DEEPSONAR_CONTROL_TOKEN_FILE, 'synthetic-dsh-control', { mode: 0o600 });
+writeFileSync(process.env.DEEPSONAR_OM_GATEWAY_TOKEN_FILE, 'synthetic-dsh-om', { mode: 0o600 });
 process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM = baseUrl;
 const provider = { id: model.provider, name: model.provider, baseUrl, getModels: () => [model],
   auth: { apiKey: { name: 'synthetic', resolve: async ({ credential }) => ({ auth: { apiKey: credential.key }, source: 'synthetic' }) } },
@@ -69,7 +77,10 @@ try {
   await ctx.plugin(LlmRuntime).await();
   ctx.llm.registerAdapter(['synthetic'], adapter);
   const options = { provider: 'synthetic', model: 'synthetic-model', maxTokens: 128,
-    messages: [createUserMessage({ content: [{ type: 'text', text: 'synthetic input' }], source: 'user' })], tools: [] };
+    messages: [createUserMessage({ content: [{ type: 'text', text: 'synthetic input ' + [
+      process.env.DEEPSONAR_GATEWAY_TOKEN_FILE, process.env.DEEPSONAR_CONTROL_TOKEN_FILE,
+      process.env.DEEPSONAR_OM_GATEWAY_TOKEN_FILE,
+    ].map(file => readFileSync(file, 'utf8')).join(' ') }], source: 'user' })], tools: [] };
   const consume = async stream => {
     const chunks = [];
     for await (const chunk of stream) chunks.push(chunk);

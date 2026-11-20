@@ -3,7 +3,7 @@ import { privateJobFixture } from "./private-job-fixture.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -34,6 +34,42 @@ async function close(server: http.Server) {
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
+
+test("#1032 model admission refuses ordinary private-file text with zero egress and no credential echo", async () => {
+  const file = await fixture();
+  const secrets = await Promise.all(Object.values(privateAuth.environment).map(file => readFile(file, "utf8")));
+  const received: Buffer[] = [];
+  const remote = http.createServer((req, res) => { void (async () => {
+    received.push(await new Promise<Buffer>(resolve => {
+      const chunks: Buffer[] = [];
+      req.on("data", chunk => chunks.push(Buffer.from(chunk)));
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+    }));
+    res.writeHead(200, { "content-type": "application/json" }).end('{}');
+  })(); });
+  const upstream = await listen(remote);
+  const policy = await file.api.startModelRequestPolicy({ upstream: upstream + "/gateway",
+    token: secrets[0], secretValues: secrets, port: 0 });
+  const local = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}`;
+  try {
+    for (const route of ["v1/messages", "v1/messages/count_tokens"]) {
+      for (const secret of secrets) {
+        const bytes = Buffer.from(JSON.stringify({ model: "fixture", max_tokens: 8, messages: [{ role: "user",
+          content: [{ type: "tool_result", tool_use_id: "file-read", content: `ordinary tool output ${secret}` }] }] }));
+        const original = Buffer.from(bytes);
+        const response = await fetch(`${local}/gateway/${route}`, { method: "POST",
+          headers: { authorization: `Bearer ${secrets[0]}`, "content-type": "application/json" }, body: bytes });
+        const refusal = await response.text();
+        assert.equal(response.status, 400);
+        assert.equal(response.headers.get("x-should-retry"), "false");
+        assert.equal(JSON.parse(refusal).error.type, "credential_in_business_data");
+        for (const value of secrets) assert.ok(!refusal.includes(value));
+        assert.deepEqual(bytes, original);
+      }
+    }
+    assert.equal(received.length, 0, "neither allowance nor model traffic may leave after a known credential match");
+  } finally { await policy.close(); await close(remote); await file.close(); }
+});
 
 test("#1032 Claude telemetry uses only fixed local routes and preserves bytes with upstream Job authentication", async () => {
   const file = await fixture();

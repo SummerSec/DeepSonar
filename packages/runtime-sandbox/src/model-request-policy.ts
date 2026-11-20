@@ -173,10 +173,11 @@ export function prepareModelRequestBytes(bytes, route, allowance) {
   return bytes;
 }
 
-export async function startModelRequestPolicy({ upstream, token, port = 38127 }) {
+export async function startModelRequestPolicy({ upstream, token, secretValues = [], port = 38127 }) {
   const base = new URL(upstream);
   if (!['http:','https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash || !token) fail('MODEL_REQUEST_POLICY_CONFIGURATION');
   const prefix = base.pathname.replace(/\/+$/, '');
+  const secrets = [...new Set([token, ...secretValues].filter(value => typeof value === 'string' && value.length > 0))];
   const controllers = new Set();
   const server = http.createServer(async (req, res) => {
     const controller = new AbortController(); controllers.add(controller);
@@ -198,6 +199,9 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
       const telemetry = req.method === 'POST' && /^\/otel\/v1\/(logs|metrics|traces)$/.test(relative);
       if ((!presented.length && !telemetry) || presented.some(value => value !== token)) fail('MODEL_REQUEST_POLICY_AUTH', 401);
       let bytes = await collect(req);
+      // Exact ordinary-text matches only, including auxiliary count_tokens calls.
+      // Refuse before any upstream IO and never rewrite a formed request.
+      if (secrets.some(secret => bytes.includes(secret))) fail('MODEL_REQUEST_POLICY_CREDENTIAL_IN_CONTEXT', 400);
       const modelRequest = req.method === 'POST' && /^\/(?:v1\/)?(?:messages|chat\/completions|responses|completions)$/.test(route);
       if (modelRequest) {
         const allowanceSignal = AbortSignal.any([signal, AbortSignal.timeout(ALLOWANCE_TIMEOUT_MS)]);
@@ -239,18 +243,21 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
       if (res.headersSent || res.destroyed) res.destroy();
       else {
         const code = /^MODEL_REQUEST_POLICY_/.test(error.message) ? error.message : 'MODEL_REQUEST_POLICY_FAILED';
-        const hint = code === 'MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED'
+        const credentialRefusal = code === 'MODEL_REQUEST_POLICY_CREDENTIAL_IN_CONTEXT';
+        const hint = credentialRefusal
+          ? 'Job credential in body: credential_in_business_data. This request was not sent; stop this execution and inspect its credential-file output.'
+          : code === 'MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED'
           ? 'Request output or usage options do not satisfy the current budget. Configure supported CLI options before generating a new request; the formed request was not rewritten or sent.'
           : code === 'MODEL_REQUEST_POLICY_EXHAUSTED'
             ? 'The current token budget is exhausted. This request was not sent; operator action must preserve cumulative usage.' : undefined;
         // Deterministic local budget rejection is not a transient provider
         // conflict/quota response. Claude's SDK and outer loop retry 409/429;
         // both honor x-should-retry:false and render error.message, not hint.
-        const terminalBudget = hint !== undefined;
-        res.writeHead(terminalBudget ? 400 : Number.isInteger(error.status) ? error.status : 502,
-          {'content-type':'application/json', ...(terminalBudget ? {'x-should-retry':'false'} : {})});
-        res.end(JSON.stringify({error:{type:terminalBudget ? 'invalid_request_error' : 'request_admission_policy',
-          code, message:hint ? code + ': ' + hint : code, ...(hint ? {hint} : {})}}));
+        const terminalRefusal = hint !== undefined;
+        res.writeHead(terminalRefusal ? 400 : Number.isInteger(error.status) ? error.status : 502,
+          {'content-type':'application/json', ...(terminalRefusal ? {'x-should-retry':'false'} : {})});
+        res.end(JSON.stringify({error:{type:credentialRefusal ? 'credential_in_business_data' : terminalRefusal ? 'invalid_request_error' : 'request_admission_policy',
+          code, message:credentialRefusal ? hint : hint ? code + ': ' + hint : code, ...(hint ? {hint} : {})}}));
       }
     } finally { controllers.delete(controller); res.off('close',disconnected); }
   });
@@ -316,7 +323,10 @@ export async function prepareClaudeLaunch(command, environment, settings = []) {
 async function launch() {
   const delimiter = process.argv.indexOf('--');
   if (delimiter < 0 || !process.argv[delimiter + 1]) fail('MODEL_REQUEST_POLICY_COMMAND');
-  const policy = await startModelRequestPolicy({ upstream: process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: readPrivateCredential(process.env.DEEPSONAR_GATEWAY_TOKEN_FILE) });
+  const token = readPrivateCredential(process.env.DEEPSONAR_GATEWAY_TOKEN_FILE);
+  const secretValues = [token, readPrivateCredential(process.env.DEEPSONAR_CONTROL_TOKEN_FILE, true),
+    readPrivateCredential(process.env.DEEPSONAR_OM_GATEWAY_TOKEN_FILE, true)];
+  const policy = await startModelRequestPolicy({ upstream: process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token, secretValues });
   let launchCommand = process.argv.slice(delimiter+1).join(' '), launchEnv = process.env;
   if (process.argv.slice(2,delimiter).includes('--claude-launch-budget')) {
     try {

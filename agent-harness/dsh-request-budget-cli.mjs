@@ -92,6 +92,9 @@ const server = createServer(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks));
+    for (const secret of [token, 'synthetic-control-token', 'synthetic-om-token']) {
+      assert.ok(!JSON.stringify(body).includes(secret), 'ordinary private-file output reached the model request');
+    }
     assert.equal(body.model, model);
     assert.equal(body.stream_options.include_usage, true);
     const cap = body.max_tokens ?? body.max_completion_tokens;
@@ -117,11 +120,14 @@ const server = createServer(async (req, res) => {
       const name = phase === 'tools' ? 'bash' : 'subagent';
       assert.ok(body.tools.some(value => value.function.name === name));
       const args = phase === 'tools'
-        ? { command: 'printf synthetic-tool-completed', description: 'Run isolated synthetic tool' }
+        ? { command: `node -e "for (const key of ['DEEPSONAR_GATEWAY_TOKEN_FILE','DEEPSONAR_CONTROL_TOKEN_FILE','DEEPSONAR_OM_GATEWAY_TOKEN_FILE']) console.log(require('fs').readFileSync(process.env[key],'utf8')); console.log('synthetic-tool-completed')"`, description: 'Read synthetic Job credential files' }
         : { description: 'Verify governed child request', prompt: 'synthetic-child-request' };
       delta = { role: 'assistant', tool_calls: [{ index: 0, id: `synthetic-${phase}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] };
     } else {
-      if (phase === 'tools') assert.ok(body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('synthetic-tool-completed')));
+      if (phase === 'tools') {
+        assert.ok(body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('synthetic-tool-completed')));
+        assert.ok(body.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('[REDACTED]')));
+      }
       delta = { role: 'assistant', content: summary ? '## Primary Request and Intent\n- Continue synthetic verification.\n## Current Work\n- Tools completed.\n## Next Step\n- Answer the user.' : child ? 'synthetic-child-completed' : `synthetic-${phase}-completed` };
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -222,6 +228,9 @@ try {
   assert.equal(requests.filter(value => value.phase === 'tools').length, 2);
   const toolEvents = runtime.seen.filter(record => record.method === 'session.event' && record.params.event.type === 'tool/result');
   assert.ok(toolEvents.some(record => JSON.stringify(record).includes('synthetic-tool-completed')));
+  for (const secret of [token, 'synthetic-control-token', 'synthetic-om-token']) {
+    assert.ok(toolEvents.some(record => JSON.stringify(record).includes(secret)), 'native tool must actually read each synthetic private file');
+  }
   const toolMessages = runtime.seen.filter(record => record.method === 'session.event' && record.params.sessionId === 'synthetic-main-session' && record.params.event.type === 'assistant/message');
   assert.equal(toolMessages.length, 2, 'tool request and continuation must both produce assistant messages');
   toolMessages.forEach(assertUsage);
