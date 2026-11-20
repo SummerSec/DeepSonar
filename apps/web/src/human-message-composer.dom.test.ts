@@ -22,6 +22,9 @@ test("a reply saved after leaving and returning to a task cannot close its new d
   let save!: (value: Awaited<ReturnType<typeof api.createCanvasMessage>>) => void;
   const saved = new Promise<Awaited<ReturnType<typeof api.createCanvasMessage>>>(resolve => { save = resolve; });
   const createMessage = mock.method(api, "createCanvasMessage", () => saved);
+  let loadRequest!: (value: Awaited<ReturnType<typeof api.job>>) => void;
+  const requestLoaded = new Promise<Awaited<ReturnType<typeof api.job>>>(resolve => { loadRequest = resolve; });
+  const readJob = mock.method(api, "job", () => requestLoaded);
   const target = { id: "node-a", job_id: "job-a", node_type: "job", status: "running", title: "运行 A", body_json: {} } as CanvasNode;
   let oldCallback = 0;
   let newCallback = 0;
@@ -94,13 +97,30 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     store.refresh("canvas-a", [...preview].reverse(), selected);
     renderWaiting(currentItem());
     assert.match(container.textContent ?? "", /完整问题 human-0/);
-    assert.equal(sendDisabled(), false, "the pinned thirteenth request is verified after preview reordering");
+    assert.equal(sendDisabled(), true, "canvas detail alone cannot authorize a durable request reply");
+    await act(async () => {
+      loadRequest({
+        job: { id: "job-0", canvas_id: "canvas-a", status: "waiting_human" },
+        human_request: { event_id: "request-a", current: true, payload: { reason: "当前持久请求的完整问题" } },
+        human_continuation: { id: "request-a", revision: 3, status: "open" },
+      } as Awaited<ReturnType<typeof api.job>>);
+      await requestLoaded;
+    });
+    assert.match(container.textContent ?? "", /当前持久请求的完整问题/);
+    assert.equal(sendDisabled(), false, "the current request and revision are loaded before sending");
     renderWaiting({ ...currentItem(), detailVersionMatches: false });
     assert.equal(sendDisabled(), true, "a changed request version disables the existing draft");
     assert.equal(createMessage.mock.callCount(), 2, "guarded drafts never reach the message API");
+    renderWaiting(currentItem());
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[2].arguments[1].target, {
+      kind: "request", request_id: "request-a", expected_revision: 3,
+    }, "waiting_human replies must carry the durable request identity, not a generic Job target");
+    assert.equal(createMessage.mock.calls[2].arguments[1].body, "第十三条请求的草稿");
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();
+    readJob.mock.restore();
     dom.window.close();
     for (const [key, descriptor] of previous) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
