@@ -162,7 +162,11 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.match(deploySh, /network connect bridge/);
   assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18081/);
   assert.match(overlay, /condition: service_healthy/);
-  assert.match(overlay, /127\.0\.0\.1:8080\/health/);
+  // #1046 P1-4：overlay 的 healthcheck 改为带鉴权的管理面 List 探针（脚本只读挂载），
+  // 不再用 /health 作为就绪条件。/health 仍是存活信号，不参与 compose readiness。
+  assert.match(overlay, /\/etc\/opensandbox\/readiness-probe\.py/);
+  assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
+  assert.doesNotMatch(overlay, /8080\/health/);
   assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
   // #685: business network only; the managed proxy reaches Scheduler over the
   // gateway_upstream socket volume. Full topology lint: compose-network-topology.test.ts.
@@ -284,7 +288,10 @@ test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema"
   assert.match(k8sCompose, /OPEN_SANDBOX_KUBECONFIG/);
   assert.match(k8sCompose, /OPEN_SANDBOX_KUBERNETES=1/);
   assert.match(k8sCompose, /deepsonar-opensandbox-k8s/);
-  assert.match(k8sCompose, /127\.0\.0\.1:18084\/health/);
+  // #1046 P1-4：k8s 服务的 healthcheck 同样改为带鉴权管理面 List（外置集群端口 18084）。
+  assert.match(k8sCompose, /OPENSANDBOX_PROBE_PORT: "18084"/);
+  assert.match(k8sCompose, /\/etc\/opensandbox\/readiness-probe\.py/);
+  assert.doesNotMatch(k8sCompose, /18084\/health/);
   assert.doesNotMatch(k8sCompose, /docker\.sock|:latest/);
   assert.doesNotMatch(k8sCompose, /container_name: deepsonar-opensandbox$/m);
   const assetsPoc = readFileSync(join(root, "packages/runtime-sandbox/poc/opensandbox-k8s-assets-poc.ts"), "utf8");
