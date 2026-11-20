@@ -52,7 +52,7 @@ export interface UsageTaskRow extends Pick<UsageTokenTotals, keyof UsageTokenCou
   project_name: string;
 }
 
-export interface UsageModelRow extends UsageTokenCounts {
+export interface UsageModelRow extends UsageTokenCounts, Pick<UsageTokenTotals, "settled" | "unknown" | "not_reported"> {
   provider: string;
   model: string;
   workload: UsageWorkload;
@@ -83,6 +83,7 @@ export interface DashboardUsage {
   projects: UsageProjectRow[];
   tasks: UsageTaskRow[];
   models: UsageModelRow[];
+  unconfirmed_models: UsageModelRow[];
 }
 
 export interface UsageLedgerRow {
@@ -333,8 +334,14 @@ export function buildDashboardUsage(input: {
       model: row.model || "—",
       workload,
       ...emptyTokenCounts(),
+      settled: 0,
+      unknown: 0,
+      not_reported: 0,
     };
     addTokens(model, row);
+    if (row.settlement_status === "unknown") model.unknown += 1;
+    else if (row.settlement_status === "not_reported") model.not_reported += 1;
+    else model.settled += 1;
     models.set(modelKey, model);
   }
 
@@ -367,6 +374,15 @@ export function buildDashboardUsage(input: {
     projects: rankByTotal([...projects.values()]).slice(0, USAGE_TOP_N).map(({ jobIds: _jobs, taskIds: _tasks, ...row }) => row),
     tasks: rankByTotal([...tasks.values()]).slice(0, USAGE_TOP_N).map(({ jobIds: _jobs, ...row }) => row),
     models: rankByTotal([...models.values()]).slice(0, USAGE_TOP_N),
+    unconfirmed_models: [...models.values()]
+      .filter((model) => model.unknown + model.not_reported > 0)
+      .sort((left, right) => {
+        const leftKey = JSON.stringify([left.workload, left.provider, left.model]);
+        const rightKey = JSON.stringify([right.workload, right.provider, right.model]);
+        return right.unknown + right.not_reported - left.unknown - left.not_reported
+          || right.requests - left.requests || leftKey.localeCompare(rightKey);
+      })
+      .slice(0, USAGE_TOP_N),
   };
 }
 

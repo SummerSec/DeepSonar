@@ -5,7 +5,7 @@
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
 > 同步日期：2026-11-19
 
-#1082 的[最终用量与安全形态诊断](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，历史根因及诊断看板仍未交付。
+#1082 的[最终用量与安全形态诊断](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
 
 NFR-REL-001 的[行锁竞争认领唤醒](06-runtime-view.md#行锁竞争后的认领唤醒)合并 `SKIP LOCKED` 后的延后重试，保留默认轮询关闭与所有资格门；真实 PostgreSQL 红测已复现，修复后的最终 SHA Actions 另验，历史 CI 的具体持锁时序仍未证实。
 > #1074 的[人工断点续做](../HUMAN_CONTINUATION.md)与[ADR 0022](adr/0022-human-continuation.md)扩展 FR-JOB-008/FR-CTRL-006；schema 73、超时 overdue、有限封存回收和晚回复受治理续做已接线，最终 SHA Actions 另验。

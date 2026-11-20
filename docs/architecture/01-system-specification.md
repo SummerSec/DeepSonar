@@ -705,6 +705,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### FR-CRED-003 Model Gateway 唯一出口
 
+#1082 的模型用量看板按 Provider、模型与 workload 独立呈现已结算、未上报、待对账请求数，单列未确认请求最多的 8 项以覆盖零 Token 模型。现有账本权限和时间过滤沿用，聚合/Web 回归接 `pnpm ci:unit:dashboard-overview`，最终 SHA Actions 待验。
+
 #1082 的[保守最终用量确认](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)继续要求 Anthropic 有效累计 usage delta 和 stop，任何 Provider 的 start-only 均不确认为 settled。缺省 usage delta 不产生新证据，真实 HTTP/PG main/OM 回归接 `pnpm ci:integration:platform-api`，scanner 单测接 `pnpm ci:unit:executor-real`，最终 SHA Actions 待验。
 
 - **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则准入，不得把长期 Provider key 注入 Sandbox。放行后保持业务请求/响应原始字节与端到端头；仅处理认证、绑定目标和必要 HTTP 边界，不隐式重试/重定向或静默改写模型/输出参数。
