@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
-import { api, type CanvasNode } from "./api.js";
+import { api, type CanvasNode, type CreateCanvasHumanMessage } from "./api.js";
 import { listHumanInterventions, openHumanInterventionForJob } from "./human-messages.js";
 import { HumanInterventionDetailStore, mergeHumanInterventionDetails } from "./human-intervention-details.js";
 
@@ -21,7 +21,7 @@ test("a reply saved after leaving and returning to a task cannot close its new d
   const root = createRoot(container);
   let save!: (value: Awaited<ReturnType<typeof api.createCanvasMessage>>) => void;
   const saved = new Promise<Awaited<ReturnType<typeof api.createCanvasMessage>>>(resolve => { save = resolve; });
-  const createMessage = mock.method(api, "createCanvasMessage", () => saved);
+  const createMessage = mock.method(api, "createCanvasMessage", (_canvasId: string, _message: CreateCanvasHumanMessage) => saved);
   let loadRequest!: (value: Awaited<ReturnType<typeof api.job>>) => void;
   const requestLoaded = new Promise<Awaited<ReturnType<typeof api.job>>>(resolve => { loadRequest = resolve; });
   let requestResult = requestLoaded;
