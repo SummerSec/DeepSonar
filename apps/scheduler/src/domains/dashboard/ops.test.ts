@@ -120,3 +120,9 @@ test("duration ignores Jobs that never started, and confirmed_vuln is not open h
   assert.ok(body.jobs.failure_reasons.some((item) => item.key === "timeout"));
   assert.ok(body.jobs.failure_reasons.some((item) => item.key === "cancelled"));
 });
+
+test("unlimited global quota has no utilization denominator", () => {
+  const result = ops({ globalCap: null });
+  assert.equal(result.jobs.concurrency.global_cap, null);
+  assert.equal(result.jobs.concurrency.utilization, null);
+});

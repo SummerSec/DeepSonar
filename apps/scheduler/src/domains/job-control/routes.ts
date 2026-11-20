@@ -1,3 +1,4 @@
+import { observe } from "../../metrics.js";
 import { readCompletionExecutionState } from "../platform-api/completion-state.js";
 import { withWaitingExecutionStates } from "./list-execution-state.js";
 import { readHumanContinuation } from "./human-continuation-store.js";
@@ -41,6 +42,7 @@ import { projectJobProviderFields, projectJobSnapshot } from "../credential/proj
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { projectContextDiagnostics } from "../context/index.js";
 import { readProvisionFailureEvidence } from "../../provision-failure-evidence.js";
+import { readRuntimeProcessEvidence } from "../../runtime-process-evidence.js";
 import {
   JOB_NOT_CANCELLABLE,
   JOB_NOT_RESUMABLE,
@@ -281,7 +283,9 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "invalid jobs cursor", error_code: "INVALID_CURSOR" });
     }
     const limit = paginated ? pageLimit(q.limit) : 200;
-    const rows = await sql<Array<Record<string, unknown> & { id: string; status: string }>>`
+    const queryStartedAt = performance.now();
+    let queryResult: "success" | "error" = "success";
+    const rows = await (async () => sql<Array<Record<string, unknown> & { id: string; status: string }>>`
       SELECT j.id, j.project_id, j.canvas_id, j.type, j.status, j.priority, j.error,
              j.started_at, j.finished_at, j.created_at,
              p.name AS project_name, c.title AS canvas_title,
@@ -301,7 +305,19 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
           OR j.created_at < ${cursor?.created_at ?? null}::timestamptz
           OR (j.created_at = ${cursor?.created_at ?? null}::timestamptz AND j.id < ${cursor?.id ?? null}::uuid))
       ORDER BY j.created_at DESC, j.id DESC
-      LIMIT ${paginated ? limit + 1 : limit}`;
+      LIMIT ${paginated ? limit + 1 : limit}`)()
+      .catch((error: unknown) => {
+        queryResult = "error";
+        throw error;
+      })
+      .finally(() => {
+        // #1136：只记 SQL 段；失败也记（否则最慢的失败样本会从分位数里消失），异常照常透传
+        observe("deepsonar_api_list_query_seconds", (performance.now() - queryStartedAt) / 1000, {
+          endpoint: "jobs",
+          paginated: paginated ? "yes" : "no",
+          result: queryResult,
+        });
+      });
     const items = await withWaitingExecutionStates(rows.slice(0, limit), id => readCompletionExecutionState(sql, id))
       .then(items => items.map(row => projectJobProviderFields(row as Record<string, unknown>)));
     if (!paginated) return items;
@@ -562,6 +578,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       findings,
       attempts,
       provision_diagnostics: provisionDiagnostics,
+      process_diagnostics: await readRuntimeProcessEvidence(sql, String(job.id), String(job.project_id)),
       effects,
       broadcasts,
       usage,

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { findPowerShell as firstPwsh, spawnPowerShellSync } from "./powershell-test-host.mjs";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -137,6 +137,15 @@ for (const kind of Object.keys(RUNNERS)) {
     assert.doesNotMatch(env, /^DEEPSONAR_IMAGE_TAG=/m);
     for (const ref of Object.values(REFS)) assert.ok(env.includes(ref), `missing ${ref}`);
     assert.ok(r.out.includes(REFS.DEEPSONAR_SCHEDULER_IMAGE), r.out);
+    const seedDir = join(copy.dir, "bootstrap-admin");
+    const seedFile = join(seedDir, "password");
+    const proof = readFileSync(seedFile, "utf8").trim();
+    assert.ok(/^[0-9a-f]{64}$/.test(proof), "first deployment must generate a strong file-only seed");
+    assert.equal(statSync(seedDir).mode & 0o077, 0, "the seed directory must not be group/world-accessible");
+    assert.ok(!r.out.includes(proof) && !env.includes(proof), "never print the seed or put it in .env");
+    const again = run(kind, copy, ["check", "fake"]);
+    assert.equal(again.status, 0, again.out);
+    assert.ok(readFileSync(seedFile, "utf8").trim() === proof, "redeployment must not replace the seed");
   });
 
   scenario(kind, "pull fetches exactly the three digest refs, never a platform tag", (copy) => {
@@ -145,6 +154,7 @@ for (const kind of Object.keys(RUNNERS)) {
     assert.equal(r.status, 0, r.out);
     const platformPulls = r.pulls.filter((ref) => /deepsonar-(?:scheduler|web|image-admission)\b/.test(ref));
     assert.deepEqual(platformPulls, Object.values(REFS));
+    assert.equal(existsSync(join(copy.dir, "bootstrap-admin", "password")), false, "existing configuration needs no new seed");
     assert.ok(r.pulls.includes(`registry.example/summersec/deepsonar-silo:${VERSION}`), r.pulls.join("\n"));
   });
 

@@ -1,7 +1,7 @@
 # OpenSandbox 1.2 upgrade and recovery boundaries
 
 > 状态：**源码升级、受管资源声明预检与 provision 失败诊断已接线；当前组合待最终 SHA Actions**。历史验收、逐容器执行、远端/live/native 证据分别保留，不推导现场因果。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 
 Verification baseline: the 2026-11-01 integration worktree, not a released or native-validated deployment. This updates [IR-001](architecture/01-system-specification.md#ir-001-scheduler-runtime-adapter-与-model-gateway) and [IR-003](architecture/01-system-specification.md#ir-003-opensandbox-与-worker-node) without changing Scheduler recovery or execution authority; see [runtime](architecture/06-runtime-view.md), [deployment](architecture/07-deployment-view.md) and [security](architecture/10-security-and-trust-boundaries.md).
 
@@ -10,6 +10,8 @@ Independent SDK provenance (historical): sibling worktree `DeepSonar-opensandbox
 ## 创建熔断与鉴权管理探测（#1119 / #1046）
 
 Dispatcher 在真实 provision 的失败出口独立记录服务故障。受控诊断中的 `stage=create`、未取消的 HTTP 5xx，以及 `Failed to create directory /opt/opensandbox in sandbox: 500 ...` 错误形状会计入现有 create 熔断。目录故障和结构化服务故障分别投影为固定码 `SANDBOX_CREATE_DIRECTORY_FAILED`、`SANDBOX_CREATE_SERVER_ERROR`，状态、指标与暂停日志只保存固定分类。窗口阈值、冷却和 claim 时绑定的 canary/episode 沿用现有实现。
+
+核对固定 main `de13b9f7709547e392c9fbcaf274c05b856b1b5d` 后，半开恢复由观察到半开的进程在 claim 数据库锁内按全部 claimed/provisioning 工作计数，独立限制一个创建名额，全局配额不限时仍生效。出站创建前再次核验 episode，过期准入使用 `provision_admission_deferred` 重新等待，并保留原效果的 `never_started` 证明及真实创建失败重试额度。当前 episode 的成功探针才关闭熔断，失败探针重新打开。进程内状态的多副本与重启边界见[运行时视图](architecture/06-runtime-view.md#默认不限的调度配额1123)。本次目录 500 回归还核对单名额、失败后及下一轮半开的旧 episode 出站拒绝，最终整合 SHA 的 Actions 待验。
 
 熔断计数与重放权限分别判断。无会话、无句柄和 HTTP 500 均不构成无副作用证明。调用过 runner 的不确定结果继续记 `unknown`，自动重试仍要求当前 owner 和原有的显式 `never_started` / `external_effect=false` 证据。取消和普通配置错误不进入新增服务故障分类。
 

@@ -12,6 +12,7 @@ import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
 import { DEFAULT_EFFECT_RECONCILE_LIMIT, startEffectReconcileLoop } from "./effect-reconcile-loop.js";
 import { reconcileHumanWaitRuns } from "./dispatcher-human-wait.js";
+import { reconcileObservedRuntimeCleanup } from "./runtime-process-cleanup.js";
 import { pumpHumanContinuations } from "./domains/job-control/human-continuation-pump.js";
 import { runner } from "./runtime.js";
 import { registerRoutes } from "./routes.js";
@@ -35,7 +36,7 @@ import { dispatcherRuntimeStatus, markDispatcherEnabled } from "./startup-status
 import { normalizePendingJobPriorities, scrubLeftoverStoredRules, scrubRedundantConfigSurface } from "./core.js";
 import { scrubIgnoredProjectRoleConfigIdentity } from "./domains/role-runtime-snapshot/index.js";
 import { normalizePendingVerificationRounds } from "./verify.js";
-import { ensureDefaultAdmin } from "./users.js";
+import { ensureBootstrapAdmin } from "./users.js";
 import { refreshHostDiskPressure, startHostDiskMonitor } from "./host-disk.js";
 import { startRuntimeImageGc } from "./runtime-image-gc.js";
 import { seedLocalWorkerNode } from "./domains/worker-nodes/index.js";
@@ -111,12 +112,12 @@ async function main() {
   });
   await maintenance.refresh();
   if (!maintenance.identityMatches()) throw new Error("platform upgrade state does not authorize this runtime");
+  const bootstrapAdmin = await ensureBootstrapAdmin();
+  if (bootstrapAdmin.created) console.log("[boot] 已通过部署秘密初始化管理员账号");
   const localWorker = await seedLocalWorkerNode();
   if (localWorker) {
     console.log(`[boot] execution-plane local worker ${localWorker.id} @ ${localWorker.endpoint}`);
   }
-  const defaultAdmin = await ensureDefaultAdmin();
-  if (defaultAdmin.created) console.log("[boot] 已创建默认管理员账号（首次登录后请立即修改账号与密码）");
   const scrubbed = await scrubIgnoredProjectRoleConfigIdentity(sql);
   if (scrubbed.runtime_image_keys > 0 || scrubbed.inherit_global_models > 0) {
     console.warn(
@@ -157,6 +158,7 @@ async function main() {
     db: sql as unknown as Parameters<typeof startEffectReconcileLoop>[0]["db"],
     humanWaitReconcile: async () => {
       if (!humanWaitCleanupReady) return;
+      await reconcileObservedRuntimeCleanup(sql, runner, 4);
       const result = await reconcileHumanWaitRuns(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT, humanWaitCleanupCursor);
       humanWaitCleanupCursor = result.nextJobId;
       await pumpHumanContinuations();

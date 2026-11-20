@@ -21,6 +21,7 @@ REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 ENV_FILE="$SCRIPT_DIR/.env"
 ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
 MASTER_KEY_FILE="$SCRIPT_DIR/master.key"
+BOOTSTRAP_ADMIN_DIR="$SCRIPT_DIR/bootstrap-admin"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.prod.yml"
 REAL_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.real.yml"
 OPENSANDBOX_COMPOSE_FILE="$SCRIPT_DIR/docker-compose.opensandbox.prod.yml"
@@ -135,6 +136,10 @@ ensure_env_secret() {
 }
 
 if [ ! -f "$ENV_FILE" ]; then
+  # New control-plane configuration only. Never replace a provided seed.
+  if [ "$MODE" != "worker-join" ] && [ ! -e "$BOOTSTRAP_ADMIN_DIR" ] && [ ! -L "$BOOTSTRAP_ADMIN_DIR" ]; then
+    (umask 077; mkdir "$BOOTSTRAP_ADMIN_DIR"; set -C; random_hex 32 > "$BOOTSTRAP_ADMIN_DIR/password")
+  fi
   cp "$ENV_EXAMPLE" "$ENV_FILE"
   db_secret=$(random_hex 16)
   admin_secret="deepsonar_bootstrap_$(random_hex 32)"
@@ -508,7 +513,7 @@ case "$ACTION" in
       print_platform_images
     fi
     echo "[deploy] 管理员引导 Token 保存在 deploy/.env 的 DEEPSONAR_ADMIN_TOKEN，请勿提交该文件。"
-    echo "[deploy] 人类默认管理员：admin / Deep@Sonar66；生产首次登录后必须立即修改密码并建议修改登录名。"
+    echo "[deploy] 空库首次登录使用部署密码文件 deploy/bootstrap-admin/password；已有用户不受影响。"
     if [ "$MODE" = "fake" ]; then
       echo "[deploy] 当前为 fake 模式（仅状态机）；真实沙箱请使用：./deploy/deploy.sh up real"
     else

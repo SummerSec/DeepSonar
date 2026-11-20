@@ -85,7 +85,10 @@ test("source contract: opaque started failure stays unknown; retry requires curr
   assert.match(retry, /owner\.latest_attempt_id !== attempt\.id/);
   assert.match(retry, /typeof current\.id !== "string" \|\| current\.id !== attempt\.id/);
   assert.match(retry, /COALESCE\(settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb, false\)/);
-  assert.match(source, /if \(!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure\(e\)\)/);
+  assert.match(source, /if \(!provisionAttempted && !handle && attemptId && activeAttempt &&\s*\(isRetryableProvisionFailure\(e\) \|\| e instanceof OpenSandboxCreateAdmissionExpiredError\)\)/);
+  const outboundFence = source.indexOf('if (provider === "opensandbox") assertOpenSandboxCreateAdmission(createProbe)');
+  assert.ok(outboundFence > source.indexOf("await sharedAssetsPreparation?.assertCurrent()"));
+  assert.ok(outboundFence < source.indexOf("provisionAttempted = true"));
   // Behavioral proof is in shared-asset-lifecycle.integration.test.ts, not these source assertions.
 });
 

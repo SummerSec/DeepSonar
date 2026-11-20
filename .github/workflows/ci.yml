@@ -828,6 +828,11 @@ jobs:
         run: pnpm ci:smoke:runtime-policy
       - name: Scheduler convergence regression
         run: pnpm ci:smoke:convergence
+      - name: Provision an ephemeral human admin fixture
+        run: |
+          umask 077
+          openssl rand -hex 32 > "$RUNNER_TEMP/deepsonar-bootstrap-admin"
+          echo "DEEPSONAR_BOOTSTRAP_ADMIN_PASSWORD_FILE=$RUNNER_TEMP/deepsonar-bootstrap-admin" >> "$GITHUB_ENV"
       - name: Start scheduler (fake, no auth)
         env:
           AGENT_MODE: fake

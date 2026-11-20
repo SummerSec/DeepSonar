@@ -38,8 +38,8 @@ function fakeConnection(rows: Row[]) {
 
 test("the loop settles provable effects without any operator action", async () => {
   const { db, statements, unsettled } = fakeConnection([
-    { id: "11111111-1111-1111-1111-111111111111", effect_kind: "agent_run", attempt_status: "failed",
-      sandbox_id: null, usage_rows: 0, canvas_node_id: null },
+    { id: "11111111-1111-1111-1111-111111111111", effect_kind: "canvas_delivery", attempt_status: "failed",
+      sandbox_id: null, usage_rows: 0, canvas_node_id: "delivered-node" },
   ]);
   const results: Array<{ applied: number; remaining: number }> = [];
   const loop = startEffectReconcileLoop({
@@ -53,7 +53,7 @@ test("the loop settles provable effects without any operator action", async () =
     const result = await loop.runOnce();
     assert.ok(result, "one pass must run");
     assert.equal(result.action, "apply");
-    assert.equal(result.applied, 1, "a terminal attempt makes agent_run provable");
+    assert.equal(result.applied, 1, "the recorded delivery proves the canvas effect");
     assert.ok(statements.some((text) => text.includes("reconcile_operation_id")), "the settlement is auditable");
     assert.ok(statements.some((text) => text.includes("runtime-reconcile:test:1")), "runtime operations are distinguishable");
   } finally {

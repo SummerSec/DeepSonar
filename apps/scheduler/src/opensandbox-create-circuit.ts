@@ -10,10 +10,11 @@
  * This process-local circuit observes the failures the dispatcher itself sees on the
  * provision path. Trip -> new opensandbox claims pause (retry attempts land back in
  * `pending` through the existing retry lifecycle and simply are not claimed). After a
- * cooldown half-open canary claims are admitted until a provision outcome arrives,
- * bounded by the existing provisioning concurrency cap. A successful canary in the
- * current episode closes the circuit; a failed canary reopens it. No new server
- * endpoint, config knob or persisted state is introduced; counts live in this process.
+ * cooldown the dispatcher admits one half-open creation seat under its DB claim
+ * lock, including when ordinary quotas are unlimited. It rechecks the episode before
+ * outbound creation and defers expired admissions through the no-start lifecycle.
+ * A successful canary in the current episode closes the circuit; a failed canary
+ * reopens it. Counts and episodes live in this process.
  *
  * State and logs carry only a fixed failure code (`classifyProvisionFailure`), never the
  * dispatcher error text: that text can contain provider bodies, headers or a credential.
@@ -27,7 +28,7 @@ export const OPENSANDBOX_CREATE_CIRCUIT_OPEN = "opensandbox_create_circuit_open"
 export const CREATE_CIRCUIT_FAILURES_TO_TRIP = 2;
 /** Sliding window for the failure count (ms). */
 export const CREATE_CIRCUIT_WINDOW_MS = 5 * 60 * 1000;
-/** Minimum time to stay open before admitting half-open canary claims (ms). */
+/** Minimum time to stay open before admitting a half-open creation probe (ms). */
 export const CREATE_CIRCUIT_COOLDOWN_MS = 90 * 1000;
 
 export type OpenSandboxCreateCircuitState = "closed" | "open" | "half_open";
@@ -43,6 +44,23 @@ export type CreateCircuitProbe = { canary: boolean; episode: number | null };
 /** Bind an admission result to the probe identity it must be attributed with. */
 export function createCircuitProbeFor(admission: { canary: boolean; episode: number | null }): CreateCircuitProbe | null {
   return admission.canary ? { canary: true, episode: admission.episode } : null;
+}
+
+/** A process observing half-open counts all DB claimed/provisioning work. */
+export function createCircuitClaimSlots(probe: CreateCircuitProbe | null, activeProvisioning: number): number {
+  return probe?.canary ? Math.max(0, 1 - activeProvisioning) : Number.POSITIVE_INFINITY;
+}
+
+export class OpenSandboxCreateAdmissionExpiredError extends Error {
+  readonly code = OPENSANDBOX_CREATE_CIRCUIT_OPEN;
+  constructor() { super(`${OPENSANDBOX_CREATE_CIRCUIT_OPEN}: create admission expired before outbound`); }
+}
+
+/** Synchronous fence immediately before invoking the external create path. */
+export function assertOpenSandboxCreateAdmission(probe: CreateCircuitProbe | null): void {
+  if (state === "closed") return;
+  if (state === "half_open" && probe?.canary && probe.episode === episode) return;
+  throw new OpenSandboxCreateAdmissionExpiredError();
 }
 
 export type OpenSandboxCreateCircuitStatus = {
@@ -85,9 +103,8 @@ export function openSandboxCreateCircuitAllowsClaim(
   status: OpenSandboxCreateCircuitStatus = openSandboxCreateCircuitStatus(),
 ): { allowed: boolean; canary: boolean; episode: number | null } {
   if (status.state === "closed") return { allowed: true, canary: false, episode: null };
-  // Half-open admits claims as canaries until a provision outcome arrives. No seat is
-  // reserved here: an admitted claim that finds no pending Job must not deadlock the
-  // gate, and the existing provisioning concurrency cap bounds concurrent canaries.
+  // No seat is reserved before finding work. The dispatcher enforces a separate
+  // single creation seat under its DB advisory lock, including unlimited quotas.
   if (status.state === "half_open") return { allowed: true, canary: true, episode };
   const openedAt = openedAtMs;
   if (openedAt != null && clock() - openedAt >= CREATE_CIRCUIT_COOLDOWN_MS) {

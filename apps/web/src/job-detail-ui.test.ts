@@ -2,11 +2,26 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { RuntimeProcessEvidenceView } from "./RuntimeProcessEvidence";
 
 const sourceRoot = path.resolve(import.meta.dirname);
 const panel = readFileSync(path.join(sourceRoot, "JobDetailPanel.tsx"), "utf8");
 const workspace = readFileSync(path.join(sourceRoot, "LiveTerminalWorkspace.tsx"), "utf8");
 const markdown = readFileSync(path.join(sourceRoot, "MarkdownView.tsx"), "utf8");
+
+test("process cleanup evidence renders distinct results and the recovery boundary", () => {
+  const html = renderToStaticMarkup(createElement(RuntimeProcessEvidenceView, { rows: [{
+    audit_id: "1", observed_at: "2026-11-19T00:00:00.000Z", observation: {
+      attempt_id: "attempt", sandbox_id: "sandbox", process_id: "process", termination: "host_kill",
+      host_kill_caller: "terminal_result", exit_code: null, cleanup: { outcome: "http_error", http_status: 503 },
+    }, sandbox_cleanup: { outcome: "timeout", automatic_recovery: "not_delivered" },
+  }] }));
+  assert.match(html, /正常结果收尾/); assert.match(html, /HTTP 拒绝/); assert.match(html, /503/);
+  assert.match(html, /超时，结果未知/); assert.match(html, /自动恢复整个任务尚未交付/);
+  assert.match(panel, /RuntimeProcessEvidenceView rows=\{detail.process_diagnostics\}/);
+});
 
 test("job detail Escape closes the drawer but defers to a nested confirmation", () => {
   assert.match(panel, /event\.key !== "Escape" \|\| event\.defaultPrevented/);
@@ -80,10 +95,10 @@ test("运行详情把错误投影为 RepairFeedback，未知效果不提供无�
   assert.match(panel, /RepairFeedbackPanel/);
   assert.match(panel, /projectJobActions/);
   assert.match(panel, /allowJobRetry/);
-  assert.match(panel, /unknown_external_effect/);
+  assert.match(panel, /terminalAllowed && detail\?\.job\.execution_state/);
   assert.match(panel, /repairRecoveryActions/);
   assert.match(panel, /recoveryActions=\{repairRecoveryActions\}/);
-  assert.match(panel, /确认后 · 旧快照重跑/);
+  assert.match(panel, /使用原配置重新执行/);
   assert.match(panel, /RESUMABLE\.has\(detail\.job\.status\) && allowJobRetry/);
 });
 
