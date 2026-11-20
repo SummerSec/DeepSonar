@@ -1,6 +1,16 @@
 import { PI_MAIN_REQUEST_BUDGET_SOURCE, redactPiContextSecrets } from "./pi-main-request-budget.js";
 import { stripTypeScriptTypes } from "node:module";
 
+// CI and runtime images use Node 24, whose transform API is absent from @types/node 26.
+// https://nodejs.org/download/release/v24.22.2/docs/api/module.html#modulestriptypescripttypescode-options
+declare module "node:module" {
+  function stripTypeScriptTypes(code: string, options: {
+    mode: "transform";
+    sourceMap?: boolean;
+    sourceUrl?: string;
+  }): string;
+}
+
 export const DSH_REQUEST_BUDGET_PLUGIN = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/deepsonar-index.js";
 export const DSH_REQUEST_BUDGET_VENDOR_SHA256 = "1a3ae58f9b4493e15459cc5000ec80f21b5d3f4a9dea6ffb6bc28e5b8817ae8a";
 

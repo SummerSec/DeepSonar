@@ -11,6 +11,21 @@ import { runInNewContext } from "node:vm";
 import { DSH_REQUEST_BUDGET_SOURCE, DSH_REQUEST_BUDGET_VENDOR_SHA256 } from "./dsh-request-budget.js";
 import { DSH_REQUEST_BUDGET_ARTIFACT_SHA256, DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
 
+test("pinned Node 24 canonical printing accepts transform and rejects invalid API options", () => {
+  const source = "function project<T>(value: T): T { return value; }";
+  const canonical = stripTypeScriptTypes(source, { mode: "transform" });
+  assert.equal(canonical, stripTypeScriptTypes(stripTypeScriptTypes(source), { mode: "transform" }));
+  assert.doesNotMatch(canonical, /<T>|: T/u);
+  assert.throws(() => {
+    // @ts-expect-error Node 24 permits only strip and transform modes.
+    stripTypeScriptTypes(source, { mode: "invalid" });
+  }, { code: "ERR_INVALID_ARG_VALUE" });
+  assert.throws(() => {
+    // @ts-expect-error Node 24 permits source maps only in transform mode.
+    stripTypeScriptTypes(source, { mode: "strip", sourceMap: true });
+  }, { code: "ERR_INVALID_ARG_VALUE" });
+});
+
 test("DSH image preflight rejects old, incomplete and mismatched governed plugin content", () => {
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
   const root = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai";
