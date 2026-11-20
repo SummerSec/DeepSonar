@@ -29,8 +29,6 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 #1082 未确认用量诊断沿用 `audit_logs.after_json`。宿主绑定 Job/Attempt/token/effect，固定形态及形态哈希总计最多 2 KiB，权限复用原审计入口。诊断与账本独立、尽力写入，不作为用量证明或重试授权，数据边界见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)。最终 SHA Actions 待验。
 
-[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v75 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
-
 [`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v77 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
 
