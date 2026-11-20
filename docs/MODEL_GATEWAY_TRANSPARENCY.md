@@ -1,7 +1,7 @@
 # Model Gateway 透明传输（#923）
 
 > 状态：as-built；#928 已合入 main 616d7a36，工程证据见下文；后续 SHA 另验，不代表真实模型、生产或性能验收。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-20
 
 ## Managed proxy 的逐跳连接策略（#1097）
 
@@ -175,6 +175,19 @@ Reverse 工作流将 Claude、Pi/OM 和 Reverse/REA 分为三个独立原生双�
 
 Pi 使用 auth store，models.json 不含 key 或环境占位符。Claude 使用镜像内固定 apiKeyHelper，start/resume 生成的同一份 `--settings` 始终携带可信 helper，有限额度时再携带数值输出上限，避免重复参数覆盖认证配置。OTLP 仅可通过当前 Job loopback 的固定 POST telemetry 路由补充认证。DSH 使用官方 CredentialProvider / credentials.resolve 服务，引用固定 Job credential，核对冻结 provider，插件或文件缺失即拒绝。helper 与插件纳入镜像内容守卫。
 
-现行 P0-1 在 Pi 主 SDK 与 OM SDK 调用前，对已登记秘密值做精确替换，覆盖工具结果、认证文件内容和错误文本，原 Session 与认证参数保持各自用途。此覆盖不能推定为 Claude / DSH 所有模型上下文出口均已脱敏。P1-3 已有 `credential-refusal.ts` 分类和 dispatcher 不可重试分支。P1-4 的五种拒绝已由 `gateway.ts` 记录 `gateway.credential_denied`，仅固定 surface、已核验资源 ID 和稳定错误码，相关 SQL/HTTP 回归位于 gateway-transparent.integration.test.ts。
+现行 P0-1 在 Pi 主 SDK 与 OM SDK 调用前，对已登记秘密值做精确替换，覆盖工具结果、认证文件内容和错误文本，原 Session 与认证参数保持各自用途。DSH 注册后的 SDK 出口和 Claude 本地准入的普通文本保护见下节，具体出口与未覆盖输入分别记录。P1-3 已有 `credential-refusal.ts` 分类和 dispatcher 不可重试分支。P1-4 的五种 Gateway 拒绝已由 `gateway.ts` 记录 `gateway.credential_denied`，仅固定 surface、已核验资源 ID 和稳定错误码，相关 SQL/HTTP 回归位于 gateway-transparent.integration.test.ts。
 
-同 UID 工具仍能读 0600 文件。A2 的执行身份隔离和兑换约束未交付，Issue #1032 保持 open。与 #1159（含 #1157）及 #1168 的组合按业务检查点恢复、新执行凭据文件、脱敏历史导入、原生 resume 的顺序接线。正常 runner 回归核对该顺序及新文件引用，Pi / Claude 固定 CLI 回归使用私有文件认证继续原会话。历史恢复保持首 Job 的预算根，清理锁序为 Canvas、预算根、执行 Job、Attempt，清理未确认或独立 unknown 继续阻止恢复。组合工程验收仍须由最终 SHA 的 Actions 证明。新 Linux 文件安全回归接现有 runtime-sandbox 门禁，固定 CLI 回归沿用 request-budget-sdk、Pi RPC / OM 和 Claude native 专项。所有行为、build 和 typecheck 仅由本 PR 最终 SHA 的 GitHub Actions 验证，当前尚无通过结论。
+同 UID 工具仍能读 0600 文件。A2 的执行身份隔离和兑换约束未交付，属于待决定的远期方案，本轮不将其作为强制验收；#1032 的 P0-1/A1 普通文本要求仍须独立验证，Issue 当前保持 open。与 #1159（含 #1157）及 #1168 的组合按业务检查点恢复、新执行凭据文件、脱敏历史导入、原生 resume 的顺序接线。正常 runner 回归核对该顺序及新文件引用，Pi / Claude 固定 CLI 回归使用私有文件认证继续原会话。历史恢复保持首 Job 的预算根，清理锁序为 Canvas、预算根、执行 Job、Attempt，清理未确认或独立 unknown 继续阻止恢复。组合工程验收仍须由最终 SHA 的 Actions 证明。新 Linux 文件安全回归接现有 runtime-sandbox 门禁，固定 CLI 回归沿用 request-budget-sdk、Pi RPC / OM 和 Claude native 专项。所有行为、build 和 typecheck 仅由本 PR 最终 SHA 的 GitHub Actions 验证，当前尚无通过结论。
+
+## 普通文本凭据出口（#1032）
+
+核对基线为 2026-11-20 的 #1169 本地候选，映射 NFR-SEC-003 / FR-CRED-003。issue 的 P0-1 要求模型出口精确保护，补充评论 [6746237481](https://github.com/SummerSec/DeepSonar/issues/1032#issuecomment-6746237481) 将 A1 扩为认证文件普通读取不可得或按已登记值脱敏。A2 在正文标为远期，评论 [6823496195](https://github.com/SummerSec/DeepSonar/issues/1032#issuecomment-6823496195) 仍待决定是否立项。
+
+| 入口 | 当前处理 | Actions 回归入口 |
+| --- | --- | --- |
+| DSH 注册后的 `profile.piProvider.streamSimple` | 身份核验后复用 `redactPiContextSecrets`，对当前 main、Control、OM token 做字符串值精确替换，再交 SDK 生成。prepared 主调用、直接服务和使用同一注册的压缩/子调用共用此出口，原历史与认证 options 不改写。声明的私有凭据文件缺失或不安全时停止。 | `ci:unit:runtime-sandbox` 的 dsh-request-budget.test.ts；`ci:integration:request-budget-sdk` 的真实 SDK prepared/direct 与 DSH CLI 工具、压缩和子调用。回归要求原生工具实际读取三份私有文件，并断言模型请求只含替换投影。 |
+| Claude 现有 loopback 请求准入 | 从本执行的私有文件读取三类已知值，在任何上游 I/O 前拒绝正文原始字节中的精确命中，含辅助 count_tokens 请求。返回 HTTP 400、`credential_in_business_data` 类型和 `x-should-retry:false`，不回显秘密，不静默改写已形成的请求。干净请求继续原字节发送。 | `ci:unit:runtime-sandbox` 的 model-request-policy.test.ts；Reverse 双架构 `ci:integration:claude-request-budget` 分别读取 main、Control、OM 文件，要求仅干净首请求到达合成上游，随后原生执行以错误终态退出。 |
+
+Claude 的文件结果仍可进入 CLI 本地历史，命中时停止当前执行，不能称为 SDK 上下文脱敏或无感继续。该本地拒绝不会调用 Gateway，因此没有相应 Gateway 接受回执、用量或 gateway.credential_denied 条目；运行失败沿原 Evidence/Dispatcher 分类记录。DSH 的成功继续与 Claude 的明确拒绝均待最终 SHA Actions，新增回归尚未执行，不能以源码断言替代通过证据。
+
+保证仅覆盖当前 Job 已知 token 在普通文本中的上述具体出口。任意编码、分片、二进制/图像、工具直接联网或同 UID 对执行代码的修改不由这轮证明；既有网络、原字节 Gateway 守卫及权限仍独立约束。长期 Provider key 不进入沙箱，当前短期 token 的文件化不构成身份隔离。

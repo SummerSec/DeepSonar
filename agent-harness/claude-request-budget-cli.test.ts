@@ -146,6 +146,88 @@ async function bytes(req: http.IncomingMessage) {
   return Buffer.concat(chunks);
 }
 
+for (const [credentialName, environmentName] of [
+  ["gateway-token", "DEEPSONAR_GATEWAY_TOKEN_FILE"],
+  ["control-token", "DEEPSONAR_CONTROL_TOKEN_FILE"],
+  ["om-token", "DEEPSONAR_OM_GATEWAY_TOKEN_FILE"],
+] as const) test(`#1032 Claude native ${credentialName} read terminates before its tool result leaves`, { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "claude-private-text-"));
+  const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);
+  await mkdir(credentials, { mode: 0o700 });
+  const values = { "gateway-token": token, "control-token": "synthetic-claude-control", "om-token": "synthetic-claude-om" };
+  for (const [name, value] of Object.entries(values)) await writeFile(path.join(credentials, name), value, { mode: 0o600 });
+  let modelRequests = 0;
+  const errors: string[] = [];
+  const server = http.createServer((req, res) => { void (async () => {
+    if (req.headers.authorization !== `Bearer ${token}`) errors.push("upstream-authentication");
+    if (req.url === "/gateway/_allowance") {
+      res.writeHead(200, { "content-type": "application/json" }).end('{"remaining_tokens":null,"policy_required":true}');
+      return;
+    }
+    const body = (await bytes(req)).toString("utf8");
+    for (const value of Object.values(values)) if (body.includes(value)) errors.push("credential-reached-upstream");
+    if (req.url?.includes("count_tokens")) {
+      res.writeHead(200, { "content-type": "application/json" }).end('{"input_tokens":10}');
+      return;
+    }
+    modelRequests++;
+    const model = JSON.parse(body).model;
+    const command = `node -e "console.log(require('fs').readFileSync(process.env.${environmentName},'utf8'))"`;
+    const events = [
+      { type: "message_start", message: { id: "credential-read", type: "message", role: "assistant", model,
+        content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "read-private-files", name: "Bash", input: {} } },
+      { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ command, description: "Read synthetic private files" }) } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 10 } },
+      { type: "message_stop" },
+    ];
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of events) res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  })().catch(() => { errors.push("synthetic-handler-failed"); res.writeHead(500).end(); }); });
+  let child: ChildProcess | undefined;
+  try {
+    const upstream = await listen(server);
+    const fixture = JSON.parse(await readFile("/acceptance/runtime-fixture.json", "utf8"));
+    const script = path.join(dir, "policy.mjs");
+    await writeFile(script, fixture.policySource);
+    const command = "claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash";
+    child = spawn(process.execPath, [script, "--claude-launch-budget", "--", command], {
+      cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, HOME: dir,
+        CLAUDE_CONFIG_DIR: path.join(dir, ".claude"), ANTHROPIC_BASE_URL: "http://127.0.0.1:38127/gateway",
+        DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway",
+        DEEPSONAR_GATEWAY_TOKEN_FILE: path.join(credentials, "gateway-token"),
+        DEEPSONAR_CONTROL_TOKEN_FILE: path.join(credentials, "control-token"),
+        DEEPSONAR_OM_GATEWAY_TOKEN_FILE: path.join(credentials, "om-token"),
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", MAX_THINKING_TOKENS: "0" },
+    });
+    let output = "", pending = "";
+    child.stdout!.on("data", chunk => {
+      output += chunk; pending += chunk;
+      const lines = pending.split("\n"); pending = lines.pop()!;
+      for (const line of lines) {
+        try { if (JSON.parse(line).type === "result") child!.stdin!.end(); } catch { /* Wait for a complete CLI record. */ }
+      }
+    });
+    child.stderr!.on("data", chunk => { output += chunk; });
+    const timeout = setTimeout(() => child!.kill("SIGTERM"), 45_000);
+    const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child!.once("error", reject);
+      child!.once("close", (code, signal) => resolve({ code, signal }));
+      child!.stdin!.write(fixture.encodedInput);
+    }).finally(() => clearTimeout(timeout));
+    assert.deepEqual(outcome, { code: 1, signal: null }, "credential refusal must end the native process without a timeout signal");
+    assert.ok(output.includes(values[credentialName]), "the native tool must actually read the selected private file");
+    assert.match(output, /credential_in_business_data/u);
+    assert.equal(modelRequests, 1, "only the clean initial model request may leave");
+    assert.deepEqual(errors, []);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    await close(server); await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("Claude unlimited empty settings authenticate through the trusted file helper", { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "claude-unlimited-auth-"));
   const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);

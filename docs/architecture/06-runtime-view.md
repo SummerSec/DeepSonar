@@ -348,3 +348,7 @@ OpenSandbox 创建熔断半开恢复独立限制为一个 claimed/provisioning �
 ## PTY 清理事实与精确对账（#1143）
 
 宿主专用回调把退出/连接观察与 PTY DELETE 结果绑定原 Job/Attempt/Sandbox/Process/agent_run 审计引用。先提交旧凭据撤销与 pending 清理记录，再以相同锁序重核并有界销毁；持久指定 worker 的消失确认才可结清精确原终态 marker。失败、超时和提交失败保留归属，独立 unknown 与历史无证据 run 不泛清。实际 caller 与 OOM 未核实分开，现有 Job 详情按需展示证据和恢复限制。详细字段、测试入口及剩余范围见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。
+
+## 普通文本凭据出口（#1032）
+
+DSH 的注册后 SDK 出口在认证身份核对后投影 context，再调用原 SDK，主调用和直接服务共用此入口。Claude 现有本地请求准入从当前执行的私有文件读取 main、Control、OM 值，对请求正文精确命中在任何上游 I/O 前作稳定拒绝，不查询 allowance、不创建模型调用，不回显值或改写已形成的请求。Claude 的此类拒绝结束当前执行，原生文件读取和错误终态须由固定 CLI 回归证明。具体源码、A1 验收映射与 Actions 接线集中在[Gateway 专题](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)，最终 SHA 尚待验收。

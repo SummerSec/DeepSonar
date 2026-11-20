@@ -40,8 +40,13 @@ for (const [file, expectedHash] of [['./index.js', budgetManifest.vendorSha256],
 const budgetSdk = JSON.parse(await readBudgetFile(${JSON.stringify(piAiRoot + '/package.json')}, 'utf8'));
 if (budgetSdk.name !== '@earendil-works/pi-ai' || budgetSdk.version !== '1.5.2') throw new Error('DSH_BUDGET_SDK_VERSION');
 `;
-  const patched = "import { prepareSdkCall, frozenDshIdentity, assertDshSdkIdentity } from './deepsonar-request-budget.mjs';\n" + verification
-    + original.replace(register, 'models.setProvider({ ...profile.piProvider, streamSimple: (model, context, options) => { assertDshSdkIdentity(model, options, frozenDshIdentity()); return profile.piProvider.streamSimple(model, context, options); } });').replace(start, 'const sdkCall = await prepareSdkCall({ model, context, signal: watchdog.signal, frozenIdentity: frozenDshIdentity(), piAiRoot: ' + JSON.stringify(piAiRoot) + ', options: {')
+  const registration = `models.setProvider({ ...profile.piProvider, streamSimple: (model, context, options) => {
+    const identity = frozenDshIdentity();
+    assertDshSdkIdentity(model, options, identity);
+    return profile.piProvider.streamSimple(model, redactDshContext(context, identity), options);
+  } });`;
+  const patched = "import { prepareSdkCall, frozenDshIdentity, assertDshSdkIdentity, redactDshContext } from './deepsonar-request-budget.mjs';\n" + verification
+    + original.replace(register, registration).replace(start, 'const sdkCall = await prepareSdkCall({ model, context, signal: watchdog.signal, frozenIdentity: frozenDshIdentity(), piAiRoot: ' + JSON.stringify(piAiRoot) + ', options: {')
       .replace(end, '} });\n\t\t\t\tconst iterator = toStreamChunks(snapshot.models.streamSimple(sdkCall.model, context, sdkCall.options), model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]();');
   const output = root + '/lib/deepsonar-index.js';
   await writeFile(root + '/lib/deepsonar-request-budget.mjs', helper);

@@ -3,7 +3,7 @@
 #1133 将 FR-VERIFY-005 / FR-DEV-002 的人工技术决定与补证设备冻结接到[接口视图](09-interface-specs.md#人工结束技术验证1133)、运行时视图及既有设备专题，新增轮次与持久审计使用现有数据结构。最终 SHA Actions 待验。
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 
 NFR-REL-001 的[行锁竞争认领唤醒](06-runtime-view.md#行锁竞争后的认领唤醒)合并 `SKIP LOCKED` 后的延后重试，保留默认轮询关闭与所有资格门；真实 PostgreSQL 红测已复现，修复后的最终 SHA Actions 另验，历史 CI 的具体持锁时序仍未证实。
 > #1074 的[人工断点续做](../HUMAN_CONTINUATION.md)与[ADR 0022](adr/0022-human-continuation.md)扩展 FR-JOB-008/FR-CTRL-006；schema 73、超时 overdue、有限封存回收和晚回复受治理续做已接线，业务文件清单 v2 增加最小权限恢复约束，最终 SHA Actions 另验。
@@ -163,6 +163,6 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 
 #1074 的[队列显式让位](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)同步 FR-TASK-008、FR-CTRL-006 及运行时/数据/API 视图。schema 75 新增 yielded 与持久请求/回复消费，最终 SHA Actions 另验。
 
-#1032 A1 三 CLI 凭据文件通道及未交付边界见[Gateway 专题](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。当前 PR 的 Actions 尚待验收。
+#1032 A1 三 CLI 凭据文件通道及[普通文本出口](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)映射 NFR-SEC-003 / FR-CRED-003，DSH SDK 精确投影与 Claude 本地拒绝沿原认证和请求入口实现。新增回归已接既有工作流，最终 SHA Actions 尚待验收；A2 仍待决定。
 
 #1143 的 [PTY 清理事实与精确对账](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)扩展 FR-JOB-005 与既有 Job 详情投影。新宿主证据、先撤销凭据再销毁、精确 owner 和失败保留已接线，无合法检查点的自动整 Job 恢复未交付，#1159 + #1167 + #1168 组合按人工续接专题核对，最终 SHA Actions 待验。
