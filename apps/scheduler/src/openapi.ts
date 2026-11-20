@@ -550,8 +550,8 @@ const OPS: Op[] = [
               properties: {
                 auth_required: { type: "boolean" },
                 has_users: { type: "boolean" },
-                bootstrap_available: { type: "boolean" },
-                default_admin_credentials_active: { type: "boolean" },
+                bootstrap_available: { type: "boolean", deprecated: true, enum: [false] },
+                default_admin_credentials_active: { type: "boolean", deprecated: true, enum: [false] },
                 session_ttl_days: { type: "integer" },
               },
             },
@@ -595,7 +595,7 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/auth/bootstrap",
-    summary: "兼容旧版的首次管理员引导（默认管理员种子后返回 409）",
+    summary: "首个管理员仅能由部署密码文件初始化；HTTP 引导已停用",
     scope: null,
     tags: ["Auth"],
     body: {
