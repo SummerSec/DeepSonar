@@ -1,7 +1,17 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；最新正式版 v0.6.21，于 2026-11-20T14:32:41Z 正式发布；既有 tag 与镜像保持不可变**。
+> 状态：**运维 as-built；最新正式版 v0.6.22，于 2026-11-20 正式发布（release run 44768983837）；既有 tag 与镜像保持不可变**。
 > 同步日期：2026-11-20
+>
+> **v0.6.22 发布结果（2026-11-20）**。[正式 Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.22) 绑定不可变 tag 的源码 `4adecdddc3c63698511ca09399b234b1b6da469d`（annotated tag 对象 `2972ace9`），比较范围为 `v0.6.21...v0.6.22`。发布数据库基线从 schema 75 升至 77：76 新增预算 owner（`jobs.budget_owner_job_id` / `budget_execution_job_id`）与 `job_continuations`，77 新增持久跨项目公平领取的游标与索引；非空库没有增量迁移链，先备份并按既有基线重建流程预演。
+>
+> 候选提交是纯文档改动（CHANGELOG `#1186`），`push@main` 未触发核心 `ci` 与四个专家套件，因此按发布硬门在**同一候选 SHA** 上手动 `workflow_dispatch` 五个门禁：核心 `ci` 44766299547、chrome-runtime 44766306616、mobile-runtime 44766313757、openharmony-runtime 44766319621、reverse-runtime 44766325741，全部 `success`，与 `refs/tags/v0.6.22^{}` 的 `4adecddd` 一致。
+>
+> [发布运行 44768983837](https://github.com/SummerSec/DeepSonar/actions/runs/44768983837) 首轮尝试在 `chrome-images (chrome-audit, linux/amd64)` 单个作业被取消后整体 `cancelled`，`prepare-release` / `release-publish` / `release-writeback` 全部 `skipped`，**没有任何发布副作用**（Release 仍指向 v0.6.21）。以 `--failed` 重跑同一 run 的 `run_attempt=2` 后 `completed success`：`prepare-release` 与 `release-publish` 成功，全部原生镜像构建（base、scheduler/web/silo/audit/assets-helper/image-admission、mobile、kali-minimal、openharmony audit/fuzz/test、reverse 双架构、chrome audit/test/fuzz 与 chrome-fuzz-arm64-smoke）通过。正式附件为管理 Skill、Reverse 证据、签名证据与两份 registry。
+>
+> `release-writeback` 首次 `failure` 的唯一原因是 `WRITEBACK_RUN_AWAITING_APPROVAL`：GITHUB_TOKEN 创建的回写 PR [#1189](https://github.com/SummerSec/DeepSonar/pull/1189) 的 `ci` 被视作外部贡献者而停在 `action_required`。批准该 run 后 `ci` 通过，PR 以 17 pass / 2 skipping / CLEAN 合入主线 `54541527`（`21fe91d0`），v0.6.22 的 catalog 与平台镜像 digest 已回写。该「批准后合入」路径与 v0.6.17 记录的 `WRITEBACK_RUN_AWAITING_APPROVAL` 一致，属既有机制而非新缺陷。
+>
+> 独立取证（不经 workflow 证据、直接访问 registry API）：GHCR `summersec/deepsonar-base` 与 Docker Hub `sumsec/deepsonar` 对 digest `sha256:aa186e9c…` 均返回 200 且 `docker-content-digest` 一致、清单为 OCI index `amd64+arm64`；GHCR `summersec/deepsonar-scheduler`（`sha256:032c0495…`）与 `summersec/deepsonar-web`（`sha256:2fb46134…`）与 `platform-release-freeze.json` 一致。其余 runtime 仓库为非公开仓库，匿名 token 返回 403，其 digest 证据由 release run 的 per-image digest 产物承载；ACR 通道不可匿名核验，同样以 workflow 门禁证据为准。签名取证 `platform-signature-evidence.json` 为 `verification.verified=true`，绑定本版 commit、schema 77 与三张平台镜像 digest。生产部署与本机升级未执行。
 >
 > **v0.6.21 发布结果（2026-11-20）**。[正式 Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.21) 绑定不可变 tag 的源码 `c3549c141e790f7745dd9ae0b622fcc596135ccc`，比较范围为 `v0.6.20...v0.6.21`，包含 #1171/#1173 的人工回复请求绑定修复。发布数据库基线从 schema 73 升至 75，后续开发候选 schema 77 不属于本版镜像。非空库先备份并按既有基线重建流程预演，保留现有部署配置；#1170 不重置已有用户、密码或会话，只有空库需要首个管理员秘密文件。
 >
@@ -104,13 +114,13 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-10 已发布 v0.6.19（compare `v0.6.18...v0.6.19`）；2026-11-12 已发布 v0.6.20（compare `v0.6.19...v0.6.20`，除目标外最高 `v*` tag 为 v0.6.19，schema 版本按源码核对为 73；本版含运行时 CLI 与基础镜像升级并已重建镜像）；v0.6.21 准备阶段已核对前一 tag 为 v0.6.20，当前候选 schema 75；打 tag 前按最终主线再次核对：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-10 已发布 v0.6.19（compare `v0.6.18...v0.6.19`）；2026-11-12 已发布 v0.6.20（compare `v0.6.19...v0.6.20`，除目标外最高 `v*` tag 为 v0.6.19，schema 版本按源码核对为 73；本版含运行时 CLI 与基础镜像升级并已重建镜像）；v0.6.21 准备阶段已核对前一 tag 为 v0.6.20、候选 schema 75；v0.6.22 准备阶段已核对前一 tag 为 v0.6.21（`c3549c14`）、候选 schema 77，并在纯文档候选上手动了五个门禁；打 tag 前按最终主线再次核对：
 
 ```bash
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.21 --previous-version 0.6.20 --tag v0.6.21
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.22 --previous-version 0.6.21 --tag v0.6.22
 pnpm typecheck
 pnpm build
 pnpm ci:images
