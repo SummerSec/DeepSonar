@@ -10,7 +10,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("list/detail/summary/delta share the lifecycle rollup across active, terminal, and null transitions", async () => {
+  test("list/detail/summary/delta share the lifecycle rollup across active, terminal, and null transitions", async (t) => {
     process.env.DATABASE_URL = testDatabaseUrl;
     const [{ default: Fastify }, { default: websocket }, { migrate, sql }, { registerRoutes }] = await Promise.all([
       import("fastify"),
@@ -120,6 +120,70 @@ if (!testDatabaseUrl) {
         ended_at: null,
         root_status: "running",
         report_status: "generating",
+      });
+      await t.test("task lists separate only settled project knowledge history without writing Canvas state", async () => {
+        const historyProjectId = randomUUID();
+        const otherProjectId = randomUUID();
+        const projects = [historyProjectId, otherProjectId];
+        const digest = "a".repeat(64);
+        const addCanvas = async (state: string, options: {
+          unlinked?: boolean; archived?: boolean; jobStatus?: string; unsettled?: boolean;
+          reviewPending?: boolean; otherProject?: boolean; ordinary?: boolean; targetMismatch?: boolean;
+        } = {}) => {
+          const id = randomUUID(), workId = randomUUID();
+          await sql`INSERT INTO canvases (id,project_id,title,trigger_source,trigger_event_id,target_json,status,archived_at)
+            VALUES (${id},${historyProjectId},'knowledge list fixture',${options.ordinary ? 'manual' : 'project_knowledge'},
+              ${workId},${sql.json({ knowledge_work_id: options.targetMismatch ? randomUUID() : workId })},
+              ${options.archived ? 'archived' : 'active'},${options.archived ? new Date() : null})`;
+          await sql`INSERT INTO project_knowledge_work (id,project_id,trigger_key,state,canvas_id,governance_hash)
+            VALUES (${workId},${options.otherProject ? otherProjectId : historyProjectId},${workId},${state},
+              ${options.unlinked ? null : id},${digest})`;
+          if (options.jobStatus) {
+            const [job] = await sql`INSERT INTO jobs (project_id,canvas_id,type,status,agent_snapshot_json)
+              VALUES (${historyProjectId},${id},'code',${options.jobStatus},'{}') RETURNING id`;
+            if (options.unsettled) {
+              const [attempt] = await sql`INSERT INTO job_attempts (job_id,attempt_no,status) VALUES (${job.id},1,'failed') RETURNING id`;
+              await sql`INSERT INTO job_attempt_effects (job_id,attempt_id,effect_kind,effect_id,status)
+                VALUES (${job.id},${attempt.id},'fixture','fixture','unknown')`;
+            }
+            if (options.reviewPending) {
+              await sql`INSERT INTO project_knowledge_proposals (project_id,work_id,action,state,revision,maker_job_id,
+                  idempotency_key,request_digest,input_digest,reason)
+                VALUES (${historyProjectId},${workId},'create','review_pending',1,${job.id},${randomUUID()},${digest},${digest},'fixture')`;
+            }
+          }
+          return id;
+        };
+        const list = `/projects/${historyProjectId}/canvases`;
+        const ids = async (query = "") => (await read(list + query) as unknown as Array<{id: string}>)
+          .map(row => row.id).sort();
+        try {
+          for (const id of projects) await sql`INSERT INTO projects (id,name) VALUES (${id},'knowledge history fixture')`;
+          const history = [await addCanvas('blocked', { jobStatus: 'failed' }), await addCanvas('cancelled'),
+            await addCanvas('completed'), await addCanvas('blocked', { unlinked: true })].sort();
+          const visible = [await addCanvas('pending', { jobStatus: 'failed' }), await addCanvas('running'),
+            await addCanvas('blocked', { jobStatus: 'waiting_human' }), await addCanvas('blocked', { jobStatus: 'failed', unsettled: true }),
+            await addCanvas('blocked', { jobStatus: 'succeeded', reviewPending: true }),
+            await addCanvas('blocked', { unlinked: true, jobStatus: 'failed' }),
+            await addCanvas('blocked', { otherProject: true }), await addCanvas('blocked', { ordinary: true }),
+            await addCanvas('blocked', { targetMismatch: true })].sort();
+          const archived = await addCanvas('cancelled', { archived: true });
+          assert.deepEqual(await ids(), visible);
+          assert.deepEqual(await ids('?status=active'), visible);
+          assert.deepEqual(await ids('?status=knowledge_history'), history);
+          assert.deepEqual(await ids('?status=archived'), [archived]);
+          assert.deepEqual(await ids('?status=all'), [...visible, ...history, archived].sort());
+          const detail = (await read(`/canvases/${history[0]}`)).canvas;
+          assert.equal(detail.status, 'active');
+          assert.equal(detail.archived_at, null);
+          assert.deepEqual(await ids('?status=knowledge_history'), history);
+        } finally {
+          await sql`DELETE FROM project_knowledge_proposals WHERE project_id=${historyProjectId}`;
+          await sql`DELETE FROM project_knowledge_work WHERE project_id=ANY(${projects}::uuid[])`;
+          await sql`DELETE FROM jobs WHERE project_id=${historyProjectId}`;
+          await sql`DELETE FROM canvases WHERE project_id=${historyProjectId}`;
+          await deleteProjectsLeavingAuditShells(sql, projects);
+        }
       });
     } finally {
       await sql`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;

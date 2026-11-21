@@ -29,9 +29,38 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
   app.get("/projects/:id/canvases", async (req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { status?: string };
-    // 默认只返回 active；status=archived|all 显式筛选
+    // Keep history separate from the Canvas lifecycle. In-flight and unproven
+    // knowledge work remains visible in the normal task list.
     const statusFilter =
       q.status === "all" ? null : q.status === "archived" ? "archived" : "active";
+    const historyFilter = statusFilter !== "active" ? sql`` : sql`
+      AND ${q.status === "knowledge_history" ? sql`` : sql`NOT`} EXISTS (
+        SELECT 1 FROM project_knowledge_work w
+        WHERE c.trigger_source = 'project_knowledge'
+          AND w.project_id = c.project_id
+          AND w.id = CASE WHEN c.trigger_event_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            THEN c.trigger_event_id::uuid END
+          AND c.target_json->>'knowledge_work_id' = w.id::text
+          AND (w.canvas_id = c.id OR (w.canvas_id IS NULL AND NOT EXISTS (
+            SELECT 1 FROM jobs j WHERE j.canvas_id = c.id
+          )))
+          AND w.state IN ('completed','blocked','cancelled') AND w.active_job_id IS NULL
+          AND w.reason IS DISTINCT FROM 'unknown_external_effect'
+          AND NOT EXISTS (
+            SELECT 1 FROM project_knowledge_proposals p
+            WHERE p.project_id = w.project_id AND p.work_id = w.id
+              AND p.state IN ('candidate','evaluating','review_pending')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM jobs j WHERE j.canvas_id = c.id AND (
+              j.status IN ('pending','claimed','provisioning','running','waiting_human','orphan')
+              OR EXISTS (SELECT 1 FROM human_requests h WHERE h.job_id = j.id
+                AND (h.status = 'open' OR (h.status = 'answered' AND h.resumed_at IS NULL)))
+              OR EXISTS (SELECT 1 FROM job_attempts a JOIN job_attempt_effects e ON e.attempt_id = a.id
+                WHERE a.job_id = j.id AND e.status IN ('effect_pending','unknown'))
+            )
+          )
+      )`;
     const rows = await sql`
       SELECT c.id, c.title, c.target_json,
         (SELECT qi.state FROM project_task_queue_items qi WHERE qi.canvas_id = c.id AND qi.project_id = c.project_id) AS queue_state, c.created_at,
@@ -69,6 +98,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       ) lj ON true
       WHERE c.project_id = ${id}
         AND (${statusFilter}::text IS NULL OR c.status = ${statusFilter})
+        ${historyFilter}
       ORDER BY c.created_at DESC`;
     return rows.map((row) => projectTaskExecution(row as Record<string, unknown>));
   });

@@ -17,7 +17,7 @@ import { formatBeijingTime, nextBeijing8amLocalValue, parseDatetimeLocalToIso, s
 import { SEED_SEVERITY_OPTIONS, composeRetryErrorMessage, COMPOSE_SEED_VERIFY_OPTIONS, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
 import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatDate, formatElapsed, formatTime, relativeTime } from "../ui";
 
-type Filter = "" | "active" | "findings" | "archived";
+type Filter = "" | "active" | "findings" | "archived" | "knowledge_history";
 /** 立即开始，或指定墙钟时间（按浏览器本地时区选择，提交为 ISO UTC）。 */
 type ScheduleMode = "immediate" | "at";
 const inputCls =
@@ -477,6 +477,9 @@ export function TasksPage() {
   const [clock, setClock] = useState(() => Date.now());
   const flash = (message: string) => { setMsg(message); setTimeout(() => setMsg(null), 3200); };
 
+  const listStatus = filter === "archived" || filter === "knowledge_history" ? filter : "active";
+  const listLabel = listStatus === "knowledge_history" ? "知识整理历史" : listStatus === "archived" ? "已归档" : "全部任务";
+
   // Keep active and total lifecycle counters moving between the five-second API polls.
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
@@ -487,11 +490,10 @@ export function TasksPage() {
     if (!projectId) return;
     api.projects().then((list) => setProject(list.find((item) => item.id === projectId))).catch(() => {});
     let stop = false;
-    const status = filter === "archived" ? ("archived" as const) : ("active" as const);
-    const tick = () => api.canvases(projectId, { status }).then((list) => { if (!stop) { setCanvases(list); setError(null); setLoading(false); } }).catch((e) => { if (!stop) { setError(String(e)); setLoading(false); } });
+    const tick = () => api.canvases(projectId, { status: listStatus }).then((list) => { if (!stop) { setCanvases(list); setError(null); setLoading(false); } }).catch((e) => { if (!stop) { setError(String(e)); setLoading(false); } });
     tick(); const timer = setInterval(tick, 5000);
     return () => { stop = true; clearInterval(timer); };
-  }, [projectId, filter]);
+  }, [projectId, listStatus]);
 
   const filtered = useMemo(() => {
     if (filter === "active") return canvases.filter((c) => deriveTaskLifecycle({
@@ -532,14 +534,14 @@ export function TasksPage() {
 
   return (
     <div className="page-scroll">
-      <PageHeader title="任务工作台" eyebrow="INTENT PIPELINE" actions={<><FilterSelect value={filter} onChange={(value) => setFilter(value as Filter)} placeholder="全部任务" options={[{ value: "active", label: "正在推进" }, { value: "findings", label: "已有发现" }, { value: "archived", label: "已归档" }]} />{project?.status === "active" && <PrimaryButton onClick={() => setCreating(true)}><Plus size={15} weight="bold" />下达任务</PrimaryButton>}</>} />
+      <PageHeader title="任务工作台" eyebrow="INTENT PIPELINE" actions={<><FilterSelect value={filter} onChange={(value) => setFilter(value as Filter)} placeholder="全部任务" options={[{ value: "active", label: "正在推进" }, { value: "findings", label: "已有发现" }, { value: "knowledge_history", label: "知识整理历史" }, { value: "archived", label: "已归档" }]} />{project?.status === "active" && <PrimaryButton onClick={() => setCreating(true)}><Plus size={15} weight="bold" />下达任务</PrimaryButton>}</>} />
 
-      <div className="mb-5 flex flex-wrap gap-2"><span className="rounded-full bg-white/[.025] px-3 py-2 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]"><strong className="mr-2 text-zinc-300">{visibleCount}</strong>{filter === "archived" ? "已归档" : "全部任务"}</span><span className="rounded-full bg-run-400/[.055] px-3 py-2 font-mono text-[9px] text-run-400 ring-1 ring-run-400/10"><strong className="mr-2">{activeCount}</strong>正在推进</span><span className="rounded-full bg-high-500/[.055] px-3 py-2 font-mono text-[9px] text-high-500 ring-1 ring-high-500/10"><strong className="mr-2">{findingCount}</strong>风险发现</span></div>
+      <div className="mb-5 flex flex-wrap gap-2"><span className="rounded-full bg-white/[.025] px-3 py-2 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]"><strong className="mr-2 text-zinc-300">{visibleCount}</strong>{listLabel}</span><span className="rounded-full bg-run-400/[.055] px-3 py-2 font-mono text-[9px] text-run-400 ring-1 ring-run-400/10"><strong className="mr-2">{activeCount}</strong>正在推进</span><span className="rounded-full bg-high-500/[.055] px-3 py-2 font-mono text-[9px] text-high-500 ring-1 ring-high-500/10"><strong className="mr-2">{findingCount}</strong>风险发现</span></div>
       {error && <div className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">{error}</div>}
       {msg && <div role="status" className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15">{msg}</div>}<ProjectTaskQueuePanel projectId={projectId} key={projectId} />
       {creating && <NewTaskForm projectId={projectId} initialSeedIds={initialSeedIds} flash={flash} onCancel={() => { setCreating(false); setSearchParams({}, { replace: true }); }} onDone={(canvasId) => navigate(`/projects/${projectId}/tasks/${canvasId}`)} />}
 
-      {filtered.length === 0 ? <EmptyState title={canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && filter !== "archived" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
+      {filtered.length === 0 ? <EmptyState title={listStatus === "knowledge_history" ? "暂无知识整理历史" : canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length || listStatus === "knowledge_history" ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && listStatus === "active" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
         <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((canvas, index) => {
             const scheduledStartAt = readScheduledStartAt(canvas.target_json);
