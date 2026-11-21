@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import Fastify from "fastify";
 import type { Actor } from "../../auth.js";
@@ -7,6 +10,141 @@ import { inspectAutomaticKnowledgeJob, registerKnowledgeSourceAfterTerminal, SOU
 import { registerProjectKnowledgeRoutes } from "./routes.js";
 import { createKnowledgeWorkScheduler } from "./work.js";
 import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-support.js";
+import { recoverTaskKnowledgeCloseouts, projectTaskKnowledgeCloseout } from "../canvas/task-knowledge-closeout.js";
+
+test("task knowledge closeout waits for settled work and recovers one safe node per root", async () => {
+  await withKnowledgeDatabase(async db => {
+    const task = await seedKnowledgeJob(db, undefined, ["submit_task_knowledge_suggestion"]);
+    const rootNodeId = randomUUID();
+    const reportJobId = randomUUID();
+    const receiptRef = randomUUID();
+    const hash = "c".repeat(64);
+    const projection = () => db.begin(tx => projectTaskKnowledgeCloseout(tx, task.canvasId));
+    const nodes = () => db`SELECT id, job_id, title, body_json, status FROM canvas_nodes
+      WHERE canvas_id=${task.canvasId} AND node_type='knowledge_closeout'`;
+    await db`INSERT INTO canvas_nodes(id,canvas_id,node_type,title,status,created_at)
+      SELECT ${rootNodeId}::uuid,${task.canvasId}::text,'root','task','reporting',created_at FROM jobs WHERE id=${task.jobId}`;
+    await db`INSERT INTO jobs(id,project_id,canvas_id,type,status)
+      VALUES(${reportJobId},${task.projectId},${task.canvasId},'report','succeeded')`;
+    await db`INSERT INTO task_reports(canvas_id,project_id,report_job_id,version,status,input_uri,input_sha256)
+      VALUES(${task.canvasId},${task.projectId},${reportJobId},1,'succeeded','fixture',${hash})`;
+    await db`INSERT INTO project_knowledge_receipts(id,project_id,job_id,attempt_id,operation,idempotency_key,input_digest,event_id,result_json)
+      VALUES(${receiptRef},${task.projectId},${task.jobId},${task.attemptId},'submit_task_knowledge_suggestion',
+        ${randomUUID()},${hash},${randomUUID()},${db.json({ result: "suggestions", blob_hash: hash,
+          root_node_id: rootNodeId, count: 2, receipt_ref: receiptRef })})`;
+
+    assert.equal(await projection(), false);
+    await db`UPDATE canvas_nodes SET status='succeeded' WHERE id=${rootNodeId}`;
+    assert.equal(await projection(), false);
+    await db`UPDATE jobs SET status='succeeded' WHERE id=${task.jobId}`;
+    await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${task.attemptId}`;
+    const effectId = randomUUID();
+    await db`INSERT INTO job_attempt_effects(id,job_id,attempt_id,effect_id,effect_kind,status)
+      VALUES(${effectId},${task.jobId},${task.attemptId},'fixture','agent_run','unknown')`;
+    assert.equal(await projection(), false);
+    assert.equal((await recoverTaskKnowledgeCloseouts(db)).projected, 0);
+    await db`UPDATE job_attempt_effects SET status='settled' WHERE id=${effectId}`;
+
+    await Promise.all([projection(), recoverTaskKnowledgeCloseouts(db), recoverTaskKnowledgeCloseouts(db)]);
+    const first = await nodes();
+    assert.equal(first.length, 1);
+    assert.equal(first[0]?.title, "知识沉淀");
+    assert.equal(first[0]?.job_id, null);
+    assert.equal(first[0]?.status, "suggestions_available");
+    assert.deepEqual(first[0]?.body_json, { root_node_id: rootNodeId, state: "suggestions_available" });
+
+    await db`INSERT INTO task_reports(canvas_id,project_id,report_job_id,version,status,input_uri,input_sha256)
+      VALUES(${task.canvasId},${task.projectId},${reportJobId},2,'succeeded','fixture',${hash})`;
+    assert.equal(await projection(), false);
+    assert.deepEqual(await nodes(), first);
+    assert.equal((await recoverTaskKnowledgeCloseouts(db)).projected, 0);
+    const [edge] = await db`SELECT id, from_node_id, to_node_id, edge_type FROM canvas_edges
+      WHERE canvas_id=${task.canvasId} AND from_node_id=${rootNodeId} AND to_node_id=${first[0]?.id as string}`;
+    assert.ok(edge);
+    assert.equal(edge.edge_type, "child");
+    const durableEdge = await db`SELECT projection_json FROM canvas_changes
+      WHERE canvas_id=${task.canvasId} AND entity_type='edge' AND entity_id=${edge.id as string}`;
+    assert.equal(durableEdge.length, 1);
+    assert.deepEqual(durableEdge[0]?.projection_json, {
+      id: edge.id, from_node_id: rootNodeId, to_node_id: first[0]?.id, edge_type: "child",
+    });
+    const [{ count: edgeCount }] = await db`SELECT count(*)::int AS count FROM canvas_edges WHERE canvas_id=${task.canvasId}`;
+    assert.equal(edgeCount, 1);
+    const durable = await db`SELECT projection_json FROM canvas_changes
+      WHERE canvas_id=${task.canvasId} AND entity_id=${first[0]?.id as string}`;
+    assert.equal(durable.length, 1);
+    assert.equal((durable[0]?.projection_json as { status?: string }).status, "suggestions_available");
+    for (const value of [hash, receiptRef, task.jobId, task.attemptId]) {
+      assert.equal(JSON.stringify(durable).includes(value), false);
+    }
+  });
+});
+
+test("task report settles after a failed projection and recovery ignores a superseded Attempt", async () => {
+  const { config } = await import("../../config.js");
+  const { finalizeReportJob } = await import("../../report.js");
+  const blobDir = await mkdtemp(path.join(tmpdir(), "deepsonar-closeout-"));
+  const storage = config.storage as { blobDir: string };
+  const previousBlobDir = storage.blobDir;
+  storage.blobDir = blobDir;
+  try {
+    await withKnowledgeDatabase(async db => {
+      const task = await seedKnowledgeJob(db, undefined, ["submit_task_knowledge_suggestion"]);
+      const rootNodeId = randomUUID();
+      const reportJobId = randomUUID();
+      const receiptRef = randomUUID();
+      const inputJson = JSON.stringify({
+        task: { canvas_id: task.canvasId, project_id: task.projectId, title: "Fixture task", goal: "Fixture goal",
+          kind: "standard", effective_finding_protocol: null },
+        statistics: { findings_total: 0, confirmed_count: 0, needs_human_count: 0, refuted_count: 0,
+          inconclusive_count: 0, excluded_count: 0, confirmed_by_severity: {} },
+        findings: [], confirmed_findings: [], needs_human_findings: [], refuted_findings: [],
+        inconclusive_findings: [], excluded_findings: [], seed_findings: [], scope_and_coverage: {}, evidence: [],
+      });
+      const inputHash = createHash("sha256").update(inputJson).digest("hex");
+      const inputUri = `reports/${task.canvasId}/v1/report-input.json`;
+      await db`INSERT INTO canvas_nodes(id,canvas_id,node_type,title,status,created_at)
+        SELECT ${rootNodeId}::uuid,${task.canvasId}::text,'root','task','reporting',created_at FROM jobs WHERE id=${task.jobId}`;
+      await db`UPDATE jobs SET status='succeeded' WHERE id=${task.jobId}`;
+      await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${task.attemptId}`;
+      await db`INSERT INTO job_attempts(job_id,attempt_no,status,phase) VALUES(${task.jobId},2,'failed','terminal')`;
+      await db`INSERT INTO project_knowledge_receipts(id,project_id,job_id,attempt_id,operation,idempotency_key,input_digest,event_id,result_json)
+        VALUES(${receiptRef},${task.projectId},${task.jobId},${task.attemptId},'submit_task_knowledge_suggestion',
+          ${randomUUID()},${inputHash},${randomUUID()},${db.json({ result: "suggestions", root_node_id: rootNodeId,
+            count: 1, receipt_ref: receiptRef, blob_hash: "e".repeat(64) })})`;
+      await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,payload_json)
+        VALUES(${reportJobId},${task.projectId},${task.canvasId},'report','succeeded',${db.json({
+          kind: "task_report", report_version: 1, report_input_json: inputJson,
+          report_input_sha256: inputHash, report_input_uri: inputUri,
+        })})`;
+      await db`INSERT INTO task_reports(canvas_id,project_id,report_job_id,version,status,input_uri,input_sha256)
+        VALUES(${task.canvasId},${task.projectId},${reportJobId},1,'generating',${inputUri},${inputHash})`;
+      await db`CREATE SEQUENCE closeout_projection_witness`;
+      await db`CREATE FUNCTION reject_closeout_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM nextval('closeout_projection_witness');
+          RAISE EXCEPTION 'fixture projection failure';
+        END $$`;
+      await db`CREATE TRIGGER reject_closeout_fixture BEFORE INSERT ON canvas_edges
+        FOR EACH ROW EXECUTE FUNCTION reject_closeout_fixture()`;
+
+      await db.begin(tx => finalizeReportJob(tx as unknown as Parameters<typeof finalizeReportJob>[0], reportJobId));
+      assert.equal((await db`SELECT status FROM task_reports WHERE report_job_id=${reportJobId}`)[0]?.status, "succeeded");
+      assert.equal((await db`SELECT status FROM canvas_nodes WHERE id=${rootNodeId}`)[0]?.status, "succeeded");
+      const nodes = () => db`SELECT body_json FROM canvas_nodes WHERE canvas_id=${task.canvasId} AND node_type='knowledge_closeout'`;
+      assert.equal((await nodes()).length, 0);
+      assert.equal((await db`SELECT is_called FROM closeout_projection_witness`)[0]?.is_called, true);
+      await db`DROP TRIGGER reject_closeout_fixture ON canvas_edges`;
+      assert.equal((await recoverTaskKnowledgeCloseouts(db)).projected, 1);
+      const recovered = await nodes();
+      assert.equal(recovered.length, 1);
+      assert.deepEqual(recovered[0]?.body_json, { root_node_id: rootNodeId, state: "not_submitted" });
+    });
+  } finally {
+    storage.blobDir = previousBlobDir;
+    await rm(blobDir, { recursive: true, force: true });
+  }
+});
 
 async function successfulSource(db: TestSql, projectId?: string) {
   const source = await seedKnowledgeJob(db, projectId, ["request_project_knowledge"]);

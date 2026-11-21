@@ -29,7 +29,7 @@ if (!testDatabaseUrl) {
     const projectId = randomUUID();
     const canvasId = randomUUID();
     const jobId = randomUUID();
-    const operations = ["emit_progress", "emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done", "request_human"];
+    const operations = ["emit_progress", "emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done", "request_human", "submit_task_knowledge_suggestion"];
 
     try {
       await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
@@ -82,11 +82,16 @@ if (!testDatabaseUrl) {
       assert.equal(beforeRunning.json().error_code, "CAPABILITY_JOB_NOT_ACTIVE");
       await sql`UPDATE jobs SET status = 'running', started_at = now() WHERE id = ${jobId}`;
       assert.equal(await activateProvisionedJobCapabilityTokens(jobId), 1);
+      const { readTaskSuggestionFactRefs } = await import("../project-knowledge/runtime.js");
+      const [{ id: attemptId }] = await sql<{ id: string }[]>`SELECT id FROM job_attempts WHERE job_id=${jobId}`;
       const calls: Array<{ operationId: string; eventId: string; input: unknown }> = [];
       const handler = async (context: { operationId: string; eventId: string; input: unknown; completionPhase?: string }) => {
         if (context.completionPhase === "prepare") return { completion_prepared: true };
         calls.push(context);
-        return { accepted: true, operation_id: context.operationId, event_id: context.eventId };
+        const refs = context.operationId === "emit_fact"
+          ? await readTaskSuggestionFactRefs(sql, { jobId, projectId, canvasId, attemptId, eventId: context.eventId })
+          : undefined;
+        return { accepted: true, operation_id: context.operationId, event_id: context.eventId, ...refs };
       };
       registerRuntimeHandler(jobId, handler, operations);
 
@@ -148,13 +153,38 @@ if (!testDatabaseUrl) {
         assert.equal(rejected.json().error_code, errorCode);
         assert.equal(rejected.json().retryable, true);
       }
+      const suggestionOperation = "submit_task_knowledge_suggestion";
+      const rawMarker = "fixture-private-value";
+      const rejectedSuggestion = await invoke(suggestionOperation, randomUUID(), { result: "no_new", items: [], [rawMarker]: rawMarker });
+      assert.equal(rejectedSuggestion.statusCode, 422, rejectedSuggestion.payload);
+      assert.equal(rejectedSuggestion.json().repair.operation, suggestionOperation);
+      assert.ok(!rejectedSuggestion.payload.includes(rawMarker));
+      assert.ok(!calls.some(call => call.operationId === suggestionOperation));
+      const noNew = { result: "no_new", items: [] };
+      const acceptedSuggestion = await invoke(suggestionOperation, randomUUID(), noNew);
+      assert.equal(acceptedSuggestion.statusCode, 200, acceptedSuggestion.payload);
+      assert.deepEqual(calls.find(call => call.operationId === suggestionOperation)?.input, noNew);
+
       const factKey = randomUUID();
       const fact = {
         title: "控制 API 事实",
         description: "通过真实 Job token 和 HTTP 路由提交的集成测试事实。",
       };
-      assert.equal((await invoke("emit_fact", factKey, fact)).statusCode, 200);
-      assert.equal((await invoke("emit_fact", factKey, fact)).statusCode, 200);
+      const factId = randomUUID();
+      const evidenceId = randomUUID();
+      await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,verification_status)
+        VALUES(${factId},${canvasId},${jobId},'fact','Published fact','unverified')`;
+      await sql`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type) VALUES(${jobId},${factKey},1,${attemptId},'fact')`;
+      const [{ id: artifactId }] = await sql<{ id: string }[]>`INSERT INTO artifacts(project_id,canvas_id,job_id,node_id,artifact_key,kind,source_event_id,source_operation)
+        VALUES(${projectId},${canvasId},${jobId},${factId},'sample-fact','fact',${factKey},'emit_fact') RETURNING id`;
+      await sql`INSERT INTO artifact_evidence(id,artifact_id,statement) VALUES(${evidenceId},${artifactId},'Published evidence')`;
+      const submittedFact = await invoke("emit_fact", factKey, fact);
+      assert.equal(submittedFact.statusCode, 200, submittedFact.payload);
+      assert.deepEqual(submittedFact.json().knowledge_source_refs, [{ kind: "fact", ref: factId }, { kind: "evidence", ref: evidenceId }]);
+      const replayedFact = await invoke("emit_fact", factKey, fact);
+      assert.equal(replayedFact.statusCode, 200, replayedFact.payload);
+      assert.deepEqual(replayedFact.json().knowledge_source_refs, submittedFact.json().knowledge_source_refs);
+      assert.equal(await readTaskSuggestionFactRefs(sql, { jobId, projectId, canvasId, attemptId: randomUUID(), eventId: factKey }), undefined);
       assert.equal(calls.filter((call) => call.operationId === "emit_fact").length, 1, "幂等重放不得重复调用 handler");
       const conflict = await invoke("emit_fact", factKey, { ...fact, title: "冲突事实" });
       assert.equal(conflict.statusCode, 409, conflict.payload);
@@ -278,7 +308,7 @@ if (!testDatabaseUrl) {
       assert.equal((await invoke("mark_job_done", randomUUID(), {
         summary: "Platform API 集成闭环已经完成。",
       })).statusCode, 200);
-      assert.deepEqual(calls.map((call) => call.operationId), ["emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done"]);
+      assert.deepEqual(calls.map((call) => call.operationId), [suggestionOperation, "emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done"]);
 
       const humanJobId = randomUUID();
       await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, started_at, timeout_sec, lease_expires_at)

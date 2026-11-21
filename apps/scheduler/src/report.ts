@@ -5,6 +5,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { TransactionSql } from "postgres";
 import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { readFrozenReportInput } from "./report-input.js";
@@ -46,6 +47,7 @@ import {
 
 import { loadPlanGapReport } from "./domains/plan-protocol/gap-report.js";
 import { withPlanGapReport, type PlanGapReport } from "./domains/plan-protocol/gap-projection.js";
+import { projectTaskKnowledgeCloseoutBestEffort } from "./domains/canvas/task-knowledge-closeout.js";
 
 type Tx = typeof sql;
 
@@ -1625,6 +1627,7 @@ export async function finalizeReportJob(
     UPDATE canvas_nodes SET status = 'succeeded', updated_at = now()
     WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
 
+  await projectTaskKnowledgeCloseoutBestEffort(tx as unknown as TransactionSql, canvasId);
   console.info(`[report] canvas ${canvasId} 任务报告 v${version} 成功，Root → succeeded`);
 }
 

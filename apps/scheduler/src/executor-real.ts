@@ -1,6 +1,6 @@
 import { registerRuntimeTerminalState } from "./domains/platform-api/registry.js";
 import { recordRuntimeProcessEvidence } from "./runtime-process-evidence.js";
-import { prepareHumanCheckpointContext, persistHumanWaitCheckpoint } from "./domains/job-control/human-checkpoint.js";
+import { checkpointManagedSecrets, prepareHumanCheckpointContext, persistHumanWaitCheckpoint } from "./domains/job-control/human-checkpoint.js";
 import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
 import { createCompletionFailureDiagnostics } from "./completion-failure-diagnostic.js";
@@ -33,6 +33,7 @@ import {
   type VerifyVerdict,
   isSafeWorkspacePayloadFile,
   WORKSPACE_PAYLOAD_FILE_MAX_BYTES,
+  TASK_KNOWLEDGE_SUGGESTION_OPERATION,
 } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import {
@@ -60,7 +61,7 @@ import { listHubRuntimeImageCatalog } from "./runtime-images.js";
 import { listHubAgentCliCatalog, listHubProviderCatalog } from "./domains/project-agent-allowlist/index.js";
 import { listHubSkillSourceCatalog } from "./domains/project-skill-allowlist/index.js";
 import { JobSkillCatalogError } from "./job-skill-catalog.js";
-import { createKnowledgeRuntime } from "./domains/project-knowledge/runtime.js";
+import { createKnowledgeRuntime, readTaskSuggestionFactRefs } from "./domains/project-knowledge/runtime.js";
 import { PROJECT_KNOWLEDGE_GOVERNANCE_HASH, injectKnowledgePlatformSkills, projectKnowledgeReuseHint } from "./domains/project-knowledge/platform-skills.js";
 import {
   PROVIDER_ENV_MAP,
@@ -1478,6 +1479,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         },
       );
       factCount++;
+      if (canvasId && controlToolNames.includes(TASK_KNOWLEDGE_SUGGESTION_OPERATION)) {
+        return readTaskSuggestionFactRefs(sql, { jobId, projectId: job.project_id as string, canvasId, attemptId, eventId });
+      }
       return;
     }
     if (event.type === "finding") {
@@ -1594,8 +1598,14 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let platformRuntimeRegistered = false;
   try {
   registerJobEvidenceSecrets(jobId, [platformToken, gatewayToken,observationalMemoryGatewayToken].filter((value): value is string => Boolean(value)));
-
-  const knowledgeRuntime = createKnowledgeRuntime({ db: sql, governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH });
+  const knowledgeRuntime = createKnowledgeRuntime({
+    db: sql,
+    governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH,
+    taskSuggestionContext: () => ({
+      attemptId,
+      secrets: checkpointManagedSecrets(env, workspaceFiles, [platformToken, gatewayToken, observationalMemoryGatewayToken]),
+    }),
+  });
   const runtimePlatformHandler = completionDiagnostics.wrapControlHandler(async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
     const operation = context.operationId;
     if (!platformOperations.includes(operation)) throw new Error("operation is not enabled for this Job");

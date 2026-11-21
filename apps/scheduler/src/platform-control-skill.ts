@@ -120,6 +120,8 @@ Job 终态后 Control token 不再可用，由管理面按项目权限查看既�
 \`/workspace\` 的 \`payload_file\`、当前 YAML UUID 引用和 Hub 角色约束。Hub 必须先提交
 决策再完成。完成必要工作后提交已授权的 \`mark_job_done\`，只有明确拒绝且允许修正时才提交新 revision；
 其它操作的 \`accepted\` 语义按该操作契约判断，不能据此推定整个 Job 成功。
+
+只有当前能力清单开放 \`submit_task_knowledge_suggestion\` 时，普通业务 Job 才可在正常完成前从本轮会话提交一份可选的项目知识建议。收尾建议仅登记，不影响业务完成。只提炼经过平台事实或证据佐证的通用结论与步骤。可明确提交 \`{"result":"no_new","items":[]}\`，也可省略建议。每份最多两项，每项最多四条本次执行的 Fact 或 Evidence 引用，项目建议清单合计最多 4096 个 UTF-8 字节。可从成功的 \`emit_fact\` 回执中的 \`knowledge_source_refs\` 复制 \`{kind,ref}\`；内容哈希由平台核对和绑定。修订时提交 \`target:{usage_ref}\`，复制本次会话读取项目 Memory 或拉取项目 Skill 时返回的 \`usage_ref\`，由平台绑定精确版本。正文、标题和适用条件不得含凭据、会话原文、敏感数据、漏洞利用步骤或自主攻击指令。回执未知时，可用获授权的 \`get_knowledge_receipt\` 查询原键，传输重试使用原键及原载荷。建议因缺少证据或权限被拒时继续正常完成。
 `,
   },
 } as const;

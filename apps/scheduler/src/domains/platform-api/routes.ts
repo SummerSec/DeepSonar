@@ -8,7 +8,7 @@ import { readCompletionExecutionState } from "./completion-state.js";
 import { readCompletionReceipt } from "../event-ingestion/completion-receipt.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { ControlToolPayloadSchemas, KNOWLEDGE_OPERATION_IDS } from "@deepsonar/shared-types";
+import { ControlToolPayloadSchemas, KNOWLEDGE_OPERATION_IDS, TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "@deepsonar/shared-types";
 import {
   authenticateJobCapabilityToken,
   CapabilityTokenError,
@@ -167,7 +167,7 @@ function parseOperationInput(req: CapabilityRequest, definition: PlatformOperati
       operation: definition.operationId,
       code: controlInputCodeForOperation(definition.operationId),
       issues: parsed.error.issues,
-      rawInput: input,
+      rawInput: definition.operationId === TASK_KNOWLEDGE_SUGGESTION_OPERATION ? undefined : input,
       idempotencyKey: fallbackEventId,
     });
     return {
@@ -289,7 +289,7 @@ async function executeInvocation(
           statusCode: error.rejection.statusCode,
           path: error.rejection.path,
           details: error.rejection.details,
-          rawInput: input,
+          rawInput: operationId === TASK_KNOWLEDGE_SUGGESTION_OPERATION ? undefined : input,
           idempotencyKey: key,
         }), principal);
         return {

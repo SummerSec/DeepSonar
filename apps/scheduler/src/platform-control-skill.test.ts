@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { HumanPayload } from "@deepsonar/shared-types";
+import { ControlToolInputSchemasJson, HumanPayload, resolvePlatformTools, SubmitTaskKnowledgeSuggestionPayload } from "@deepsonar/shared-types";
 import {
   DEEPSONAR_CONTROL_SKILL,
   DEEPSONAR_CONTROL_SKILL_NAME,
@@ -11,6 +11,34 @@ import {
   platformApiBaseUrl,
 } from "./platform-control-skill.js";
 import { platformToolGuide } from "./platform-tools.js";
+
+test("任务知识建议使用严格的普通业务 Job 契约", () => {
+  const operation = "submit_task_knowledge_suggestion";
+  const enabled = { [operation]: true };
+  assert.equal(ControlToolInputSchemasJson[operation].type, "object");
+  assert.ok(resolvePlatformTools("explore", "role", enabled).includes(operation));
+  assert.ok(!resolvePlatformTools("explore", "role", {}).includes(operation));
+  assert.ok(!resolvePlatformTools("hub_reason", "hub", enabled).includes(operation));
+  assert.ok(!resolvePlatformTools("report", "system", enabled).includes(operation));
+  const evidence = { kind: "fact", ref: "9d4a640a-f1ae-4e61-8d0c-e5f86e2c580f" };
+  const item = { kind: "memory", title: "导出格式", scope: "v2 的离线导出", content: "使用 UTF-8。", evidence_refs: [evidence] };
+  const valid = { result: "suggestions", items: [item] };
+  const accepts = (input: unknown) => SubmitTaskKnowledgeSuggestionPayload.safeParse(input).success;
+  assert.ok(accepts(valid));
+  assert.ok(accepts({ result: "no_new", items: [] }));
+  assert.ok(!accepts({ result: "no_new", items: [item] }));
+  assert.ok(!accepts({ result: "suggestions", items: [] }));
+  assert.ok(!accepts({ ...valid, items: [item, item, item] }));
+  assert.ok(!accepts({ ...valid, unexpected: true }));
+  assert.ok(!accepts({ ...valid, items: [{ ...item, content: "中".repeat(1400) }] }));
+  assert.ok(!accepts({ ...valid, items: [{ ...item, evidence_refs: Array(5).fill(evidence) }] }));
+  assert.ok(!accepts({ ...valid, items: [{ ...item, evidence_refs: [{ ...evidence, kind: "asset" }] }] }));
+  assert.ok(!accepts({ ...valid, items: [{ ...item, evidence_refs: [{ ...evidence, content_hash: "a".repeat(64) }] }] }));
+  assert.ok(!accepts({ ...valid, items: [{ ...item, evidence_refs: [{ ...evidence, ref: "not-a-uuid" }] }] }));
+  assert.ok(accepts({ ...valid, items: [{ ...item, target: { usage_ref: evidence.ref } }] }));
+  assert.ok(!accepts({ ...valid, items: [{ ...item, target: { usage_ref: "not-a-uuid" } }] }));
+  assert.ok(!accepts({ ...valid, items: [{ ...item, target: { usage_ref: evidence.ref, item_ref: evidence.ref } }] }));
+});
 
 test("平台控制 Skill 按保留名称保持不可替换", () => {
   const injected = injectPlatformControlSkill([

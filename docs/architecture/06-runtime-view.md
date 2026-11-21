@@ -156,6 +156,8 @@ sequenceDiagram
 
 Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批新 Job，保留前驱已写入的 terminal result，并把 Canvas convergence 持久暂停；Plan v2 依赖 admission 使用同一错误持久停止，不撤销前驱已证明输出。详细协议见 [目标授权专题](../TARGET_AUTHORIZATION.md) 和 [ADR-0011](adr/0011-trusted-target-authorization.md)。若契约不能安全表达写入目标，不自动把原目标降级为只读；由创建者重新下发明确的较窄目标。
 
+任务会话收尾由业务 Job 在原会话可选提交。正式报告与根任务成功后，Scheduler 在同一画布、同一根任务下只投影一个知识沉淀节点。节点投影失败可从已提交结算补登，建议失败不会阻塞正式报告。[专题](../PROJECT_KNOWLEDGE.md#任务会话收尾1197)
+
 ## 项目知识工作链（#752 与项目批次）
 
 普通 Job 从冻结目录按需搜索、读取 Memory 或拉取 Skill，实际使用生成稳定 usage_ref；需要立即请求整理时显式调用获授权的 request_project_knowledge。record_knowledge_feedback 只持久反馈并返回 {usage_ref,state:"recorded"}，不返回 work_ref 或创建 work；成功业务 Job 的已接受反馈经普通来源登记纳入 collector，冻结精确反馈、target 基线和 evidence refs，与其他来源一同受项目积累/间隔/停发门约束，不因反馈扩展原 Job 整理权限。显式请求保留原授权、预算、幂等语义，不被自动策略替代。Scheduler 仅在显式请求或 collector 准入后创建独立 work/Canvas，依次分派 maker、按 case×arm 分离的 trial Job、evaluator 与 reviewer；这些都是现有 Job/Attempt/沙箱路径，不新增模型执行者，也不触发业务 Hub/Report。trial 只得到相应 arm 和 stage audience 的输入，发布共享资产 JSON 并以 `emit_fact` 引用其版本/hash，评测读取实际 Evidence；缺环境、证据或终态异常保持 `needs_eval`/阻断，不以文字结论晋升。审查通过才在事务中切 active 指针；失败或重启依持久 assignment/receipt 恢复，未知外部效果不自动重放。项目治理 recipe 在 work 创建时冻结，修订仅进入下一 work。详细状态和预算见[项目知识专题](../PROJECT_KNOWLEDGE.md)。现有集成测试使用构造的 Job/Attempt 与 Evidence，未证明真实沙箱或模型效果。

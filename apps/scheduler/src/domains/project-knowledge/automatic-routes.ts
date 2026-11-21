@@ -6,6 +6,7 @@ import { projectScopeAllows } from "../../project-scope.js";
 import { validationHttpError } from "../../http-validation-error.js";
 import type { KnowledgeDb } from "./types.js";
 import { inspectAutomaticKnowledgeJob } from "./automatic.js";
+import { readTaskKnowledgeCloseout } from "./closeout-preview.js";
 
 const Id = z.string().uuid();
 const Page = z.object({ limit: z.coerce.number().int().min(1).max(20).default(10),
@@ -23,7 +24,13 @@ export function registerAutomaticKnowledgeRoutes(app: FastifyInstance, deps: { d
       const page = Page.parse(req.query);
       const [project] = await db`SELECT id FROM projects WHERE id=${projectId}`;
       if (!project) return reply.code(404).send({ error_code: "KNOWLEDGE_PROJECT_NOT_FOUND" });
-      const jobs = await db`SELECT id,type,status,finished_at FROM jobs WHERE project_id=${projectId}
+      const jobs = await db`SELECT id,type,status,finished_at,
+        closeout.root_ref AS closeout_root_ref, COALESCE(closeout.state,'legacy_preview') AS closeout_status FROM jobs
+        LEFT JOIN LATERAL (SELECT n.body_json->>'root_node_id' AS root_ref,n.body_json->>'state' AS state
+          FROM canvas_nodes n JOIN canvas_nodes root ON root.canvas_id=n.canvas_id AND root.node_type='root'
+            AND root.id::text=n.body_json->>'root_node_id'
+          WHERE n.canvas_id=jobs.canvas_id AND n.node_type='knowledge_closeout' LIMIT 1) closeout ON true
+        WHERE project_id=${projectId}
         AND status IN ('succeeded','failed','timeout','cancelled','orphan','waiting_human')
         AND type NOT IN ('hub_reason','report')
         AND NOT EXISTS(SELECT 1 FROM project_knowledge_job_assignments a WHERE a.job_id=jobs.id)
@@ -36,6 +43,22 @@ export function registerAutomaticKnowledgeRoutes(app: FastifyInstance, deps: { d
       const validation = validationHttpError(error);
       return validation ? reply.code(validation.statusCode).send(validation.body)
         : reply.code(500).send({ error_code: "KNOWLEDGE_MANAGEMENT_ERROR", error: "知识补做预览失败" });
+    }
+  });
+  app.get("/projects/:id/knowledge/closeout/:rootId", async (req, reply) => {
+    try {
+      const { id, rootId } = req.params as { id: string; rootId: string };
+      const projectId = Id.parse(id);
+      if (!req.actor || !projectScopeAllows(req.actor.projectId, projectId) || !actorHasScope(req.actor, "projects:read"))
+        return reply.code(403).send({ error_code: "KNOWLEDGE_SCOPE_DENIED" });
+      const closeout = await readTaskKnowledgeCloseout(db, projectId, Id.parse(rootId), {
+        sources: actorHasScope(req.actor, "tasks:read"),
+      }, Page.parse(req.query));
+      return closeout ?? reply.code(404).send({ error_code: "KNOWLEDGE_CLOSEOUT_NOT_FOUND" });
+    } catch (error) {
+      const validation = validationHttpError(error);
+      return validation ? reply.code(validation.statusCode).send(validation.body)
+        : reply.code(500).send({ error_code: "KNOWLEDGE_MANAGEMENT_ERROR", error: "知识沉淀详情读取失败" });
     }
   });
 }

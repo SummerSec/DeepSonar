@@ -7,7 +7,7 @@ export * from "./task-result.js";
 import { z } from "zod";
 import { CandidateOutcomeClaim } from "./task-outcome.js";
 export * from "./task-outcome.js";
-import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload } from "./project-knowledge.js";
+import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload, TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "./project-knowledge.js";
 export * from "./project-knowledge.js";
 import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
 import { CompletionRecoveryDecision } from "./completion-recovery.js";
@@ -1736,12 +1736,12 @@ export const VERIFY_REPORT_PLATFORM_TOOLS: PlatformToolName[] = [
  */
 export function allowedPlatformTools(
   roleName: string,
-  _roleKind: "role" | "hub" | "system",
+  roleKind: "role" | "hub" | "system",
 ): PlatformToolName[] {
   if (roleName === "verify" || roleName === "report") {
     return VERIFY_REPORT_PLATFORM_TOOLS.slice();
   }
-  return ALL_PLATFORM_TOOLS.slice();
+  return ALL_PLATFORM_TOOLS.filter((name) => name !== TASK_KNOWLEDGE_SUGGESTION_OPERATION || roleKind === "role");
 }
 
 /** These Job-wide control capabilities cannot be disabled by RoleConfig. */
@@ -1750,7 +1750,7 @@ export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): Plat
   return ["mark_job_done", "ack_human_message"];
 }
 
-/** Ordinary optional tools default on; experimental Skill suggestions require explicit opt-in. */
+/** Ordinary optional tools default on; experimental knowledge tools require explicit opt-in. */
 export function resolvePlatformTools(
   roleName: string,
   roleKind: "role" | "hub" | "system",
@@ -1758,7 +1758,7 @@ export function resolvePlatformTools(
 ): PlatformToolName[] {
   const required = new Set(requiredPlatformTools(roleKind));
   return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name)
-    || (name === "suggest_project_skills" || name === "record_skill_choice"
+    || (name === "suggest_project_skills" || name === "record_skill_choice" || name === TASK_KNOWLEDGE_SUGGESTION_OPERATION
       ? config[name] === true : config[name] !== false));
 }
 

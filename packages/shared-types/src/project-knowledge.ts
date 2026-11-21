@@ -34,6 +34,29 @@ export const KnowledgeSourceRef = z.object({ kind: z.enum(["evidence", "fact", "
 export type KnowledgeSourceRef = z.infer<typeof KnowledgeSourceRef>;
 export const KnowledgeBaseRef = z.object({ item_ref: uuid, version_ref: uuid, generation: z.number().int().nonnegative(), content_hash: hash }).strict();
 export type KnowledgeBaseRef = z.infer<typeof KnowledgeBaseRef>;
+export const TASK_KNOWLEDGE_SUGGESTION_OPERATION = "submit_task_knowledge_suggestion" as const;
+export const TASK_KNOWLEDGE_SUGGESTION_MAX_BYTES = 4 * 1024;
+const TaskKnowledgeSuggestionText = z.string().min(1).max(TASK_KNOWLEDGE_SUGGESTION_MAX_BYTES).regex(/\S/u);
+const TaskKnowledgeSuggestionItem = z.object({
+  kind: ProjectKnowledgeKind,
+  title: TaskKnowledgeSuggestionText.max(200),
+  scope: TaskKnowledgeSuggestionText,
+  content: TaskKnowledgeSuggestionText,
+  evidence_refs: z.array(KnowledgeSourceRef.pick({ kind: true, ref: true }).extend({ kind: z.enum(["fact", "evidence"]), ref: uuid })).min(1).max(4),
+  target: z.object({ usage_ref: uuid }).strict().optional(),
+}).strict();
+export const SubmitTaskKnowledgeSuggestionPayload = z.object({
+  result: z.enum(["suggestions", "no_new"]),
+  items: z.array(TaskKnowledgeSuggestionItem).max(2),
+}).strict().superRefine((value, ctx) => {
+  if ((value.result === "no_new") !== (value.items.length === 0)) {
+    ctx.addIssue({ code: "custom", path: ["items"], message: "suggestions requires one or two items; no_new requires an empty array" });
+  }
+  if (utf8(JSON.stringify(value.items)) > TASK_KNOWLEDGE_SUGGESTION_MAX_BYTES) {
+    ctx.addIssue({ code: "custom", path: ["items"], message: "Suggestion items exceed 4096 UTF-8 bytes" });
+  }
+});
+export type SubmitTaskKnowledgeSuggestionPayload = z.infer<typeof SubmitTaskKnowledgeSuggestionPayload>;
 export const KnowledgeCandidate = z.object({
   kind: ProjectKnowledgeKind,
   logical_key: text(160).regex(/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/),
@@ -114,6 +137,7 @@ export type SuggestProjectSkillsPayload = z.infer<typeof SuggestProjectSkillsPay
 export type RecordSkillChoicePayload = z.infer<typeof RecordSkillChoicePayload>;
 
 export const KnowledgeControlPayloadSchemas = {
+  [TASK_KNOWLEDGE_SUGGESTION_OPERATION]: SubmitTaskKnowledgeSuggestionPayload,
   suggest_project_skills: SuggestProjectSkillsPayload,
   record_skill_choice: RecordSkillChoicePayload,
   request_project_knowledge: RequestProjectKnowledgePayload,

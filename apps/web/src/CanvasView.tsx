@@ -1576,6 +1576,7 @@ export function CanvasView({
           <Sidebar
             canvasId={canvasId}
             node={selected}
+            projectId={data?.canvas?.project_id}
             onClose={clearSelected}
             onTraceFinding={
               selected.node_type === "finding" && findingIdByNodeId?.get(selected.id) && onTraceFinding

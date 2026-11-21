@@ -313,6 +313,10 @@ Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_con
 
 创建任务可用 enqueue 原子入队。GET /projects/{id}/task-queue 使用 tasks:read，PATCH 同路径和 POST /projects/{id}/task-queue/items 使用 jobs:control，并校验项目范围。新控制 body 严格拒绝未知字段。失败/取消后恢复必须提交 acknowledge_failed_head 指向明确确认的当前条目，过期身份或未知效果返回稳定 409。队列、Canvas 与 Job 读取为有界诊断，详细字段见 OpenAPI 与[队列专题](../PROJECT_TASK_QUEUE.md)。
 
+## 任务会话收尾（#1197）
+
+`submit_task_knowledge_suggestion` 是可选 Job 控制操作。它要求当前 Attempt 的冻结工具授权与幂等键，返回持久回执。`GET /projects/:id/knowledge/closeout/:rootId` 返回该任务已汇总的状态及分页建议，详情重新校验来源和修订目标的访问权限。历史资格仍由下文的只读预览接口返回。
+
 ## 项目知识来源与历史资格（#1035）
 
 `GET /projects/:id/knowledge/backfill` 要求 `projects:read` 与项目作用域，每页默认10、最多20条，返回当前资格/原因、来源登记及已有 work；不返回来源正文。无对应 POST 补做入口，不创建或恢复执行。

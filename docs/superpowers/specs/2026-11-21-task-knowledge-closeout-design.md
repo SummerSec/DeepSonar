@@ -135,7 +135,7 @@ Scheduler 只读取本项目、本任务当前轮次下的合法 Fact、Evidence
 | 知识复用 | 草稿留在审查入口，普通任务只能拉取获准生效版本。一个执行器提出的项目知识可以被另一执行器按授权发现。 |
 | 试点切换 | 新旧自动入口不会重复认领同一来源。已停发项目切换或重新打开试点后仍停发。已认领工作按原预算结算，未认领的旧来源出现在历史预览。暂停、恢复和历史预览都能查到授权范围内的原证据、回执及预算。 |
 
-工程验收走 GitHub Actions。实际模型用量、漏选和后续复用效果需要试点数据。运行时、数据库和 OpenAPI 的现状以对应专题为准。本文记录待实现方案。方案采纳和实现后，再同步 FR-KNOW-001、追溯矩阵、架构视图及正式 ADR。
+工程验收走 GitHub Actions。实际模型用量、漏选和后续复用效果需要试点数据。运行时、数据库和 OpenAPI 的现状以对应专题为准。本文记录完整目标。首期工程状态见[项目知识专题](../../PROJECT_KNOWLEDGE.md#任务会话收尾1197)。自动评测、发布和切换旧采集器属于后续阶段。
 
 - 任务结算与原入口见 [报告结算](../../../apps/scheduler/src/report.ts)、[当前自动登记](../../../apps/scheduler/src/domains/project-knowledge/automatic.ts)、[现有按批次准入规则](../../architecture/adr/0024-project-knowledge-batching-admission.md)。
 - 会话和写入边界见 [会话归档适配器](../../../packages/runtime-sandbox/src/cli-session-adapters.ts)、[完成载荷](../../../packages/shared-types/src/index.ts)、[项目知识提案](../../../apps/scheduler/src/domains/project-knowledge/proposals.ts)、[项目知识专题](../../PROJECT_KNOWLEDGE.md)。

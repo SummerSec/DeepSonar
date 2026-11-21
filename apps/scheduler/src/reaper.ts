@@ -17,6 +17,7 @@ import { cleanupManagedResourcesOnce, shouldCleanupManagedResources } from "./re
 import { releaseOrphanSandboxLeases } from "./domains/worker-nodes/registry.js";
 import { reapExpiredDeviceLeases } from "./domains/device/index.js";
 import { expireDanglingHumanNodes, reapExpiredHumanNodes } from "./domains/canvas/human-node-expire.js";
+import { recoverTaskKnowledgeCloseouts } from "./domains/canvas/task-knowledge-closeout.js";
 import { cleanupSharedAssetsForJob } from "./shared-asset-lifecycle.js";
 import { pumpCompletionRecoveries } from "./domains/job-attempt/recovery.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
@@ -192,6 +193,7 @@ export function startReaper() {
   let running = false;
   let recoveryCursor: string | null = null;
   let platformStopCursor: string | null = null;
+  let knowledgeCloseoutCursor: string | null = null;
   const timer = setInterval(() => {
     if (running) return;
     running = true;
@@ -199,6 +201,11 @@ export function startReaper() {
       const result = await reapOnce(recoveryCursor, platformStopCursor);
       recoveryCursor = result.recoveryCursor;
       platformStopCursor = result.platformStopCursor;
+      knowledgeCloseoutCursor = await recoverTaskKnowledgeCloseouts(sql, knowledgeCloseoutCursor)
+        .then(batch => batch.nextCursor).catch(() => {
+          console.warn("[task-knowledge-closeout] recovery scan deferred");
+          return knowledgeCloseoutCursor;
+        });
       if (result.timeouts + result.orphans + result.provisionStuck + result.stalled + result.humanTimeouts + result.expiredHumanNodes + result.recoveryStops + result.recoveryWakes + result.platformStops > 0) {
         console.log("[reaper]", result);
       }

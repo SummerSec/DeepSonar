@@ -4,6 +4,7 @@ import { api, type CanvasBroadcastItem, type CanvasHumanMessage, type CanvasNode
 import { factHumanActions } from "./fact-verification";
 import { broadcastStatusLabel, BROADCAST_STATUS_COLOR } from "./canvas-broadcasts";
 import { LiveStream } from "./LiveStream";
+import { KnowledgeCloseoutDetails } from "./KnowledgeCloseoutDetails";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
 import { HumanMessageList } from "./HumanMessageList";
@@ -50,6 +51,7 @@ const TABS: { key: Tab; label: string }[] = [
 /** 节点详情侧栏：概览 / 实时流（WS）/ 事件时间线 */
 export function Sidebar({
   canvasId,
+  projectId,
   node,
   onClose,
   onTraceFinding,
@@ -58,6 +60,7 @@ export function Sidebar({
   onSendMessage,
 }: {
   canvasId: string;
+  projectId?: string | null;
   node: CanvasNode;
   onClose: () => void;
   onTraceFinding?: () => void;
@@ -89,6 +92,8 @@ export function Sidebar({
   // 正文优先字段（fact.description / finding.summary 等）置顶；其余 body 字段跟后
   const PRIMARY_BODY_KEYS = ["description", "summary", "reason", "content"] as const;
   const body = node.body_json ?? {};
+  const isCloseout = node.node_type === "knowledge_closeout";
+  const closeoutRoot = typeof body.root_node_id === "string" ? body.root_node_id : null;
   const primaryEntries = PRIMARY_BODY_KEYS
     .filter((k) => body[k] != null && String(body[k]).trim() !== "")
     .map((k) => [k, body[k]] as const);
@@ -149,9 +154,9 @@ export function Sidebar({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-              {node.node_type}
+              {isCloseout ? "任务收尾" : node.node_type}
             </span>
-            {node.status && <StatusDot status={jobStatus || node.status} />}
+            {!isCloseout && node.status && <StatusDot status={jobStatus || node.status} />}
             {verification && (
               <span
                 className="rounded border px-1 font-mono text-[11px]"
@@ -236,7 +241,10 @@ export function Sidebar({
       {/* 概览 / 事件 */}
       {tab !== "stream" && (
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-3">
-          {tab === "overview" && (
+          {tab === "overview" && isCloseout && (projectId && closeoutRoot
+            ? <KnowledgeCloseoutDetails key={`${projectId}:${closeoutRoot}`} projectId={projectId} rootId={closeoutRoot} />
+            : <p className="text-sm text-zinc-400">暂未取得知识沉淀详情。</p>)}
+          {tab === "overview" && !isCloseout && (
             <>
               {/* 待人工处理事实：人工确认 / 明确排除（§5.2-6；处理后调度器会尝试推进报告） */}
               {node.node_type === "fact" && node.verification_status && factHumanActions(node.verification_status).includes("verified") && (
