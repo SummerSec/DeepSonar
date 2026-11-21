@@ -100,7 +100,7 @@ export async function runFindingSourceRebuildFixture(testUrl: string): Promise<v
       const result: Record<string, unknown> = {};
       // Fixed table names; this isolated database contains only these historical rows.
       for (const table of ["projects", "canvases", "jobs", "findings", "artifacts", "artifact_claims", "artifact_evidence", "canvas_nodes", "canvas_edges", "events", "event_dedup"]) {
-        const rows = await source.unsafe(`SELECT to_jsonb(t) - 'source_digest' AS row FROM ${table} t ORDER BY to_jsonb(t)::text`);
+        const rows = await source.unsafe(`SELECT to_jsonb(t) - 'source_digest' - 'duplicate_of' AS row FROM ${table} t ORDER BY to_jsonb(t)::text`);
         result[table] = rows.map(row => row.row);
       }
       return result;
