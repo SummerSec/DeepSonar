@@ -164,14 +164,14 @@ test("task queries filter on the server, reset pages and ignore late responses a
     assert.deepEqual(latest!.rows, [], "previous filter rows disappear immediately");
     assert.deepEqual(env.requests[1].options, { canvas_id: "task-a", verify_status: "refuted,inconclusive", after: null, limit: 50 });
     await act(async () => env.requests[1].pending.resolve(page("match-beyond-first-50", "filtered-next")));
-    assert.equal(latest!.rows[0].title, "match-beyond-first-50");
+    assert.equal(env.container.textContent, "match-beyond-first-50");
     await render({ status: "refuted,inconclusive", after: "filtered-next" });
     assert.equal(env.requests[2].options?.verify_status, "refuted,inconclusive");
     assert.equal(env.requests[2].options?.after, "filtered-next");
     await render({ status: "needs_human" });
     await act(async () => env.requests[3].pending.resolve(page("current")));
     await act(async () => env.requests[2].pending.resolve(page("stale-page")));
-    assert.equal(latest!.rows[0].title, "current");
+    assert.equal(env.container.textContent, "current");
     await render({ enabled: false });
     await render({ status: "needs_human" });
     assert.deepEqual(latest!.rows, [], "reactivation must not revive previously successful rows");
