@@ -99,6 +99,11 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     assert.match(container.textContent!, /Job 数量预算已耗尽/);
     assert.match(container.textContent!, /模型报告/);
     assert.match(container.textContent!, /不代表效果已证明/);
+    const feedback = () => container.querySelector('[aria-label="知识反馈统计"]')!;
+    assert.match(feedback().textContent!, /本项目拉取 5/);
+    assert.match(feedback().textContent!, /反馈覆盖率 40%/);
+    assert.match(feedback().textContent!, /已记录的显式反馈 2/);
+    assert.match(feedback().textContent!, /尚无反馈（效果未知） 3/);
     const collection = () => container.querySelector('[aria-label="自动整理状态"]')!;
     assert.match(collection().textContent!, /自动整理已停发/);
     assert.match(collection().textContent!, /待整理来源 12/);
@@ -127,13 +132,18 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     assert.doesNotMatch(container.textContent!, /work-a|已登记来源 24|自动整理已停发|来源已保留/);
     await act(async () => requests[1].resolve(page("late-a")));
     assert.doesNotMatch(container.textContent!, /late-a|已登记来源 24|自动整理已停发|来源已保留/);
+    assert.equal(feedback(), null, "feedback counts from a previous project are hidden during loading");
     assert.equal(requests[2].project, "b");
     assert.equal(requests[2].offset, 0);
     const nextCollection = "2026-11-17T02:00:00.000Z";
     const accumulating: KnowledgeActivity["collection"] = { state: "accumulating", pending_sources: 3,
       consecutive_failures: 0, next_collection_at: nextCollection };
-    await act(async () => requests[2].resolve({ ...page("work-b"), collection: accumulating, items: [] }));
+    const emptyPage = page("work-b");
+    await act(async () => requests[2].resolve({ ...emptyPage, collection: accumulating, items: [],
+      summary: { ...emptyPage.summary, usage_count: 0, feedback_count: 0, successful_feedback: 0 } }));
     assert.match(container.textContent!, /暂无知识工作/);
+    assert.match(feedback().textContent!, /反馈覆盖率 无样本/);
+    assert.doesNotMatch(feedback().textContent!, /%/);
     assert.match(collection().textContent!, /正在积累来源/);
     assert.match(collection().textContent!, /待整理来源 3/);
     assert.match(collection().textContent!, /连续无产出 0 批/);
@@ -147,9 +157,14 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     assert.equal(refreshRequests, 1, "retry uses the page refresh trigger");
     await render("b", 2);
     await render("b", 3);
-    await act(async () => requests[5].resolve(page("current-b")));
+    const noFeedbackPage = page("current-b");
+    await act(async () => requests[5].resolve({ ...noFeedbackPage,
+      summary: { ...noFeedbackPage.summary, usage_count: 503, feedback_count: 0, successful_feedback: 0 } }));
     await act(async () => requests[4].reject(new Error("late refresh failure")));
     assert.match(container.textContent!, /current-b/);
+    assert.match(feedback().textContent!, /反馈覆盖率 0%/);
+    assert.match(feedback().textContent!, /已记录的显式反馈 0/);
+    assert.match(feedback().textContent!, /尚无反馈（效果未知） 503/);
     assert.equal(container.querySelector('[role="alert"]'), null, "a late failure from an earlier refresh cannot replace current data");
     for (const [state, label, nextAt] of [
       ["idle", "暂无待整理来源", null], ["busy", "已有知识工作待执行或整理中", null],

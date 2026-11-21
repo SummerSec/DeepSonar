@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-21
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -169,9 +169,15 @@ Job 列表只为 `waiting_human` 项附加 Scheduler 当前 `execution_state`，
 
 合法 action 为 `reconcile_effects` / `stop` / `release_stale`（后者用原 grant 无目标效果退出）；reason 不作为证据。200 `persisted_deferred` 仅证明提案持久接纳，不表示对账执行、Job 成功或模型理解。稳定拒绝码 `recovery_not_authorized`、`recovery_paused`、`recovery_stale`、`recovery_inactive` 默认 fail closed，不能靠自动重试扩大权限。原 completion key 的负回执保持不可变；活动原 Attempt 在证据修复后需用新 revision/key 重新走完成门。详见 [ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前分支最终 SHA 的 Actions 尚待验收。
 
+## 任务工作台的知识整理历史（#1192）
+
+同项目 `tasks:read` 下，`GET /projects/:id/canvases` 的默认与 `status=active` 排除已收口的知识整理，`status=knowledge_history` 只返回其中还处于 `active` 的 Canvas。识别需核对平台来源标记、work ID 与 Canvas 关联，未回填关联只接受双方标记一致且无 Job 的记录。有运行或人工续做、待审提案及未结算效果的 Canvas 仍留在常用列表。`status=archived`、`status=all` 和详情仍按原画布契约返回。
+
+任务工作台按项目与列表状态绑定结果、计数及错误。切换后等待当前列表读取，首次读取失败只显示错误，成功空结果才显示零计数与空列表提示。同一列表定时刷新时保留已有结果，刷新失败同时显示错误，迟到的旧列表响应不能覆盖当前列表。
+
 ## 项目知识接口（#752 与项目批次）
 
-Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。
+Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。知识页从 activity 已有项目内 `usage_count` 和 `feedback_count` 派生反馈覆盖率及缺口，未记录显式反馈时效果未知（#1193）。
 
 本轮反馈响应修正：`record_knowledge_feedback` 仅持久化已接受的 usage 反馈，操作结果为 `{usage_ref,state:"recorded"}`，不返回 `work_ref`，也不入队或启动知识 work。成功业务 Job 的已接受反馈经普通来源登记进入项目 collector，冻结精确 usage/反馈、target 版本/hash 基线及 evidence refs；同样受 4 来源或等待 24 小时、自动批次间隔 24 小时和连续两批无产出停发约束。原 Job 没有冻结 `request_project_knowledge` 权限时，不因提交反馈获得自动整理权限。显式 `request_project_knowledge` 仍按原有授权、来源、预算与幂等约束请求整理，不被自动策略替代；不得把仅反馈记录当作显式整理。外层 accepted/receipt_ref 继续表示反馈持久接纳，不表示新 work、试验或激活；旧持久回执保持历史原样，不作为新调用返回旧 work_ref 的兼容分支。反馈记录也不清除 collector 连续失败。契约实现与最终 SHA Actions 仍须独立核对，不表示已部署。
 
