@@ -42,10 +42,10 @@ import { SearchableSelect } from "./SearchableSelect";
 import { HelpTip } from "./ui";
 import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProviderAllowlistPanel";
 import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourceAllowlistPanel";
-import { inferToastKind, showToast } from "./toast";
+import { FeedbackNotice } from "./FeedbackNotice";
+import { useOperationFeedback } from "./use-operation-feedback";
 import { SkillSourceCatalogActions } from "./components/SkillSourceCatalogActions";
 import { formatSkillSourceRegistrationFlash } from "./skill-source-sync-flash";
-import { useFlashMessage } from "./use-flash-message";
 import { GlobalJobQuotaSection } from "./components/GlobalJobQuotaSection";
 import { ProjectJobQuotaSection } from "./components/ProjectJobQuotaSection";
 
@@ -133,32 +133,37 @@ export function SettingsPanel({
   const [configRoleId, setConfigRoleId] = useState<string | null>(null);
   const [configBusy, setConfigBusy] = useState(false);
   const canManageSources = canAccessAnyScope(me, ["skills:write"]) && !me?.actor?.project_id;
-  const { message: msg, flash: flashMessage } = useFlashMessage(3000);
-  const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
+  const feedbackScope = `${projectId ?? "global"}:${globalSection}`;
+  const { message, kind, flash, clear } = useOperationFeedback(feedbackScope);
+  const { message: agentLoadError, kind: loadKind, flash: flashLoadError, clear: clearLoadError } = useOperationFeedback(feedbackScope);
 
   const reload = () => {
     const credentialRequest = ++credentialRequestId.current;
     if (!projectId && visibleGlobalTabs.length === 0) {
       setCredentials([]);
       setCredentialLoad(null);
+      clearLoadError();
       return;
     }
-    setAgentLoadError(null);
+    const requests: Promise<unknown>[] = [];
+    let loadFailed = false;
     const showAgentLoadError = (label: string, error: unknown) => {
+      if (credentialRequest !== credentialRequestId.current) return;
+      loadFailed = true;
       const detail = error instanceof Error ? error.message : String(error);
-      setAgentLoadError(`${label}加载失败：${detail}`);
+      flashLoadError(`${label}加载失败：${detail}`, "error");
     };
     const dataNeeds = settingsSectionDataNeeds(projectId, globalSection);
     const canLoadTab = (key: Tab) => Boolean(projectId || visibleGlobalTabs.includes(key));
     if (dataNeeds.agent && canLoadTab("roles")) {
-      api.globalRoleConfigs().then(setGlobalConfigs).catch((error) => showAgentLoadError("全局 Agent 配置", error));
+      requests.push(api.globalRoleConfigs().then(setGlobalConfigs).catch((error) => showAgentLoadError("全局 Agent 配置", error)));
     }
     if (projectId) {
       setProjectSettingsLoad({ projectId, status: "loading" });
       // 项目模式：角色带启用态 + 角色配置来源（项目覆盖/全局缺省/未配置）
-      api.projectRoles(projectId).then(setRoles).catch((error) => showAgentLoadError("项目角色", error));
-      api.projectRoleConfigs(projectId).then(setProjConfigs).catch((error) => showAgentLoadError("项目 Agent 配置", error));
-      api
+      requests.push(api.projectRoles(projectId).then(setRoles).catch((error) => showAgentLoadError("项目角色", error)));
+      requests.push(api.projectRoleConfigs(projectId).then(setProjConfigs).catch((error) => showAgentLoadError("项目 Agent 配置", error)));
+      requests.push(api
         .settings(projectId)
         .then((s) => {
           if (credentialRequest !== credentialRequestId.current) return;
@@ -172,30 +177,31 @@ export function SettingsPanel({
           if (credentialRequest !== credentialRequestId.current) return;
           setProjectSettingsLoad({ projectId, status: "error" });
           showAgentLoadError("项目账号设置", error);
-        });
+        }));
     } else if (globalSection === "agents" && canLoadTab("roles")) {
       // 全局模式：纯角色注册表（无启用态/绑定）+ 全局规则默认值
-      api
+      requests.push(api
         .agentRoles()
         .then((list) =>
           setRoles(
             list.map((r) => ({ ...r, enabled: false, default_enabled: false })),
           ),
         )
-        .catch((error) => showAgentLoadError("内置 Agent", error));
+        .catch((error) => showAgentLoadError("内置 Agent", error)));
     } else if (globalSection === "platform" && canLoadTab("rules")) {
-      api.globalSettings().then((g) => {
+      requests.push(api.globalSettings().then((g) => {
+        if (credentialRequest !== credentialRequestId.current) return;
         setStoredGlobalRules(g.rules);
         setRules(g.effective_rules);
         setFindingProtocol(g.finding_protocol);
         setEffectiveFindingProtocol(g.effective_finding_protocol);
         setCliActive(g.active_by_agent_cli ?? {});
         setProviderActive(g.active_by_provider ?? {});
-      }).catch(() => {});
+      }).catch((error) => showAgentLoadError("平台调度设置", error)));
     }
     if (projectId && dataNeeds.providerCredentials && canLoadTab("roles")) {
       setCredentialLoad({ projectId, status: "loading" });
-      api.credentials().then((list) => {
+      requests.push(api.credentials().then((list) => {
         if (credentialRequest !== credentialRequestId.current) return;
         setCredentials(list);
         setCredentialLoad({ projectId, status: "loaded" });
@@ -204,12 +210,12 @@ export function SettingsPanel({
         setCredentials([]);
         setCredentialLoad({ projectId, status: "error" });
         showAgentLoadError("Provider 凭据", error);
-      });
+      }));
     } else {
       setCredentials([]);
       setCredentialLoad(null);
     }
-    if (dataNeeds.modules && canAccessAnyScope(me, ["skills:read"]) && (canLoadTab("roles") || canLoadTab("sources"))) api.skillSources()
+    if (dataNeeds.modules && canAccessAnyScope(me, ["skills:read"]) && (canLoadTab("roles") || canLoadTab("sources"))) requests.push(api.skillSources()
       .then(async (list) => {
         if (credentialRequest !== credentialRequestId.current) return;
         setSources(list);
@@ -222,12 +228,15 @@ export function SettingsPanel({
               .then((d) => {
                 details[s.id] = d;
               })
-              .catch(() => {}),
+              .catch((error) => showAgentLoadError(`模块源「${s.name}」目录`, error)),
           ),
         );
         if (credentialRequest === credentialRequestId.current) setSourceDetails(details);
       })
-      .catch(() => {});
+      .catch((error) => showAgentLoadError("模块源", error)));
+    void Promise.allSettled(requests).then(() => {
+      if (credentialRequest === credentialRequestId.current && !loadFailed) clearLoadError();
+    });
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -242,20 +251,6 @@ export function SettingsPanel({
         ? searchParams.get("tab") as Tab
         : visibleGlobalTabs[0] ?? resolveSettingsSectionTab(globalSection, null));
   }, [globalSection, projectId, searchParams, visibleGlobalTabs]);
-
-  const flash = (m: string) => {
-    const kind = inferToastKind(m);
-    // #967: failures stay inline next to the save action instead of vanishing
-    // after 3s; success keeps the short flash. Both also raise exactly one
-    // toast (identical messages are merged by the toast model).
-    if (kind === "error") {
-      flashMessage(m, { durationMs: 0 });
-      showToast(m, inferToastKind(m));
-      return;
-    }
-    flashMessage(m, { durationMs: 3000 });
-    showToast(m, inferToastKind(m));
-  };
 
   const saveRules = async () => {
     if (!rules) return;
@@ -297,7 +292,7 @@ export function SettingsPanel({
       reload();
     } catch (e) {
       setRulesFailed(true);
-      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+      flash(`保存失败：${e instanceof Error ? e.message : e}`, "error");
     } finally {
       setRulesBusy(false);
     }
@@ -322,7 +317,7 @@ export function SettingsPanel({
       reload();
     } catch (e) {
       setConfigFailed(true);
-      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+      flash(`保存失败：${e instanceof Error ? e.message : e}`, "error");
     } finally {
       setConfigBusy(false);
     }
@@ -336,7 +331,7 @@ export function SettingsPanel({
       flash("已移除项目覆盖（回落全局缺省）");
       reload();
     } catch (e) {
-      flash(`移除失败：${e instanceof Error ? e.message : e}`);
+      flash(`移除失败：${e instanceof Error ? e.message : e}`, "error");
     }
   };
 
@@ -350,14 +345,14 @@ export function SettingsPanel({
         await api.updateRole(roleForm.id, body);
         flash("角色已保存（下一 job 生效）");
       } else {
-        if (!roleForm.name.trim()) return flash("角色标识必填");
+        if (!roleForm.name.trim()) return flash("角色标识必填", "error");
         await api.createRole({ name: roleForm.name.trim(), ...body });
         flash("角色已创建（默认可用，由 Hub 决定是否派发）");
       }
       setRoleForm(EMPTY_ROLE);
       reload();
     } catch (e) {
-      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+      flash(`保存失败：${e instanceof Error ? e.message : e}`, "error");
     }
   };
 
@@ -630,20 +625,16 @@ export function SettingsPanel({
             {t.label}
           </button>
         ))}
-        {msg && <span className="ml-auto shrink-0 self-center px-2 font-mono text-[10px] text-acc-400">{msg}</span>}
+      </div>
+
+      <div className={`max-h-[40%] min-w-0 shrink-0 space-y-2 overflow-y-auto whitespace-pre-wrap break-words ${variant === "page" ? "px-5 sm:px-9" : "px-4"}`}>
+        <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
+        <FeedbackNotice message={agentLoadError} kind={loadKind} onDismiss={clearLoadError} action={{ label: "重试", onClick: reload }} />
       </div>
 
       <div className={`settings-content flex-1 overflow-y-auto py-5 ${variant === "page" ? "w-full px-5 sm:px-9" : "px-4"}`}>
         {!projectId && tabList.length === 0 && (
           <div role="alert" className="border border-amber-300/20 bg-amber-300/[.05] px-4 py-3 text-[12px] text-amber-200">当前身份没有访问此配置域的权限。</div>
-        )}
-        {agentLoadError && (
-          <div role="alert" className="mb-4 flex items-start gap-3 rounded-[10px] border border-red-400/20 bg-red-400/[.06] px-4 py-3 text-[12px] leading-relaxed text-red-200">
-            <span className="min-w-0 flex-1">{agentLoadError}</span>
-            <button onClick={reload} className="shrink-0 font-mono text-[10px] text-red-300 underline underline-offset-2 hover:text-red-100">
-              重试
-            </button>
-          </div>
         )}
         {activeTab === "rules" && rules && (!projectId || settings) && (
           <div className="flex flex-col gap-4">
@@ -1057,7 +1048,12 @@ export function SettingsPanel({
                 {roleForm.id && roleForm.kind === "role" && (
                   <button
                     onClick={async () => {
-                      await api.deleteRole(roleForm.id!).catch((e) => flash(`删除失败：${e instanceof Error ? e.message : e}`));
+                      try {
+                        await api.deleteRole(roleForm.id!);
+                      } catch (e) {
+                        flash(`删除失败：${e instanceof Error ? e.message : e}`, "error");
+                        return;
+                      }
                       setRoleForm(EMPTY_ROLE);
                       flash("已删除");
                       reload();
@@ -1138,7 +1134,7 @@ export function SettingsPanel({
                       title="删除平台源"
                       onClick={async () => {
                         try { await api.deleteSkillSource(s.id); }
-                        catch (e) { flash(`删除失败：${String(e)}`); return; }
+                        catch (e) { flash(`删除失败：${String(e)}`, "error"); return; }
                         flash("已删除平台源");
                         reload();
                       }}
@@ -1175,7 +1171,7 @@ export function SettingsPanel({
               />
               <button
                 onClick={async () => {
-                  if (!newSource.name.trim() || !newSource.repo_url.trim()) return flash("名称与仓库地址必填");
+                  if (!newSource.name.trim() || !newSource.repo_url.trim()) return flash("名称与仓库地址必填", "error");
                   try {
                     const registered = await api.createSkillSource({
                       name: newSource.name.trim(),
@@ -1186,7 +1182,7 @@ export function SettingsPanel({
                     flash(formatSkillSourceRegistrationFlash(registered));
                     reload();
                   } catch (e) {
-                    flash(`添加失败：${e instanceof Error ? e.message : e}`);
+                    flash(`添加失败：${e instanceof Error ? e.message : e}`, "error");
                   }
                 }}
                 className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"

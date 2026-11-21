@@ -29,7 +29,7 @@ export function GlobalJobQuotaSection({ storedRules, rules, activeJobs, onSaved,
   rules: EffectiveRules;
   activeJobs: number;
   onSaved: (saved: GlobalSettings) => void;
-  onFlash: (message: string) => void;
+  onFlash: (message: string, kind: "ok" | "error") => void;
 }) {
   const [draft, setDraft] = useState(() => storedDraft(storedRules));
   const [baseline, setBaseline] = useState(() => storedDraft(storedRules));
@@ -62,9 +62,9 @@ export function GlobalJobQuotaSection({ storedRules, rules, activeJobs, onSaved,
       setBaseline(next);
       setEdited({});
       onSaved(saved);
-      onFlash("全局调度配额已保存（后续领取生效）");
+      onFlash("全局调度配额已保存（后续领取生效）", "ok");
     } catch (error) {
-      onFlash(`保存失败：${error instanceof Error ? error.message : error}`);
+      onFlash(`保存失败：${error instanceof Error ? error.message : error}`, "error");
     } finally { setBusy(false); }
   };
   return (

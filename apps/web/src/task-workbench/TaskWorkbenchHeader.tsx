@@ -12,7 +12,6 @@ export function TaskWorkbenchHeader({
   statusLines,
   findingProtocol,
   decisionLabel,
-  message,
   createdAt,
   startExecValue,
   startExecTitle,
@@ -30,7 +29,6 @@ export function TaskWorkbenchHeader({
   statusLines: TaskStatusLines;
   findingProtocol?: EffectiveFindingProtocol | null;
   decisionLabel?: string | null;
-  message?: string | null;
   createdAt?: string;
   startExecValue: string;
   startExecTitle?: string;
@@ -80,7 +78,6 @@ export function TaskWorkbenchHeader({
             ]
               .filter(Boolean)
               .join(" · ")}
-            {message ? ` · ${message}` : ""}
           </span>
         ) : (
           <span className="mt-1 block font-mono text-[10px] text-zinc-600">状态加载中…</span>

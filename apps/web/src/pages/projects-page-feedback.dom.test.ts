@@ -2,7 +2,7 @@
 // recovery path. Regression: initial failure -> inline retry -> success must
 // remove both the inline alert and the viewport-fixed toast.
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { JSDOM } from "jsdom";
 import { StrictMode, act, createElement } from "react";
 import { createRoot } from "react-dom/client";
@@ -21,6 +21,48 @@ const project: Project = {
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
+
+test("a rejected archive reports a persistent failure and a successful retry replaces it", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1", pretendToBeVisual: true });
+  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element, Node: dom.window.Node, localStorage: dom.window.localStorage, IS_REACT_ACT_ENVIRONMENT: true };
+  const previous = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  const originalProjects = api.projects;
+  const originalArchive = api.archiveProject;
+  let fail = true;
+  api.projects = async () => [project];
+  api.archiveProject = async () => {
+    if (fail) throw new Error("permission denied");
+    return { id: project.id, status: "archived" };
+  };
+  mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  try {
+    await act(async () => root.render(createElement(MemoryRouter, null, createElement(ProjectsPage), createElement(ToastHost))));
+    const archive = dom.window.document.querySelector<HTMLButtonElement>('button[title="归档"]');
+    assert.ok(archive);
+    await act(async () => archive.click());
+    act(() => mock.timers.tick(20000));
+    assert.match(dom.window.document.querySelector('.app-feedback[role="alert"]')!.textContent!, /permission denied/);
+    assert.doesNotMatch(dom.window.document.body.textContent!, /项目已归档/);
+    fail = false;
+    await act(async () => archive.click());
+    assert.doesNotMatch(dom.window.document.body.textContent!, /permission denied/);
+    assert.match(dom.window.document.querySelector('.app-feedback[role="status"]')!.textContent!, /项目已归档/);
+  } finally {
+    act(() => root.unmount());
+    clearToasts();
+    mock.timers.reset();
+    api.projects = originalProjects;
+    api.archiveProject = originalArchive;
+    dom.window.close();
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
+});
 
 test("a successful inline retry clears the sticky load-failure toast", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://127.0.0.1" });

@@ -591,15 +591,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .app-toast-stack {
   position: fixed;
   right: 18px;
-  bottom: 18px;
-  z-index: 80;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 200;
   display: flex;
   flex-direction: column;
   gap: 8px;
   max-width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
   pointer-events: none;
 }
 .app-toast {
+  flex-shrink: 0;
   padding: 10px 14px;
   border-radius: 8px;
   border: 1px solid var(--toast-ok-border);
@@ -611,6 +614,25 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
      retry controls are actually clickable. */
   pointer-events: auto;
 }
+.app-feedback {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  margin: 8px 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--toast-ok-border);
+  border-radius: 8px;
+  color: var(--toast-ok-fg);
+  background: var(--toast-ok-bg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.app-feedback-content { display: grid; gap: 3px; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.app-feedback.is-warn { color: var(--toast-warn-fg); background: var(--toast-warn-bg); border-color: var(--toast-warn-border); }
+.app-feedback.is-error { color: var(--toast-error-fg); background: var(--toast-error-bg); border-color: var(--toast-error-border); }
+.app-toast-label { display: block; margin-bottom: 3px; }
 .app-toast.is-warn {
   border-color: var(--toast-warn-border);
   background: var(--toast-warn-bg);
@@ -625,6 +647,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .app-toast-message { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .app-toast-controls { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .app-toast-control {
+  min-width: 32px;
+  min-height: 32px;
   padding: 1px 6px;
   border-radius: 5px;
   border: 1px solid currentColor;
@@ -635,6 +659,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   cursor: pointer;
 }
 .app-toast-control:hover { opacity: 1; }
+@media (pointer: coarse) {
+  .app-toast-control { min-width: 44px; min-height: 44px; }
+}
 .app-toast-control.is-action { opacity: 1; }
 .app-toast-control:focus-visible {
   outline: 2px solid currentColor;

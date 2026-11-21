@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, EyeSlash } from "@phosphor-icons/react";
 import { api, type PublicUser } from "./api";
 import { SearchableSelect } from "./SearchableSelect";
-import { inferToastKind, showToast } from "./toast";
+import { FeedbackNotice } from "./FeedbackNotice";
+import { useOperationFeedback } from "./use-operation-feedback";
 
 export function UsersPanel() {
   const [users, setUsers] = useState<PublicUser[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const { message, kind, flash, clear } = useOperationFeedback();
+  const { message: loadError, kind: loadKind, flash: flashLoadError, clear: clearLoadError } = useOperationFeedback();
+  const loadRequestId = useRef(0);
   const [form, setForm] = useState({
     username: "",
     password: "",
@@ -17,24 +19,27 @@ export function UsersPanel() {
   const [busy, setBusy] = useState(false);
   const [showCreatePassword, setShowCreatePassword] = useState(false);
 
-  const reload = () => {
+  const reload = useCallback(() => {
+    const requestId = ++loadRequestId.current;
     api
       .listUsers()
-      .then(setUsers)
-      .catch((e) => setError(String(e)));
-  };
+      .then((rows) => {
+        if (requestId !== loadRequestId.current) return;
+        setUsers(rows);
+        clearLoadError();
+      })
+      .catch((e) => {
+        if (requestId === loadRequestId.current) flashLoadError(`用户列表加载失败：${e instanceof Error ? e.message : String(e)}`, "error");
+      });
+  }, [clearLoadError, flashLoadError]);
 
-  useEffect(reload, []);
-
-  const flash = (m: string) => {
-    setMsg(m);
-    showToast(m, inferToastKind(m));
-    setTimeout(() => setMsg(null), 3000);
-  };
+  useEffect(() => {
+    reload();
+    return () => { loadRequestId.current += 1; };
+  }, [reload]);
 
   const create = async () => {
     setBusy(true);
-    setError(null);
     try {
       await api.createUser(form);
       setForm({ username: "", password: "", display_name: "", role: "operator" });
@@ -42,8 +47,7 @@ export function UsersPanel() {
       reload();
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      setError(detail);
-      showToast(detail, "error");
+      flash(detail, "error");
     } finally {
       setBusy(false);
     }
@@ -51,8 +55,8 @@ export function UsersPanel() {
 
   return (
     <div className="flex flex-col gap-5">
-      {msg && <div className="font-mono text-[12px] text-acc-400">{msg}</div>}
-      {error && <div className="text-[12px] text-red-300">{error}</div>}
+      <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
+      <FeedbackNotice message={loadError} kind={loadKind} onDismiss={clearLoadError} action={{ label: "重试", onClick: reload }} />
 
       <section>
         <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">用户列表</div>
@@ -80,8 +84,13 @@ export function UsersPanel() {
                     type="button"
                     className="text-[11px] text-zinc-500 hover:text-zinc-300"
                     onClick={async () => {
-                      await api.updateUser(u.id, { status: "disabled" });
-                      reload();
+                      try {
+                        await api.updateUser(u.id, { status: "disabled" });
+                        flash("用户已禁用");
+                        reload();
+                      } catch (e) {
+                        flash(e instanceof Error ? e.message : String(e), "error");
+                      }
                     }}
                   >
                     禁用
@@ -91,8 +100,13 @@ export function UsersPanel() {
                     type="button"
                     className="text-[11px] text-zinc-500 hover:text-zinc-300"
                     onClick={async () => {
-                      await api.updateUser(u.id, { status: "active" });
-                      reload();
+                      try {
+                        await api.updateUser(u.id, { status: "active" });
+                        flash("用户已启用");
+                        reload();
+                      } catch (e) {
+                        flash(e instanceof Error ? e.message : String(e), "error");
+                      }
                     }}
                   >
                     启用
@@ -109,8 +123,7 @@ export function UsersPanel() {
                       flash("密码已重置，旧会话已失效");
                     } catch (e) {
                       const detail = e instanceof Error ? e.message : String(e);
-                      setError(detail);
-                      showToast(detail, "error");
+                      flash(detail, "error");
                     }
                   }}
                 >

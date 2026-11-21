@@ -28,7 +28,7 @@ export function ProjectJobQuotaSection({
   rules: EffectiveRules;
   /** 服务端 rules.maxConcurrentJobs；父级 settings reload 时传入 */
   storedQuota: unknown;
-  onFlash: (message: string) => void;
+  onFlash: (message: string, kind: "ok" | "error") => void;
   onSettingsSaved: (saved: ProjectSettings) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -66,7 +66,7 @@ export function ProjectJobQuotaSection({
       maxConcurrentJobs = parseProjectJobQuotaDraft(draft);
     } catch (e) {
       setFailed(true);
-      onFlash(`保存失败：${e instanceof Error ? e.message : e}`);
+      onFlash(`保存失败：${e instanceof Error ? e.message : e}`, "error");
       return;
     }
     setBusy(true);
@@ -76,7 +76,7 @@ export function ProjectJobQuotaSection({
       const result = await api.patchSettings(projectId, { rules: { maxConcurrentJobs } });
       if ("saved" in result && result.saved === false) {
         setFailed(true);
-        onFlash("保存失败：运行镜像准备中，请稍后重试");
+        onFlash("保存失败：运行镜像准备中，请稍后重试", "error");
         return;
       }
       const snapshot = result as ProjectSettings;
@@ -86,12 +86,12 @@ export function ProjectJobQuotaSection({
       );
       setDraft(nextBaseline);
       setBaseline(nextBaseline);
-      onFlash("项目调度配额已保存（下一 Job claim 生效）");
+      onFlash("项目调度配额已保存（下一 Job claim 生效）", "ok");
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       setFailed(true);
-      onFlash(`保存失败：${e instanceof Error ? e.message : e}`);
+      onFlash(`保存失败：${e instanceof Error ? e.message : e}`, "error");
     } finally {
       setBusy(false);
     }

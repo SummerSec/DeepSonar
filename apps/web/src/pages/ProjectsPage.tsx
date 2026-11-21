@@ -13,7 +13,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Project } from "../api";
 import { dismissToast, showToast } from "../toast";
-import { useFlashMessage } from "../use-flash-message";
+import { useOperationFeedback } from "../use-operation-feedback";
+import { FeedbackNotice } from "../FeedbackNotice";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { IntentLaunchRail } from "../components/IntentLaunchRail";
 import { NewProjectForm } from "../components/NewProjectForm";
@@ -43,7 +44,7 @@ export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const { message: msg, flash } = useFlashMessage(3200);
+  const { message: msg, kind, flash, clear } = useOperationFeedback();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter[]>(["active"]);
@@ -273,14 +274,7 @@ export function ProjectsPage() {
           </button>
         </div>
       )}
-      {msg && (
-        <div
-          role="status"
-          className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15"
-        >
-          {msg}
-        </div>
-      )}
+      <FeedbackNotice message={msg} kind={kind} onDismiss={clear} />
 
       {filtered.length === 0 && !error ? (
         <EmptyState
@@ -335,7 +329,7 @@ export function ProjectsPage() {
                         flash("项目资料已保存");
                         reload();
                       } catch (err) {
-                        flash(`保存失败：${err instanceof Error ? err.message : err}`);
+                        flash(`保存失败：${err instanceof Error ? err.message : err}`, "error");
                       }
                     }}
                   >
@@ -436,9 +430,11 @@ export function ProjectsPage() {
                           <button
                             type="button"
                             onClick={async () => {
-                              await api.archiveProject(project.id).catch(() => {});
-                              flash("项目已归档");
-                              reload();
+                              try {
+                                await api.archiveProject(project.id);
+                                flash("项目已归档");
+                                reload();
+                              } catch (error) { flash(`归档失败：${error instanceof Error ? error.message : error}`, "error"); }
                             }}
                             className="rounded p-1.5 text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
                             title="归档"
@@ -449,9 +445,11 @@ export function ProjectsPage() {
                           <button
                             type="button"
                             onClick={async () => {
-                              await api.updateProject(project.id, { status: "active" }).catch(() => {});
-                              flash("项目已恢复");
-                              reload();
+                              try {
+                                await api.updateProject(project.id, { status: "active" });
+                                flash("项目已恢复");
+                                reload();
+                              } catch (error) { flash(`恢复失败：${error instanceof Error ? error.message : error}`, "error"); }
                             }}
                             className="rounded p-1.5 text-zinc-600 transition-colors hover:bg-acc-500/[.07] hover:text-acc-300"
                             title="恢复"

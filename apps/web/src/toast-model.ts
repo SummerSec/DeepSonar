@@ -20,6 +20,8 @@ export type ToastItem = {
   /** Blocking failures stay until the user dismisses them. */
   sticky: boolean;
   durationMs: number;
+  /** Independent forms must not dismiss each other's identical notices. */
+  owner?: string;
 };
 
 /**
@@ -36,18 +38,8 @@ export const TOAST_DURATIONS: Readonly<Record<ToastKind, number>> = Object.freez
 /** Bound the stack so a burst of failures cannot cover the working area. */
 export const MAX_VISIBLE_TOASTS = 4;
 
-const ERROR_PATTERN = /失败|错误|异常|必填|拒绝|无法|不允许|冲突/;
-const WARN_PATTERN = /警告|注意|部分|降级|未知|待确认|未生效/;
-
-/**
- * Keyword fallback for callers that only have a message string. Callers that
- * know the severity should pass it explicitly; this stays for compatibility
- * with the existing 22 call sites.
- */
-export function inferToastKind(message: string): ToastKind {
-  if (ERROR_PATTERN.test(message)) return "error";
-  if (WARN_PATTERN.test(message)) return "warn";
-  return "ok";
+export function toastKindLabel(kind: ToastKind): string {
+  return { ok: "提示", warn: "请留意", error: "操作失败" }[kind];
 }
 
 /**
@@ -74,7 +66,7 @@ export function addToast(
   incoming: ToastItem,
 ): { items: ToastItem[]; replacedId: number | null } {
   const duplicate = items.find(
-    (item) => item.kind === incoming.kind && item.message === incoming.message,
+    (item) => item.kind === incoming.kind && item.message === incoming.message && item.owner === incoming.owner,
   );
   if (duplicate) {
     const merged = items.map((item) => item.id === duplicate.id

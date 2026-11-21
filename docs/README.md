@@ -52,6 +52,8 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 
 > **提示与错误反馈统一（#967，2026-11-07）**：全局 Toast 增加 `warn` 语义、同文案去重合并（最多 4 条且优先淘汰非 sticky）、按严重程度分层停留（成功 3.2s / 警告 6s / 错误 8s），错误用 `role=alert` + `assertive`、成功与警告保持 `polite`；悬停与焦点改为两个独立 hold，集合为空才恢复计时，去重刷新在暂停时只收敛预算；每条可手动关闭、详情折叠复制、支持一个恢复动作。页面自有 flash 收敛到 `useFlashMessage`（新提示取消旧定时器、卸载清理），`HelpTip` 支持 Escape 关闭并保留触发器焦点。Toast 颜色改语义 token 并纳入 WCAG AA 断言。实现依据仍是 [注意力原则](../DESIGN.md#核心理念优化人的注意力)与[工程评审正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)；真实浏览器逐主题截图与键盘/触屏回归未执行。
 
+> **#967 接入补齐（2026-11-21）**：任务与设置等页面接入[统一操作反馈](architecture/04-quality-attributes.md#操作反馈的统一规则967)，错误显式分类并常驻，成功恢复与页面生命周期共同清理。补齐英文错误、并发计时、作用域切换和迟到结果的真实 DOM 回归，沿现有 Actions 验收；最终 SHA 与真实浏览器视觉结果分别记录。
+
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
 > **任务目标证据（#767）**：契约、候选、来源隔离评审、非 Finding 结果与确定性报告已接线。可信只读 authority/grant 绑定当前身份、动作、前提和版本，子/系统 Job 统一继承并在 provision/重跑实时重核，见 [ADR 0011](architecture/adr/0011-trusted-target-authorization.md)。独立程序资格由 [#822 操作员评审](PROGRAM_ELIGIBILITY.md) 投影；目标授权、技术 Verify、判据、Plan 完成与资格各自分责。无契约仍 unassessed，验收见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
