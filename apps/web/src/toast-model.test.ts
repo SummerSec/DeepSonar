@@ -6,7 +6,6 @@ import {
   MAX_VISIBLE_TOASTS,
   TOAST_DURATIONS,
   addToast,
-  inferToastKind,
   remainingLifetime,
   removeToast,
   toastAria,
@@ -20,14 +19,6 @@ const item = (id: number, overrides: Partial<ToastItem> = {}): ToastItem => ({
   sticky: false,
   durationMs: TOAST_DURATIONS.ok,
   ...overrides,
-});
-
-test("severity inference separates failures, warnings and success", () => {
-  assert.equal(inferToastKind("保存失败：字段必填"), "error");
-  assert.equal(inferToastKind("项目列表加载失败"), "error");
-  assert.equal(inferToastKind("部分设置未生效"), "warn");
-  assert.equal(inferToastKind("注意：该操作不可撤销"), "warn");
-  assert.equal(inferToastKind("已保存"), "ok");
 });
 
 test("only failures are announced assertively", () => {
@@ -51,6 +42,14 @@ test("an identical toast is merged instead of stacked", () => {
   assert.equal(second.items.length, 1, "the same failure must not appear twice");
   assert.equal(second.replacedId, 1, "the existing toast is refreshed, not duplicated");
   assert.equal(second.items[0]?.id, 1);
+});
+
+test("identical failures from different forms retain independent ownership", () => {
+  const first = addToast([], item(1, { kind: "error", message: "permission denied", owner: "form-a" }));
+  const second = addToast(first.items, item(2, { kind: "error", message: "permission denied", owner: "form-b" }));
+  assert.equal(second.items.length, 2);
+  const dismissed = removeToast(second.items, 1);
+  assert.equal(dismissed[0]?.owner, "form-b");
 });
 
 test("a merged toast keeps the strongest sticky/detail/action", () => {

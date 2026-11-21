@@ -1,6 +1,6 @@
 import { ProjectCredentialRepairLinks } from "./components/ProjectCredentialRepairLinks";
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, LockKey, PencilSimple, Plugs, Trash, Warning } from "@phosphor-icons/react";
+import { LockKey, PencilSimple, Plugs, Trash } from "@phosphor-icons/react";
 import {
   api,
   type Project,
@@ -29,7 +29,8 @@ import {
 } from "./CredentialConfigEditor";
 import { formatJsonObject } from "./json-text";
 import { SearchableSelect } from "./SearchableSelect";
-import { showToast } from "./toast";
+import { useOperationFeedback } from "./use-operation-feedback";
+import { FeedbackNotice } from "./FeedbackNotice";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import {
   CLI_LABEL,
@@ -127,8 +128,11 @@ export function ProviderAccountFlow({
     api.credentialProviders().then(setCatalog).catch(() => {});
   }, []);
 
-  useEffect(() => { if (notice) showToast(notice, "ok"); }, [notice]);
-  useEffect(() => { if (error) showToast(error, "error"); else setProjectReferences(null); }, [error]);
+  const { flash, clear, message, kind } = useOperationFeedback(actorProjectId ?? "global-providers");
+  useEffect(() => {
+    if (error) flash(error, "error");
+    else { setProjectReferences(null); if (notice) flash(notice); else clear(); }
+  }, [error, notice, flash, clear]);
   useEffect(() => { setProjectReferences(null); }, [selectedCredentialId, actorProjectId]);
 
   useEffect(() => {
@@ -485,8 +489,7 @@ export function ProviderAccountFlow({
         </div>
       </div>
 
-      {notice && <div className="provider-flow-notice"><CheckCircle size={15} /> {notice}</div>}
-      {error && <div className="provider-flow-error"><Warning size={15} /> {error}</div>}
+      <FeedbackNotice message={message} kind={kind} onDismiss={() => { setError(""); setNotice(""); clear(); }} />
       {projectReferences && <ProjectCredentialRepairLinks references={projectReferences} />}
 
       <div className="provider-flow-grid">

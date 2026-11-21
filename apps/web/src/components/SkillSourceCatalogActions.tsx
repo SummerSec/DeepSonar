@@ -4,7 +4,8 @@ import { useAuth } from "../auth";
 import { canAccessAnyScope } from "../permissions";
 import { formatSkillSourceSyncFlash } from "../skill-source-sync-flash";
 import { useConfirmDialog } from "./ConfirmDialog";
-import { showToast } from "../toast";
+import { useOperationFeedback } from "../use-operation-feedback";
+import { FeedbackNotice } from "../FeedbackNotice";
 
 const actionClass = "rounded-md border border-ink-700 px-2 py-1 font-mono text-zinc-300 transition-colors hover:border-ink-600 disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -30,7 +31,7 @@ export function SkillSourceCatalogActions({ source, disabled = false, onChanged,
   changedRef.current = onChanged;
   const [busy, setBusy] = useState<object | null>(null);
   const inFlight = useRef<object | null>(null);
-  const [notice, setNotice] = useState<{ token: object; text: string } | null>(null);
+  const { message, kind, flash, clear } = useOperationFeedback(key);
   useEffect(() => {
     fence.current.mounted = true;
     return () => { fence.current.mounted = false; };
@@ -58,7 +59,7 @@ export function SkillSourceCatalogActions({ source, disabled = false, onChanged,
     const refresh = () => changedRef.current();
     inFlight.current = token;
     setBusy(token);
-    setNotice(null);
+    clear();
     try {
       const description = action === "trusted"
         ? `批准「${source.name}」候选 ${source.candidate_hash}（commit ${candidate?.commit_sha ?? "未知"}，${candidate?.module_count} 个模块）。这是平台全局操作：trusted + enabled 后，所有未显式停用此源的项目后续 Job 默认可用，无需各项目勾选。发布会更新当前目录并清理失效 RoleConfig 引用，不改已创建 Job 快照。`
@@ -75,17 +76,15 @@ export function SkillSourceCatalogActions({ source, disabled = false, onChanged,
       } catch (error) {
         if (!current()) return;
         const failure = `${action === "sync" ? "同步" : "操作"}失败：${error instanceof Error ? error.message : String(error)}`;
-        setNotice({ token, text: failure });
-        showToast(failure, "error");
+        flash(failure, "error");
         try { if (current()) await refresh(); } catch { /* Keep the write error; metadata refresh is best effort. */ }
         return;
       }
       if (!current()) return;
-      setNotice({ token, text: result });
-      showToast(result, "ok");
+      flash(result, "ok");
       try { await refresh(); }
       catch (error) {
-        if (current()) setNotice({ token, text: `${result}；刷新失败，请重新加载元数据：${error instanceof Error ? error.message : String(error)}` });
+        if (current()) flash(`${result}；刷新失败，请重新加载元数据：${error instanceof Error ? error.message : String(error)}`, "warn");
       }
     } finally {
       if (inFlight.current === token) inFlight.current = null;
@@ -106,6 +105,6 @@ export function SkillSourceCatalogActions({ source, disabled = false, onChanged,
       {source.trust_status !== "quarantined" && <button type="button" className={actionClass} disabled={blocked} onClick={() => void run("quarantined")}>移至隔离</button>}
       {source.trust_status !== "disabled" && <button type="button" className={actionClass} disabled={blocked} onClick={() => void run("disabled")}>禁用</button>}
     </div>}
-    {notice?.token === token && <p role="status">{notice.text}</p>}
+    <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
   </div>;
 }

@@ -1,4 +1,6 @@
 import { useJobRerun, CredentialRepairNotice } from "../useJobRerun";
+import { useOperationFeedback } from "../use-operation-feedback";
+import { FeedbackNotice } from "../FeedbackNotice";
 import {
   CaretDown,
   DotsThree,
@@ -201,7 +203,7 @@ export function TaskCanvasPage() {
   const [intentDirty, setIntentDirty] = useState(false);
   const [intentSaving, setIntentSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const { message, kind, flash, clear } = useOperationFeedback(`${projectId}:${canvasId}`);
   const [taskReport, setTaskReport] = useState<TaskReport | null>(null);
   const [findingTrace, setFindingTrace] = useState<FindingTrace | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -431,11 +433,6 @@ export function TaskCanvasPage() {
     }
   };
 
-  const flash = (m: string) => {
-    setMsg(m);
-    setTimeout(() => setMsg(null), 3500);
-  };
-
   const runConvergence = async (action: "pause" | "resume" | "drain" | "hub-now") => {
     if (!canvasId) return;
     setConvBusy(true);
@@ -457,7 +454,7 @@ export function TaskCanvasPage() {
         flash("已请求一轮 Hub");
       }
     } catch (e) {
-      flash(`操作失败：${e instanceof Error ? e.message : e}`);
+      flash(`操作失败：${e instanceof Error ? e.message : e}`, "error");
     } finally {
       setConvBusy(false);
     }
@@ -477,14 +474,14 @@ export function TaskCanvasPage() {
         pending_count: result.pending_count,
       } : current);
       if (result.execution_state === "pausing") {
-        flash(`暂停中，尚有 ${result.active_count} 个 Job 安全收尾`);
+        flash(`暂停中，尚有 ${result.active_count} 个 Job 安全收尾`, "warn");
       } else if (result.execution_state === "paused") {
         flash(result.changed ? "任务已暂停" : "任务已经暂停");
       } else {
         flash(result.changed ? "任务已开始" : "任务已经处于开始状态");
       }
     } catch (e) {
-      flash(`任务控制失败：${e instanceof Error ? e.message : e}`);
+      flash(`任务控制失败：${e instanceof Error ? e.message : e}`, "error");
     } finally {
       setConvBusy(false);
     }
@@ -564,8 +561,10 @@ export function TaskCanvasPage() {
     })) return;
     setConvBusy(true);
     setMoreOpen(false);
+    let cancelled = false;
     try {
       const r = await api.cancelCanvasActiveJobs(canvasId, "强制退出全部活动 Job");
+      cancelled = true;
       flash(r.cancelled > 0 ? `已强制退出 ${r.cancelled} 个活动 Job` : "没有可退出的活动 Job");
       // 立即刷新列表
       const js = await api.jobsPage({ canvas_id: canvasId, limit: 50 });
@@ -573,7 +572,8 @@ export function TaskCanvasPage() {
       setJobsCursor(js.next_cursor);
       setJobsHasMore(js.has_more);
     } catch (e) {
-      flash(`强制退出失败：${e instanceof Error ? e.message : e}`);
+      if (cancelled) flash(`退出请求已完成，但刷新 Job 列表失败：${e instanceof Error ? e.message : e}`, "warn");
+      else flash(`强制退出失败：${e instanceof Error ? e.message : e}`, "error");
     } finally {
       setConvBusy(false);
     }
@@ -594,7 +594,7 @@ export function TaskCanvasPage() {
       else if (r.action === "start_now") flash(r.message ?? "已清除定时门禁，任务立即进入调度");
       else flash("没有中断 Worker；已唤醒 Hub 继续决策");
     } catch (e) {
-      flash(`继续执行失败：${e instanceof Error ? e.message : e}`);
+      flash(`继续执行失败：${e instanceof Error ? e.message : e}`, "error");
     } finally {
       setConvBusy(false);
     }
@@ -616,8 +616,8 @@ export function TaskCanvasPage() {
     if (!canvasId || !canEditIntent) return;
     const title = intentTitle.trim();
     const content = intentContent.trim();
-    if (!title) return flash("请写明希望得到的结果");
-    if (!content) return flash("请补充必要背景或边界");
+    if (!title) return flash("请写明希望得到的结果", "error");
+    if (!content) return flash("请补充必要背景或边界", "error");
     setIntentSaving(true);
     try {
       const result = await api.updateTask(canvasId, { title, content });
@@ -629,7 +629,7 @@ export function TaskCanvasPage() {
       setIntentDirty(false);
       flash(result.message);
     } catch (e) {
-      flash(`保存失败：${e instanceof Error ? e.message : e}`);
+      flash(`保存失败：${e instanceof Error ? e.message : e}`, "error");
     } finally {
       setIntentSaving(false);
     }
@@ -653,7 +653,7 @@ export function TaskCanvasPage() {
       flash("已清空历史并重新开始执行");
       setScopeOpen(false);
     } catch (e) {
-      flash(composeRetryErrorMessage(e));
+      flash(composeRetryErrorMessage(e), "error");
     } finally {
       setConvBusy(false);
     }
@@ -832,8 +832,10 @@ export function TaskCanvasPage() {
     const requestGeneration = taskGenerationRef.current.generation;
     const isCurrent = () => requestGeneration === taskGenerationRef.current.generation && isCurrentHumanTaskCallback(requestCanvasId, activeCanvasIdRef.current);
     setIgnoreBusyId(item.node.id);
+    let ignored = false;
     try {
       const result = await api.ignoreHumanIntervention(requestCanvasId, item.node.id);
+      ignored = true;
       if (!isCurrent()) return;
       setNodes((current) => current.map((node) => (
         node.id === item.node.id
@@ -847,7 +849,9 @@ export function TaskCanvasPage() {
       setJobs(js.items);
       flash(result.job_resumed ? "已忽略并继续推进" : "已忽略");
     } catch (error) {
-      if (isCurrent()) flash(`忽略失败：${error instanceof Error ? error.message : error}`);
+      if (!isCurrent()) return;
+      if (ignored) flash(`已忽略，但刷新 Job 列表失败：${error instanceof Error ? error.message : error}`, "warn");
+      else flash(`忽略失败：${error instanceof Error ? error.message : error}`, "error");
     } finally {
       if (isCurrent()) setIgnoreBusyId(null);
     }
@@ -934,7 +938,6 @@ export function TaskCanvasPage() {
           statusLines={statusLines}
           findingProtocol={findingProtocol}
           decisionLabel={decisionLabel}
-          message={msg}
           createdAt={meta?.created_at}
           startExecValue={startExecValue}
           startExecTitle={startExecTitle}
@@ -1162,11 +1165,7 @@ export function TaskCanvasPage() {
           {pageError}
         </div>
       )}
-      {msg && (
-        <div className="mx-3 mb-2 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[11px] text-acc-300 ring-1 ring-acc-400/15">
-          {msg}
-        </div>
-      )}
+      <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
 
       {humanInterventions.length > 0 && (
         <HumanInterventionBanner
@@ -1288,10 +1287,7 @@ export function TaskCanvasPage() {
                       key={n.id}
                       canvasId={canvasId}
                       node={n}
-                      onDone={(m) => {
-                        setMsg(m);
-                        setTimeout(() => setMsg(null), 3000);
-                      }}
+                      onDone={flash}
                     />
                   ))}
                 </div>
@@ -1497,15 +1493,18 @@ export function TaskCanvasPage() {
                                   tone: "danger",
                                 })) return;
                                 setConvBusy(true);
+                                let cancelled = false;
                                 try {
                                   await api.cancelJob(j.id, { force: true, reason: "强制退出" });
+                                  cancelled = true;
                                   flash("已强制退出");
                                   const js = await api.jobsPage({ canvas_id: canvasId, limit: 50 });
                                   setJobs(js.items);
                                   setJobsCursor(js.next_cursor);
                                   setJobsHasMore(js.has_more);
                                 } catch (e) {
-                                  flash(`强制退出失败：${e instanceof Error ? e.message : e}`);
+                                  if (cancelled) flash(`已强制退出，但刷新 Job 列表失败：${e instanceof Error ? e.message : e}`, "warn");
+                                  else flash(`强制退出失败：${e instanceof Error ? e.message : e}`, "error");
                                 } finally {
                                   setConvBusy(false);
                                 }

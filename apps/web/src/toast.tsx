@@ -5,13 +5,13 @@ import {
   removeToast,
   TOAST_DURATIONS,
   toastAria,
+  toastKindLabel,
   type ToastAction,
   type ToastItem,
   type ToastKind,
 } from "./toast-model";
 
 export type { ToastKind } from "./toast-model";
-export { inferToastKind } from "./toast-model";
 
 export type ShowToastOptions = {
   /** Override the per-kind default lifetime. */
@@ -22,10 +22,12 @@ export type ShowToastOptions = {
   action?: ToastAction;
   /** Keep the toast until the user dismisses it (blocking failures). */
   sticky?: boolean;
+  /** Scope duplicate notices to their owning form or page. */
+  owner?: string;
 };
 
 /** Why a toast is currently held. Hover and keyboard focus are independent. */
-export type ToastHold = "hover" | "focus";
+export type ToastHold = "hover" | "focus" | "background";
 
 let nextId = 1;
 let items: ToastItem[] = [];
@@ -74,7 +76,7 @@ function startTimer(id: number, durationMs: number) {
 }
 
 function pruneDetachedTimers() {
-  for (const id of [...timers.keys()]) {
+  for (const id of new Set([...remaining.keys(), ...holds.keys()])) {
     if (!items.some((item) => item.id === id)) forget(id);
   }
 }
@@ -102,8 +104,9 @@ export function showToast(
     kind,
     ...(detail ? { detail } : {}),
     ...(resolved.action ? { action: resolved.action } : {}),
-    sticky: resolved.sticky ?? false,
+    sticky: resolved.sticky ?? (kind === "error" && resolved.durationMs === undefined),
     durationMs,
+    ...(resolved.owner ? { owner: resolved.owner } : {}),
   };
 
   const result = addToast(items, incoming);
@@ -128,6 +131,7 @@ export function showToast(
     return activeId;
   }
   startTimer(activeId, active.durationMs);
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") pauseToast(activeId, "background");
   return activeId;
 }
 
@@ -199,6 +203,18 @@ export function ToastHost() {
     };
   }, []);
 
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      for (const toast of items) {
+        if (document.visibilityState === "hidden") pauseToast(toast.id, "background");
+        else resumeToast(toast.id, "background");
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    onVisibilityChange();
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
+
   // Do not leave timers or holds running after the host unmounts.
   useEffect(() => () => {
     for (const id of [...timers.keys()]) forget(id);
@@ -229,17 +245,15 @@ export function ToastHost() {
             }}
           >
             <div className="app-toast-body">
-              <span className="app-toast-message">{toast.message}</span>
+              <span className="app-toast-message"><strong className="app-toast-label">{toastKindLabel(toast.kind)}</strong>{toast.message}</span>
               <div className="app-toast-controls">
-                {toast.detail && (
-                  <button
-                    type="button"
-                    className="app-toast-control"
-                    onClick={() => copyText(toast.detail ?? "")}
-                  >
-                    复制
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="app-toast-control"
+                  onClick={() => copyText(toast.detail ? `${toast.message}\n\n${toast.detail}` : toast.message)}
+                >
+                  复制
+                </button>
                 {toast.action && (
                   <button
                     type="button"

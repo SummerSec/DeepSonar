@@ -8,7 +8,8 @@ import {
   skillSourceRegisteredHint,
   skillSourceWritePermissionHint,
 } from "../skill-source-readiness";
-import { showToast } from "../toast";
+import { useOperationFeedback } from "../use-operation-feedback";
+import { FeedbackNotice } from "../FeedbackNotice";
 import { HelpTip } from "../ui";
 import { SkillSourceCatalogActions } from "./SkillSourceCatalogActions";
 
@@ -50,6 +51,7 @@ export function ProjectSkillSourceAllowlistPanel({
   projectId: string;
   onSaved?: () => void;
 }) {
+  const { message, kind, flash, clear } = useOperationFeedback(projectId);
   const { me } = useAuth();
   const canProjectWrite = canAccessAnyScope(me, ["skills:write"]);
   const canManagePlatform = canProjectWrite && !me?.actor?.project_id;
@@ -82,7 +84,7 @@ export function ProjectSkillSourceAllowlistPanel({
       // Metadata refreshes never acknowledge or discard unsaved project flag overrides.
       update((current) => ({ ...current, configured: res.configured, sources: res.sources }));
     } catch (error) {
-      if (isCurrent() && request === owner.request) showToast(`加载 Skill 源可用性失败：${errorText(error)}`, "error");
+      if (isCurrent() && request === owner.request) flash(`加载 Skill 源可用性失败：${errorText(error)}`, "error");
     } finally {
       if (isCurrent() && request === owner.request) update((current) => ({ ...current, loading: false }));
     }
@@ -118,9 +120,9 @@ export function ProjectSkillSourceAllowlistPanel({
           return { ...current, overrides: next, sources: current.sources.map((source) => source.skill_source_id === id ? result : source) };
         });
       }
-      if (isCurrent()) showToast("Skill 源启用白名单已保存（仅影响之后创建的 Job）", "ok");
+      if (isCurrent()) flash("Skill 源启用白名单已保存（仅影响之后创建的 Job）", "ok");
     } catch (error) {
-      if (isCurrent()) showToast(`保存未完成（已确认 ${confirmed} 项，其余更改仍未保存）：${errorText(error)}`, "error");
+      if (isCurrent()) flash(`保存未完成（已确认 ${confirmed} 项，其余更改仍未保存）：${errorText(error)}`, "error");
     } finally {
       if (isCurrent()) {
         await reload();
@@ -138,7 +140,7 @@ export function ProjectSkillSourceAllowlistPanel({
     const name = newSource.name.trim();
     const repoUrl = newSource.repo_url.trim();
     if (!name || !repoUrl) {
-      showToast("名称与仓库地址必填", "error");
+      flash("名称与仓库地址必填", "error");
       return;
     }
     update((current) => ({ ...current, adding: true }));
@@ -146,12 +148,12 @@ export function ProjectSkillSourceAllowlistPanel({
       const result = await api.createSkillSource({ name, repo_url: repoUrl, branch: newSource.branch.trim() || "main" });
       if (!isCurrent()) return;
       setNewSource({ name: "", repo_url: "", branch: "main" });
-      showToast(result.existing
+      flash(result.existing
         ? `已复用「${result.name}」（${result.trust_status ?? "信任状态未知"}，平台${result.enabled === true ? "已启用" : result.enabled === false ? "未启用" : "启用状态未知"}）；未改变原有信任或任何项目启停设置。`
         : skillSourceRegisteredHint(result), "ok");
     } catch (error) {
       if (!isCurrent()) return;
-      showToast(`登记失败：${errorText(error)}（仅支持 https Git 地址，host 需在平台允许列表内；名称冲突不代表仓库相同）`, "error");
+      flash(`登记失败：${errorText(error)}（仅支持 https Git 地址，host 需在平台允许列表内；名称冲突不代表仓库相同）`, "error");
     } finally {
       if (isCurrent()) {
         await reload();
@@ -162,6 +164,7 @@ export function ProjectSkillSourceAllowlistPanel({
 
   return (
     <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+      <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
       <div className="border-b border-white/[.055] px-4 py-3">
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
           <span>Skill 源启用白名单</span>

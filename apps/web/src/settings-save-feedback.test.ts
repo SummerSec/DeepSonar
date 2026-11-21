@@ -5,6 +5,7 @@ import test from "node:test";
 const panel = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8") + readFileSync(new URL("./components/ProjectJobQuotaSection.tsx", import.meta.url), "utf8");
 const shell = readFileSync(new URL("./layout/AppShell.tsx", import.meta.url), "utf8");
 const toast = readFileSync(new URL("./toast.tsx", import.meta.url), "utf8");
+const feedback = readFileSync(new URL("./use-operation-feedback.ts", import.meta.url), "utf8");
 
 test("AppShell reads /health version instead of faking scheduler status only", () => {
   assert.match(shell, /api\.health\(\)/);
@@ -19,7 +20,8 @@ test("AppShell reads /health version instead of faking scheduler status only", (
 });
 
 test("settings save flash also raises a viewport-fixed toast", () => {
-  assert.match(panel, /showToast\(m, inferToastKind\(m\)\)/);
+  assert.match(panel, /useOperationFeedback\(/);
+  assert.match(feedback, /showToast\(next, nextKind/);
   assert.match(toast, /createPortal/);
   assert.match(toast, /document\.body/);
   assert.match(toast, /app-toast-stack/);
@@ -39,7 +41,7 @@ test("config center exposes batch-1 runtime knobs with toast save feedback", () 
   assert.match(panel, /stallSec/);
   assert.match(panel, /jobTokenMaxRequests/);
   assert.match(panel, /provisionTimeoutSec/);
-  assert.match(panel, /showToast\(m, inferToastKind\(m\)\)/);
+  assert.match(panel, /useOperationFeedback\(/);
   assert.match(shell, /配置中心/);
   const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(editor, /allow_model_catalog_passthrough|context_window_tokens|sandbox_limits|runtime_knobs/);
