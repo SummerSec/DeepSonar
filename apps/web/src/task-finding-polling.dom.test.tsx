@@ -142,8 +142,8 @@ test("task relationship options retain discoveries displaced from the live first
   const selector = env.dom.window.document.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="关联 Finding"]');
   assert.ok(selector);
   await act(async () => selector.click());
-  const options = env.dom.window.document.querySelector('[role="listbox"]')!.textContent!;
-  assert.match(options, /discovered-after-index-load/);
-  assert.match(options, /newer-first-page-finding/);
-  assert.match(options, /first-page-finding/);
+  const options = Array.from(env.dom.window.document.querySelectorAll('[role="option"]'), option => option.textContent);
+  for (const id of ["discovered-after-index-load", "newer-first-page-finding", "first-page-finding"]) {
+    assert.ok(options.includes(`${id} · ${id.slice(0, 8)}`), `${id} remains available for relationships`);
+  }
 });
