@@ -140,10 +140,19 @@ export function TaskCanvasPage() {
   const severities = readMultiSearchParam(searchParams, "severity");
   const profiles = readMultiSearchParam(searchParams, "profile");
   const verifyStatuses = readMultiSearchParam(searchParams, "verify");
-  const findingList = useFindingsQuery(
-    "global", undefined, taskFindingQueryFilters(searchParams, canvasId),
-    searchParams.get("cursor"), Boolean(projectId && canvasId && tab === "findings"),
+  const findingFilters = taskFindingQueryFilters(searchParams, canvasId);
+  const findingCursor = searchParams.get("cursor");
+  const hasFindingQuery = Boolean(findingFilters.severity || findingFilters.profile || findingFilters.verify_status || findingCursor);
+  const findingHead = useFindingsQuery(
+    "global", undefined, { canvas_id: canvasId }, null, Boolean(projectId && canvasId),
   );
+  const filteredFindings = useFindingsQuery(
+    "global", undefined, findingFilters, findingCursor,
+    Boolean(projectId && canvasId && tab === "findings" && hasFindingQuery),
+  );
+  const findingList = hasFindingQuery ? filteredFindings : findingHead;
+  const findings = findingHead.rows;
+  const findingsHasMore = Boolean(findingHead.nextCursor);
   const factFilterKey = factPageFilterKey(readFactPageFilters(searchParams));
   const factFilters = useMemo(
     () => readFactPageFilters(searchParams),
@@ -158,11 +167,11 @@ export function TaskCanvasPage() {
   const [meta, setMeta] = useState<CanvasData["canvas"] | null>(null);
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [nodesCanvasId, setNodesCanvasId] = useState<string | null>(null);
-  const [findings, setFindings] = useState<FindingSummary[]>([]);
   const [facts, setFacts] = useState<FactSummary[]>([]);
   const [findingIndex, setFindingIndex] = useState<FindingSummary[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
-  const [findingsHasMore, setFindingsHasMore] = useState(false);
+  const [findingIndexError, setFindingIndexError] = useState<string | null>(null);
+  const [jobsError, setJobsError] = useState<string | null>(null);
   const [jobsCursor, setJobsCursor] = useState<string | null>(null);
   const [jobsHasMore, setJobsHasMore] = useState(false);
   const [factsCursor, setFactsCursor] = useState<string | null>(null);
@@ -180,8 +189,7 @@ export function TaskCanvasPage() {
   const convBusy = convergenceBusy || rerunAction.busy !== null;
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
-  const paginationRef = useRef<{ findings: PageProgress | null; jobs: PageProgress | null; facts: PageProgress | null }>({
-    findings: null,
+  const paginationRef = useRef<{ jobs: PageProgress | null; facts: PageProgress | null }>({
     jobs: null,
     facts: null,
   });
@@ -231,13 +239,13 @@ export function TaskCanvasPage() {
   useEffect(() => {
     if (!canvasId || !projectId) return;
     let stop = false;
-    setFindings([]);
     setFindingIndex([]);
-    setFindingsHasMore(false);
+    setFindingIndexError(null);
+    setJobsError(null);
     setJobs([]);
     setJobsCursor(null);
     setJobsHasMore(false);
-    paginationRef.current = { findings: null, jobs: null, facts: null };
+    paginationRef.current = { jobs: null, facts: null };
     setMeta(null);
     setNodes([]);
     setNodesCanvasId(null);
@@ -255,30 +263,22 @@ export function TaskCanvasPage() {
         if (!stop) setFindingIndex(rows);
       })
       .catch((e) => {
-        if (!stop) setError(String(e));
+        if (!stop) setFindingIndexError(String(e));
       });
     const tick = () => {
-      Promise.all([
-        api.findingsPage({ canvas_id: canvasId, limit: 50 }),
-        api.jobsPage({ canvas_id: canvasId, limit: 50 }),
-      ])
-        .then(([fs, js]) => {
+      api.jobsPage({ canvas_id: canvasId, limit: 50 })
+        .then((js) => {
           if (stop) return;
-          setFindings((before) => mergeRefreshedPage(fs.items, before));
-          if (!paginationRef.current.findings) {
-            paginationRef.current.findings = initializePageProgress(null, fs);
-            setFindingsHasMore(paginationRef.current.findings.hasMore);
-          }
           setJobs((before) => mergeRefreshedPage(js.items, before));
           if (!paginationRef.current.jobs) {
             paginationRef.current.jobs = initializePageProgress(null, js);
             setJobsCursor(paginationRef.current.jobs.cursor);
             setJobsHasMore(paginationRef.current.jobs.hasMore);
           }
-          setError(null);
+          setJobsError(null);
         })
         .catch((e) => {
-          if (!stop) setError(String(e));
+          if (!stop) setJobsError(String(e));
         });
     };
     tick();
@@ -847,6 +847,7 @@ export function TaskCanvasPage() {
     }
   };
   const visibleFindings = findingList.rows;
+  const pageError = [error, findingIndexError, jobsError, tab === "findings" ? null : findingHead.error].filter(Boolean).join("\n");
   const profileOptions = Array.from(new Set([
     ...profiles,
     ...[...findingIndex, ...findings, ...visibleFindings].map(finding => finding.profile),
@@ -1150,9 +1151,9 @@ export function TaskCanvasPage() {
       notices={(
         <>
       <CredentialRepairNotice message={rerunAction.message} repair={rerunAction.repair} />
-      {error && (
-        <div className="mx-3 mb-2 rounded-2xl bg-red-950/25 px-4 py-3 text-[11px] text-red-300 ring-1 ring-red-400/20">
-          {error}
+      {pageError && (
+        <div role="alert" className="mx-3 mb-2 whitespace-pre-line rounded-2xl bg-red-950/25 px-4 py-3 text-[11px] text-red-300 ring-1 ring-red-400/20">
+          {pageError}
         </div>
       )}
       {msg && (
@@ -1353,14 +1354,14 @@ export function TaskCanvasPage() {
             <nav aria-label="任务发现分页" className="mt-3 flex gap-2">
               {searchParams.has("cursor") && (
                 <button type="button" disabled={findingList.loading}
-                  onClick={() => setSearchParams(updateFindingQuery(searchParams, "cursor", null), { replace: true })}
+                  onClick={() => setSearchParams(updateFindingQuery(searchParams, "cursor", null))}
                   className="rounded-full px-3 py-1.5 text-[12px] text-acc-300 disabled:opacity-50">
                   返回第一页
                 </button>
               )}
               {findingList.nextCursor && (
                 <button type="button" disabled={findingList.loading}
-                  onClick={() => setSearchParams(updateFindingQuery(searchParams, "cursor", findingList.nextCursor), { replace: true })}
+                  onClick={() => setSearchParams(updateFindingQuery(searchParams, "cursor", findingList.nextCursor))}
                   className="rounded-full px-3 py-1.5 text-[12px] text-acc-300 disabled:opacity-50">
                   下一页发现
                 </button>

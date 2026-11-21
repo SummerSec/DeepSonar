@@ -9,13 +9,15 @@ Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用
 
 ## 任务发现的状态显示与筛选（#1199）
 
-任务发现、项目发现和 Finding 详情复用[技术验证中文标签](../../apps/web/src/finding-verification.ts)，覆盖当前状态及历史可读的 `false_positive`。任务列表通过既有 `GET /findings` 携带路由画布范围及 severity/profile/verify_status 筛选，服务端过滤后分页。同一维度多选按 OR，不同维度按 AND。筛选与 cursor 保存在 URL，改变筛选时清除 cursor。切换筛选、画布或离开发现视图后，旧响应不能覆盖当前结果；加载失败明确展示错误并清空上一查询结果。
+任务发现、项目发现和 Finding 详情复用[技术验证中文标签](../../apps/web/src/finding-verification.ts)，覆盖当前状态及历史可读的 `false_positive`。任务列表通过既有 `GET /findings` 携带路由画布范围及 severity/profile/verify_status 筛选，服务端过滤后分页。同一维度多选按 OR，不同维度按 AND。筛选与 cursor 保存在 URL，改变筛选时清除 cursor，翻页保留浏览器历史以便后退。切换筛选、画布后旧响应不能覆盖当前结果，有筛选或游标的查询离开发现视图后停用；加载失败明确展示错误并清空上一查询结果。
+
+任务页的未筛选首页由一份持续查询维护，供默认发现列表、页签计数及工作台投影复用。有筛选或游标时才启用独立的可见列表查询。关系索引仍在进入任务时有界读取，Job 刷新独立进行，发现或 Job 请求失败分别呈现，成功响应各自生效。
 
 详情中的人工处置与技术验证仍各自独立。`confirmed_vuln` 仅在技术状态为 `confirmed` 时可选，其余状态显示禁用原因，服务端继续执行最终校验。
 
 注意力成本方面，中文标签和可见的禁用原因减少对照内部状态值及失败后猜原因的负担。有界分页增加查看后续记录和返回第一页的操作，筛选自动回到第一页，避免用户手工清除旧游标。复用既有筛选、查询与权限边界，收益尚未实测。
 
-工程回归接既有 `pnpm ci:unit:web-facts` 中的 `findings-risk-desk.test.ts` 与 `findings-query-dom.test.tsx`，覆盖状态字典、路由范围、清空筛选、分页、迟到响应、权限错误及处置按钮随技术状态刷新。最终 SHA 的 Actions 结果另验，用户现场失败组合尚未逐一复现。
+工程回归接既有 `pnpm ci:unit:web-facts` 中的 `findings-risk-desk.test.ts`、`findings-query-dom.test.tsx` 与 `task-finding-polling.dom.test.tsx`，覆盖状态字典、路由范围、清空筛选、分页后退、页面周期请求计数、发现与 Job 刷新失败隔离、迟到响应、权限错误及处置按钮随技术状态刷新。最终 SHA 的 Actions 结果另验，用户现场失败组合尚未逐一复现。
 
 ## 人工结束技术验证（#1133）
 

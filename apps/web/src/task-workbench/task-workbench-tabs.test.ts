@@ -53,9 +53,9 @@ test("workbench page defaults to overview and does not treat missing tab as canv
 
 test("background polling does not rewrite the view query", () => {
   const page = readFileSync(new URL("../pages/TaskCanvasPage.tsx", import.meta.url), "utf8");
-  const pollStart = page.indexOf("const tick = () => {\n      Promise.all([");
+  const pollStart = page.indexOf("const tick = () => {\n      api.jobsPage(");
   const pollEnd = page.indexOf("}, [canvasId, projectId, prefUserKey]);");
-  assert.ok(pollStart >= 0 && pollEnd > pollStart, "找不到 findings/jobs 轮询");
+  assert.ok(pollStart >= 0 && pollEnd > pollStart, "找不到独立 Jobs 轮询");
   assert.doesNotMatch(page.slice(pollStart, pollEnd), /setSearchParams|writeTaskWorkbenchView|setTab/);
 });
 
