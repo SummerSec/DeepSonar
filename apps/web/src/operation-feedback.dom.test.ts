@@ -34,8 +34,12 @@ test("operation feedback keeps failures, replaces recovered results and drops ob
     assert.equal(toasts().length, 1);
     assert.ok(toasts()[0].classList.contains("is-error"));
     assert.match(toasts()[0].textContent!, /操作失败/);
+    const initialAlert = toasts()[0];
     act(() => feedback.flash("permission denied", "error"));
     assert.equal(toasts().length, 1, "repeated failure has one owner and one visible toast");
+    assert.equal(toasts()[0], initialAlert, "background repeats must not reinsert and reannounce the same alert");
+    act(() => feedback.flash("permission denied", "error", { detail: "new failure context" }));
+    assert.match(toasts()[0].textContent!, /new failure context/, "a changed detail must update the failure");
     act(() => feedback.flash("保存成功"));
     assert.equal(notices()[0].getAttribute("role"), "status");
     assert.doesNotMatch(dom.window.document.body.textContent!, /permission denied/);

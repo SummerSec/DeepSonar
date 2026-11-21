@@ -205,6 +205,51 @@ test("server false plus unsaved check is not usable; only a confirmed save enabl
   } finally { await f.close(); }
 });
 
+test("candidate sync success remains visible after its metadata changes", async () => {
+  await withFixture(async (f) => {
+    api.syncSkillSource = async () => {
+      f.rows.A = [binding({ candidate_hash: hash })];
+      return { ok: true, modules: 2, changed: true, candidate_hash: hash,
+        previous_commit_sha: null, last_commit_sha: null, previous_content_hash: null, last_content_hash: null,
+        synced_at: "2026-11-07T00:00:00.000Z" };
+    };
+    await f.click(f.button("同步候选"));
+    assert.match(f.container.textContent!, /待批候选 a{64}/);
+    assert.match(f.container.querySelector(".app-feedback")?.textContent ?? "", /候选已同步，待批准/);
+    assert.match(f.toast(), /候选已同步，待批准/);
+  });
+});
+
+test("revocation success remains visible after the new epoch and trust state arrive", async () => {
+  await withFixture(async (f) => {
+    api.trustSkillSource = async () => {
+      f.rows.A = [binding({ trust_status: "quarantined", source_enabled: false, revocation_epoch: "1" })];
+      return platformSource(f.rows.A[0]);
+    };
+    await f.click(f.button("移至隔离"));
+    await f.confirmIfPresent();
+    assert.equal(f.button("移至隔离"), undefined);
+    assert.match(f.container.querySelector(".app-feedback")?.textContent ?? "", /已移至隔离/);
+    assert.match(f.toast(), /已移至隔离/);
+  });
+});
+
+test("successful metadata retry clears only the recovered load error", async () => {
+  await withFixture(async (f) => {
+    api.syncSkillSource = async () => ({ ok: true, modules: 2, changed: false, candidate_hash: null,
+      previous_commit_sha: null, last_commit_sha: null, previous_content_hash: null, last_content_hash: null,
+      synced_at: "2026-11-07T00:00:00.000Z" });
+    api.projectSkillSources = async () => { throw new Error("fixture metadata unavailable"); };
+    await f.click(f.button("同步候选"));
+    assert.match(f.container.textContent!, /加载 Skill 源可用性失败/);
+    api.projectSkillSources = async () => ({ configured: true, sources: f.rows.A });
+    await f.click(f.button("同步候选"));
+    assert.doesNotMatch(f.container.textContent!, /加载 Skill 源可用性失败/);
+    assert.match(f.toast(), /live 目录健康核验完成/);
+    assert.match(f.container.querySelector(".app-feedback")?.textContent ?? "", /live 目录健康核验完成/);
+  });
+});
+
 test("403 and mismatched write responses do not claim success or discard unconfirmed overrides", async () => {
   await withFixture(async (f) => {
     await f.click(f.checkbox());

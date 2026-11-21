@@ -31,7 +31,8 @@ export function SkillSourceCatalogActions({ source, disabled = false, onChanged,
   changedRef.current = onChanged;
   const [busy, setBusy] = useState<object | null>(null);
   const inFlight = useRef<object | null>(null);
-  const { message, kind, flash, clear } = useOperationFeedback(key);
+  const feedbackScope = JSON.stringify([scopeKey, source.id, source.source_instance_id, canManage]);
+  const { message, kind, flash, clear } = useOperationFeedback(feedbackScope);
   useEffect(() => {
     fence.current.mounted = true;
     return () => { fence.current.mounted = false; };

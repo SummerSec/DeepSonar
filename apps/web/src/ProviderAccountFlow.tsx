@@ -69,9 +69,7 @@ export function ProviderAccountFlow({
   const [actorProjectId, setActorProjectId] = useState<string | null>(null);
   const [repairProvider, setRepairProvider] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const [projectReferences, setProjectReferences] = useState<CredentialImpact["project_references"] | null>(null);
-  const [notice, setNotice] = useState("");
   const [testing, setTesting] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createProvider, setCreateProvider] = useState("");
@@ -129,10 +127,6 @@ export function ProviderAccountFlow({
   }, []);
 
   const { flash, clear, message, kind } = useOperationFeedback(actorProjectId ?? "global-providers");
-  useEffect(() => {
-    if (error) flash(error, "error");
-    else { setProjectReferences(null); if (notice) flash(notice); else clear(); }
-  }, [error, notice, flash, clear]);
   useEffect(() => { setProjectReferences(null); }, [selectedCredentialId, actorProjectId]);
 
   useEffect(() => {
@@ -221,8 +215,10 @@ export function ProviderAccountFlow({
   };
 
   const createAccount = async () => {
+    clear();
+    setProjectReferences(null);
     if (actorProjectId && createProjectId !== actorProjectId) {
-      setError("项目作用域账号只能在本项目内创建 Provider 账号。");
+      flash("项目作用域账号只能在本项目内创建 Provider 账号。", "error");
       return;
     }
     const built = buildSettingsConfigFromEditor({
@@ -239,12 +235,12 @@ export function ProviderAccountFlow({
       allowEmptyDefault: true,
     });
     if (!built.ok) {
-      setError(built.error);
+      flash(built.error, "error");
       return;
     }
     const secret = effectiveEditorSecret(createSecret) || effectiveEditorSecret(extractSecretFromSettings(built.settings));
     if (!secret) {
-      setError("请填写 API Key，或直接粘贴含密钥的完整 settingsConfig（如 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY）。");
+      flash("请填写 API Key，或直接粘贴含密钥的完整 settingsConfig（如 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY）。", "error");
       return;
     }
     const baseUrl = (createBaseUrl.trim() || extractBaseUrlFromSettingsClient(built.settings)).replace(/\/+$/u, "");
@@ -253,10 +249,8 @@ export function ProviderAccountFlow({
     try {
       maxConcurrent = parseCredentialConcurrency(createMaxConcurrent);
       modelConcurrency = parseModelConcurrencyDraft(createModelConcurrency, createModels);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); return; }
+    } catch (e) { flash(e instanceof Error ? e.message : String(e), "error"); return; }
     setBusy(true);
-    setError("");
-    setNotice("");
     try {
       const created = await api.createCredential({
         name: createName.trim(),
@@ -288,24 +282,24 @@ export function ProviderAccountFlow({
       setEditingCredentialId("");
       setShowCreate(false);
       onChanged();
-      setNotice(built.pastedAsIs
+      flash(built.pastedAsIs
         ? "配置已原样保存，请重新测试连接。"
         : "配置已保存，请重新测试连接。");
       setTesting(true);
       try {
         const health = await api.testCredential(created.id);
         if (!health.ok) {
-          setError(`账号已保存，但连接失败：${health.detail}${health.category ? `（${health.category}）` : ""}。请展开编辑修正后重试。`);
+          flash(`账号已保存，但连接失败：${health.detail}${health.category ? `（${health.category}）` : ""}。请展开编辑修正后重试。`, "error");
           return;
         }
       } catch (healthError) {
-        setError(`账号已保存，健康检查失败：${String(healthError)}`);
+        flash(`账号已保存，健康检查失败：${String(healthError)}`, "error");
       } finally {
         setTesting(false);
         onChanged();
       }
     } catch (e) {
-      setError(String(e));
+      flash(String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -313,8 +307,10 @@ export function ProviderAccountFlow({
 
   const saveEditedConfig = async () => {
     if (!editingCredential) return;
+    clear();
+    setProjectReferences(null);
     if (!isCurrentAgentCli(editAgentCli)) {
-      setError(leftoverAgentCliMigrationHint(editAgentCli));
+      flash(leftoverAgentCliMigrationHint(editAgentCli), "error");
       return;
     }
     const built = buildSettingsConfigFromEditor({
@@ -337,7 +333,7 @@ export function ProviderAccountFlow({
       allowEmptyDefault: true,
     });
     if (!built.ok) {
-      setError(built.error);
+      flash(built.error, "error");
       return;
     }
     const settingsToSave = editOriginalSettings && editOriginalAgentCli === editAgentCli
@@ -352,9 +348,8 @@ export function ProviderAccountFlow({
     try {
       maxConcurrent = parseCredentialConcurrency(editMaxConcurrent);
       modelConcurrency = parseModelConcurrencyDraft(editModelConcurrency, modelIds(editingCredential));
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); return; }
+    } catch (e) { flash(e instanceof Error ? e.message : String(e), "error"); return; }
     setBusy(true);
-    setError("");
     try {
       const existingMeta = editingCredential.public_metadata_json ?? {};
       const metadata = { ...existingMeta };
@@ -377,7 +372,7 @@ export function ProviderAccountFlow({
       if (rotatedSecret && rotatedSecret !== previousSecret) {
         await api.rotateCredential(editingCredential.id, rotatedSecret);
       }
-      setNotice(built.pastedAsIs
+      flash(built.pastedAsIs
         ? "配置已原样保存，请重新测试连接。"
         : "配置已保存，请重新测试连接。");
       setEditingCredentialId("");
@@ -386,16 +381,16 @@ export function ProviderAccountFlow({
       setSelectedCredentialId(editingCredential.id);
       onChanged();
     } catch (e) {
-      setError(String(e));
+      flash(String(e), "error");
     } finally {
       setBusy(false);
     }
   };
 
   const deleteAccount = async (credential: ProviderCredential) => {
+    clear();
     setProjectReferences(null);
     setBusy(true);
-    setError("");
     try {
       const liveImpact = await api.credentialImpact(credential.id);
       const pending = liveImpact.jobs.pending_unclaimed.count;
@@ -403,11 +398,11 @@ export function ProviderAccountFlow({
       const recoverable = liveImpact.jobs.recoverable.count;
       const activeScans = liveImpact.scans.active.count;
       if (pending > 0 || active > 0) {
-        setError(`无法删除「${credential.name}」：仍有 ${pending} 个待领取 Job、${active} 个运行中/冻结 Job。请等待结束或取消后再删。`);
+        flash(`无法删除「${credential.name}」：仍有 ${pending} 个待领取 Job、${active} 个运行中/冻结 Job。请等待结束或取消后再删。`, "error");
         return;
       }
       if (activeScans > 0) {
-        setError(`无法删除「${credential.name}」：仍有 ${activeScans} 个进行中的镜像准入扫描引用该凭据。`);
+        flash(`无法删除「${credential.name}」：仍有 ${activeScans} 个进行中的镜像准入扫描引用该凭据。`, "error");
         return;
       }
       // Project references block deletion even when no Job is running.
@@ -419,10 +414,10 @@ export function ProviderAccountFlow({
           .slice(0, 3)
           .map((ref) => `${ref.project_name ?? ref.project_id}${ref.default ? "（缺省账号）" : "（启用账号）"}`)
           .join("、");
-        setError(
+        flash(
           `无法删除「${credential.name}」：${projectRefCount} 个可见项目仍引用该账号（${names}`
           + `${projectRefCount > 3 ? " 等" : ""}）。请先在项目 Agent 设置里移除或替换引用，再删除；`
-          + `如需禁用所有账号，保留显式空白名单，不要删除白名单键扩大授权。`,
+          + `如需禁用所有账号，保留显式空白名单，不要删除白名单键扩大授权。`, "error",
         );
         return;
       }
@@ -441,10 +436,10 @@ export function ProviderAccountFlow({
       await api.deleteCredential(credential.id);
       if (selectedCredentialId === credential.id) setSelectedCredentialId("");
       if (editingCredentialId === credential.id) setEditingCredentialId("");
-      setNotice(`已删除账号「${credential.name}」。`);
+      flash(`已删除账号「${credential.name}」。`);
       onChanged();
     } catch (e) {
-      setError(String(e));
+      flash(String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -452,15 +447,16 @@ export function ProviderAccountFlow({
 
   const testConnection = async () => {
     if (!selectedCredential) return;
+    clear();
+    setProjectReferences(null);
     setTesting(true);
-    setError("");
     try {
       const result = await api.testCredential(selectedCredential.id);
-      if (result.ok) setNotice(`连接正常：${result.detail}`);
-      else setError(`连接失败：${result.detail}${result.category ? `（${result.category}）` : ""}。请修复后再次测试。`);
+      if (result.ok) flash(`连接正常：${result.detail}`);
+      else flash(`连接失败：${result.detail}${result.category ? `（${result.category}）` : ""}。请修复后再次测试。`, "error");
       onChanged();
     } catch (e) {
-      setError(String(e));
+      flash(String(e), "error");
     } finally {
       setTesting(false);
     }
@@ -468,14 +464,15 @@ export function ProviderAccountFlow({
 
   const repair = async () => {
     if (!selectedCredential || !repairProvider) return;
+    clear();
+    setProjectReferences(null);
     setBusy(true);
-    setError("");
     try {
       await api.updateCredential(selectedCredential.id, { provider: repairProvider });
-      setNotice("Provider 映射已修复。原始遗留值不会展示或回传。");
+      flash("Provider 映射已修复。原始遗留值不会展示或回传。");
       onChanged();
     } catch (e) {
-      setError(String(e));
+      flash(String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -489,7 +486,7 @@ export function ProviderAccountFlow({
         </div>
       </div>
 
-      <FeedbackNotice message={message} kind={kind} onDismiss={() => { setError(""); setNotice(""); clear(); }} />
+      <FeedbackNotice message={message} kind={kind} onDismiss={() => { clear(); setProjectReferences(null); }} />
       {projectReferences && <ProjectCredentialRepairLinks references={projectReferences} />}
 
       <div className="provider-flow-grid">
@@ -543,8 +540,8 @@ export function ProviderAccountFlow({
               modelId={createModelId}
               onModelIdChange={setCreateModelId}
               modelOptions={createModels}
-              onNotice={(message) => { setNotice(message); setError(""); }}
-              onError={(message) => { if (message) setError(message); else setError(""); }}
+              onNotice={(message) => { setProjectReferences(null); flash(message); }}
+              onError={(message) => { setProjectReferences(null); if (message) flash(message, "error"); else clear(); }}
               onSubmit={createAccount}
               onCancel={() => setShowCreate(false)}
               busy={busy}
@@ -614,14 +611,15 @@ export function ProviderAccountFlow({
                       onClick={async () => {
                         setSelectedCredentialId(credential.id);
                         setTesting(true);
-                        setError("");
+                        clear();
+                        setProjectReferences(null);
                         try {
                           const result = await api.testCredential(credential.id);
-                          if (result.ok) setNotice(`连接正常：${result.detail}`);
-                          else setError(`连接失败：${result.detail}${result.category ? `（${result.category}）` : ""}`);
+                          if (result.ok) flash(`连接正常：${result.detail}`);
+                          else flash(`连接失败：${result.detail}${result.category ? `（${result.category}）` : ""}`, "error");
                           onChanged();
                         } catch (e) {
-                          setError(String(e));
+                          flash(String(e), "error");
                         } finally {
                           setTesting(false);
                         }
@@ -683,8 +681,8 @@ export function ProviderAccountFlow({
                           ? editorModelTextFromSettings(editOriginalSettings, editAgentCli)
                           : undefined}
                         modelOptions={models}
-                        onNotice={(message) => { setNotice(message); setError(""); }}
-                        onError={(message) => { if (message) setError(message); else setError(""); }}
+                        onNotice={(message) => { setProjectReferences(null); flash(message); }}
+                        onError={(message) => { setProjectReferences(null); if (message) flash(message, "error"); else clear(); }}
                         onSubmit={saveEditedConfig}
                         onCancel={() => {
                           setEditingCredentialId("");

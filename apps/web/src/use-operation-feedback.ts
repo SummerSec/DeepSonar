@@ -11,6 +11,7 @@ export function useOperationFeedback(scopeKey?: string) {
   const { message, flash: flashMessage, clear: clearMessage } = useFlashMessage();
   const [kind, setKind] = useState<ToastKind>("ok");
   const toastId = useRef<number | null>(null);
+  const currentNotice = useRef<({ message: string; kind: ToastKind } & OperationFeedbackOptions) | null>(null);
   const mounted = useRef(true);
   const currentScope = useRef({ key: scopeKey });
   if (currentScope.current.key !== scopeKey) currentScope.current = { key: scopeKey };
@@ -19,6 +20,7 @@ export function useOperationFeedback(scopeKey?: string) {
   const dismissOwnedToast = useCallback(() => {
     if (toastId.current !== null) dismissToast(toastId.current);
     toastId.current = null;
+    currentNotice.current = null;
   }, []);
 
   const clear = useCallback(() => {
@@ -37,10 +39,14 @@ export function useOperationFeedback(scopeKey?: string) {
 
   const flash = useCallback((next: string, nextKind: ToastKind = "ok", options: OperationFeedbackOptions = {}) => {
     if (!mounted.current || currentScope.current !== scope || !next.trim()) return;
+    const previous = currentNotice.current;
+    if (nextKind === "error" && previous?.kind === nextKind && previous.message === next
+      && previous.detail === options.detail && previous.action === options.action) return;
     dismissOwnedToast();
     setKind(nextKind);
     flashMessage(next, { durationMs: nextKind === "error" ? 0 : TOAST_DURATIONS[nextKind] });
     toastId.current = showToast(next, nextKind, { ...options, owner });
+    currentNotice.current = { message: next, kind: nextKind, ...options };
   }, [scope, owner, flashMessage, dismissOwnedToast]);
 
   return { message, kind, flash, clear };

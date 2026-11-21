@@ -3,11 +3,13 @@ import test, { mock } from "node:test";
 import { JSDOM } from "jsdom";
 import { act, createElement as h, Fragment, type ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { api, type EffectiveRules, type GlobalSettings, type PublicUser } from "./api";
+import { api, type CredentialImpact, type EffectiveRules, type GlobalSettings, type ProviderCredential, type PublicUser } from "./api";
 import { AuthProvider } from "./auth";
 import { SettingsPanel } from "./SettingsPanel";
 import { TransferPanel } from "./TransferPanel";
 import { UsersPanel } from "./UsersPanel";
+import { ProviderAccountFlow } from "./ProviderAccountFlow";
+import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 import { clearToasts, ToastHost } from "./toast";
 
 async function fixture() {
@@ -22,12 +24,18 @@ async function fixture() {
     createPlatformExport: api.createPlatformExport, listUsers: api.listUsers,
     updateUser: api.updateUser, resetUserPassword: api.resetUserPassword,
     agentRoles: api.agentRoles, globalRoleConfigs: api.globalRoleConfigs,
-    skillSources: api.skillSources, deleteRole: api.deleteRole };
+    skillSources: api.skillSources, deleteRole: api.deleteRole,
+    authMe: api.authMe, credentialProviders: api.credentialProviders,
+    testCredential: api.testCredential, credentialImpact: api.credentialImpact,
+    deleteCredential: api.deleteCredential };
   api.authStatus = async () => ({ auth_required: false, has_users: false, bootstrap_available: false,
     default_admin_credentials_active: false, session_ttl_days: 1 });
   api.listPlatformExports = async () => [];
   api.globalRoleConfigs = async () => [];
   api.skillSources = async () => [];
+  api.authMe = async () => ({ auth_required: false, authenticated: true, user: null,
+    actor: { type: "internal", name: "fixture", role: null, scopes: ["admin"] } });
+  api.credentialProviders = async () => [];
   const settings: GlobalSettings = {
     rules: {}, effective_rules: { allowEgress: true, hubEnabled: true,
       maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null,
@@ -207,5 +215,112 @@ test("a rejected role deletion retains the form and cannot turn into a success n
     assert.ok(f.button("删除"), "the rejected deletion leaves the editable role intact");
     assert.equal(f.toasts().length, 1);
     assert.ok(f.toasts()[0].classList.contains("is-error"));
+  } finally { await f.close(); }
+});
+
+function providerCredential(id = "fixture-provider"): ProviderCredential {
+  return { id, name: `${id} account`, kind: "llm_provider", provider: "anthropic", project_id: null,
+    key_version: 1, public_metadata_json: {}, agent_cli: "claude-code", scope: "global",
+    fingerprint: "fixture-fingerprint", last4: "1234", status: "active", last_used_at: null,
+    rotated_at: null, created_at: "2026-11-21T00:00:00Z", created_by: null };
+}
+
+for (const entry of ["测试连接", "测试"]) {
+  test(`provider ${entry} clears the previous success and failure while a retry is pending`, async () => {
+    const f = await fixture();
+    type HealthResult = Awaited<ReturnType<typeof api.testCredential>>;
+    let resolveRetry!: (result: HealthResult) => void;
+    const retry = new Promise<HealthResult>((resolve) => { resolveRetry = resolve; });
+    let calls = 0;
+    let changed = 0;
+    api.testCredential = async () => {
+      calls += 1;
+      if (calls === 1) return { ok: true, detail: "first connection accepted" };
+      if (calls === 2) {
+        if (entry === "测试") throw new Error("connection refused");
+        return { ok: false, detail: "connection refused", category: "network" };
+      }
+      return retry;
+    };
+    try {
+      await f.render(h(ConfirmDialogProvider, null, h(ProviderAccountFlow, {
+        credentials: [providerCredential()], projects: [], onChanged: () => { changed += 1; },
+      })));
+      await f.click(f.button(entry));
+      assert.match(f.container.querySelector('.app-feedback[role="status"]')!.textContent!, /first connection accepted/);
+      await f.click(f.button(entry));
+      assert.match(f.alerts()[0].textContent!, /connection refused/);
+      assert.doesNotMatch(f.dom.window.document.body.textContent!, /first connection accepted/);
+      const changedBeforeRetry = changed;
+
+      await f.click(f.button(entry));
+      assert.equal(calls, 3);
+      assert.equal(changed, changedBeforeRetry, "an unfinished retry does not report a new result");
+      assert.ok(f.button("测试中…").disabled);
+      assert.equal(f.container.querySelectorAll(".app-feedback").length, 0, "pending retry has no previous result");
+      assert.equal(f.toasts().length, 0, "pending retry cannot resurrect the old success toast");
+      await f.advance(60000);
+      assert.equal(f.container.querySelectorAll(".app-feedback").length, 0);
+      assert.equal(f.toasts().length, 0);
+
+      await act(async () => { resolveRetry({ ok: true, detail: "retry connection accepted" }); });
+      assert.match(f.container.querySelector('.app-feedback[role="status"]')!.textContent!, /retry connection accepted/);
+      assert.doesNotMatch(f.dom.window.document.body.textContent!, /first connection accepted|connection refused/);
+      assert.equal(f.toasts().length, 1);
+      assert.ok(f.toasts()[0].classList.contains("is-ok"));
+      assert.equal(changed, changedBeforeRetry + 1);
+    } finally { await f.close(); }
+  });
+}
+
+test("provider project reference repair links clear on dismiss, account selection and the next operation", async () => {
+  const f = await fixture();
+  const credentials = [providerCredential(), providerCredential("second-provider")];
+  const references: CredentialImpact["project_references"] = { count: 1, items: [{
+    project_id: "fixture-project", project_name: "Fixture Project", enabled: true, default: true,
+  }] };
+  api.credentialImpact = async (credentialId) => ({
+    credential_id: credentialId, usage_history: { token_generations: 0, ledger_entries: 0 },
+    role_configs: { count: 0, items: [] },
+    jobs: { pending_unclaimed: { count: 0, items: [] }, active_frozen: { count: 0, items: [] },
+      recoverable: { count: 0, items: [] }, terminal_historical: { count: 0, items: [] } },
+    scans: { active: { count: 0, items: [] } }, project_references: references,
+  });
+  let deleted = 0;
+  api.deleteCredential = async (id) => {
+    deleted += 1;
+    return { ok: true, id, unbound_role_config_count: 0, revoked_job_token_count: 0 };
+  };
+  type HealthResult = Awaited<ReturnType<typeof api.testCredential>>;
+  let resolveConnection!: (result: HealthResult) => void;
+  api.testCredential = () => new Promise<HealthResult>((resolve) => { resolveConnection = resolve; });
+  const repairLinks = () => f.container.querySelectorAll('a[href="/projects/fixture-project/settings?tab=roles"]');
+  try {
+    await f.render(h(ConfirmDialogProvider, null, h(ProviderAccountFlow, {
+      credentials, projects: [], onChanged: () => {},
+    })));
+    await f.click(f.button("删除账号"));
+    assert.match(f.alerts()[0].textContent!, /可见项目仍引用该账号/);
+    assert.equal(repairLinks().length, 1);
+    await f.click(f.alerts()[0].querySelector<HTMLButtonElement>('button[aria-label="关闭提示"]')!);
+    assert.equal(repairLinks().length, 0);
+    assert.equal(f.alerts().length, 0);
+    assert.equal(f.toasts().length, 0);
+
+    await f.click(f.button("删除账号"));
+    assert.equal(repairLinks().length, 1);
+    await f.click(f.container.querySelectorAll<HTMLButtonElement>(".provider-flow-credential-main")[1]);
+    assert.equal(repairLinks().length, 0, "another selected account has no previous repair links");
+
+    await f.click(f.button("删除账号"));
+    assert.equal(repairLinks().length, 1);
+    await f.click(f.button("测试连接"));
+    assert.equal(repairLinks().length, 0, "a new operation clears obsolete project references before it settles");
+    assert.equal(f.alerts().length, 0);
+    assert.equal(f.toasts().length, 0);
+    await act(async () => { resolveConnection({ ok: true, detail: "connection accepted" }); });
+    assert.equal(repairLinks().length, 0);
+    assert.match(f.container.querySelector('.app-feedback[role="status"]')!.textContent!, /connection accepted/);
+    assert.equal(deleted, 0, "project references continue to block deletion");
   } finally { await f.close(); }
 });

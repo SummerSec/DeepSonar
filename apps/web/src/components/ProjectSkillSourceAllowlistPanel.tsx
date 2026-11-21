@@ -52,6 +52,7 @@ export function ProjectSkillSourceAllowlistPanel({
   onSaved?: () => void;
 }) {
   const { message, kind, flash, clear } = useOperationFeedback(projectId);
+  const loadFeedback = useOperationFeedback(projectId);
   const { me } = useAuth();
   const canProjectWrite = canAccessAnyScope(me, ["skills:write"]);
   const canManagePlatform = canProjectWrite && !me?.actor?.project_id;
@@ -83,8 +84,9 @@ export function ProjectSkillSourceAllowlistPanel({
       if (!isCurrent() || request !== owner.request) return;
       // Metadata refreshes never acknowledge or discard unsaved project flag overrides.
       update((current) => ({ ...current, configured: res.configured, sources: res.sources }));
+      loadFeedback.clear();
     } catch (error) {
-      if (isCurrent() && request === owner.request) flash(`加载 Skill 源可用性失败：${errorText(error)}`, "error");
+      if (isCurrent() && request === owner.request) loadFeedback.flash(`加载 Skill 源可用性失败：${errorText(error)}`, "error");
     } finally {
       if (isCurrent() && request === owner.request) update((current) => ({ ...current, loading: false }));
     }
@@ -165,6 +167,7 @@ export function ProjectSkillSourceAllowlistPanel({
   return (
     <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
       <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
+      <FeedbackNotice message={loadFeedback.message} kind={loadFeedback.kind} onDismiss={loadFeedback.clear} />
       <div className="border-b border-white/[.055] px-4 py-3">
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
           <span>Skill 源启用白名单</span>
