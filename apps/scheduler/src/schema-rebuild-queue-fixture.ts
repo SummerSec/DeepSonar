@@ -86,6 +86,19 @@ UPDATE schema_meta SET version=77`);
       SELECT id,'retirement-evidence',1,'progress','{"evidence":"original"}'::jsonb
       FROM jobs WHERE canvas_id='running'`;
     const evidence = await db`SELECT to_jsonb(e) AS row FROM events e ORDER BY id`;
+    const rebuild = () => rebuildSchemaOnReservedSession(
+      () => db.reserve() as unknown as Promise<MigrationConnection & { release: () => void }>,
+      { force: true, dump: false, terminateScheduler: false },
+    );
+    for (const shape of ["missing_column", "missing_table"]) {
+      if (shape === "missing_column") await db`ALTER TABLE project_task_queues RENAME paused TO unrecognized_pause`;
+      else await db`ALTER TABLE project_task_queue_items RENAME TO unrecognized_queue_items`;
+      await assert.rejects(rebuild(), /RETIRED_QUEUE_SOURCE_INVALID/);
+      assert.deepEqual(await db`SELECT to_jsonb(j) AS row FROM jobs j ORDER BY id`, history);
+      assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0]!.version, 77);
+      if (shape === "missing_column") await db`ALTER TABLE project_task_queues RENAME unrecognized_pause TO paused`;
+      else await db`ALTER TABLE unrecognized_queue_items RENAME TO project_task_queue_items`;
+    }
     const result = await rebuildSchemaOnReservedSession(
       () => db.reserve() as unknown as Promise<MigrationConnection & { release: () => void }>,
       { force: true, dump: false, terminateScheduler: false },

@@ -1,3 +1,22 @@
+/** Refuse incomplete source shapes before any table is moved, even with force. */
+export function assertRetiredQueueSource(
+  source: Map<string, { columns: Set<string> }>,
+  target: Map<string, Set<string>>,
+): void {
+  if (target.has("project_task_queues") || ![...source.keys()].some(name => name.startsWith("project_task_queue"))) return;
+  const required = {
+    project_task_queues: ["project_id", "paused"],
+    project_task_queue_items: ["project_id", "canvas_id", "state"],
+    canvases: ["id", "project_id", "target_json"],
+    jobs: ["project_id", "canvas_id", "status"],
+  };
+  for (const [table, columns] of Object.entries(required)) {
+    if (!columns.every(column => source.get(table)?.columns.has(column))) {
+      throw new Error(`RETIRED_QUEUE_SOURCE_INVALID: cannot preserve task stops from ${table}`);
+    }
+  }
+}
+
 /** One-time copy projection. Retired queue tables are never runtime inputs. */
 export function retiredQueueTargetProjection(sourceSchema: string): string {
   // The caller quotes the fixed staging schema with quoteIdent.

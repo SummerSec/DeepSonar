@@ -1,4 +1,4 @@
-import { retiredQueueTargetProjection } from "./schema-rebuild-queue-retirement.js";
+import { assertRetiredQueueSource, retiredQueueTargetProjection } from "./schema-rebuild-queue-retirement.js";
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -250,6 +250,7 @@ export async function planSchemaRebuild(
   const expected = parseTableManifest(readFileSync(schemaFile, "utf8"));
   const sourceTables = await listBaseTables(db, "public");
   const sourceColumns = await readColumnMap(db, "public");
+  assertRetiredQueueSource(sourceColumns, expected);
   const currentVersion = await readSchemaVersion(db);
   const activeJobs = await readActiveJobs(db);
   const sourceSet = new Set(sourceTables);

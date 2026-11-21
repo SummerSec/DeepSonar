@@ -21,7 +21,7 @@ export async function runMultiCanvasDispatchFixture(
       ...overrides,
     })} WHERE id='global'`;
   };
-  const insert = async (canvasIndex: number, projectIndex = 0, status = "pending") => {
+  const insert = async (canvasIndex: number, projectIndex = 0, status = "pending"): Promise<string> => {
     const id = randomUUID();
     jobIds.push(id);
     await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
