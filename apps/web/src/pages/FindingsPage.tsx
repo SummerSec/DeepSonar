@@ -14,6 +14,7 @@ import {
 } from "../findings-risk-desk";
 import { clearFindingQuery, findingQueryFilters, updateFindingQuery } from "../finding-query-state";
 import { useFindingsQuery } from "../useFindingsQuery";
+import { FINDING_VERIFY_OPTIONS as VERIFY_OPTIONS, FINDING_VERIFY_LABELS as VERIFY_LABELS } from "../finding-verification";
 import {
   DataTable,
   DISPOSITION_OPTIONS,
@@ -29,16 +30,6 @@ import {
 } from "../ui";
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
-const VERIFY_OPTIONS = [
-  { value: "pending", label: "待验证" },
-  { value: "verifying", label: "验证中" },
-  { value: "confirmed", label: "已确认" },
-  { value: "false_positive", label: "已排除" },
-  { value: "needs_human", label: "待人工" },
-  { value: "refuted", label: "已反驳" },
-  { value: "inconclusive", label: "无定论" },
-] as const;
-const VERIFY_LABELS = Object.fromEntries(VERIFY_OPTIONS.map((option) => [option.value, option.label]));
 const DISPOSITION_LABELS = Object.fromEntries(DISPOSITION_OPTIONS.map((option) => [option.value, option.label]));
 
 function FindingStateBadges({ finding }: { finding: FindingSummary }) {

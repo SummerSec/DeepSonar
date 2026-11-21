@@ -6,6 +6,8 @@ import { createRoot } from "react-dom/client";
 import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { api, type FindingDetail, type FindingSummary, type PageEnvelope, type ProjectFindingsSummary } from "./api";
 import { FindingDetailPanel } from "./FindingDetailPanel";
+import { FindingDispositionEditor } from "./FindingDispositionEditor";
+import { FINDING_VERIFY_OPTIONS } from "./finding-verification";
 import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 import { FindingsPage } from "./pages/FindingsPage";
 import { useFindingsQuery } from "./useFindingsQuery";
@@ -143,6 +145,84 @@ test("useFindingsQuery keeps the pending rows identity stable across parent rere
   }
 });
 
+test("task queries filter on the server, reset pages and ignore late responses after switching states", async () => {
+  const env = setup();
+  let latest: ReturnType<typeof useFindingsQuery>;
+  function Probe({ status, after = null, enabled = true, canvas = "task-a" }: {
+    status?: string; after?: string | null; enabled?: boolean; canvas?: string;
+  }) {
+    latest = useFindingsQuery("global", undefined, { canvas_id: canvas, verify_status: status }, after, enabled);
+    return <span>{latest.error ?? latest.rows.map(row => row.title).join(",")}</span>;
+  }
+  const render = async (props: Parameters<typeof Probe>[0]) => {
+    await act(async () => env.root.render(<Probe {...props} />));
+  };
+  try {
+    await render({ enabled: false });
+    assert.equal(env.requests.length, 0, "inactive task views must not query global findings");
+    await render({});
+    await act(async () => env.requests[0].pending.resolve(page("first-50", "page-two")));
+    await render({ status: "refuted,inconclusive" });
+    assert.deepEqual(latest!.rows, [], "previous filter rows disappear immediately");
+    assert.deepEqual(env.requests[1].options, { canvas_id: "task-a", verify_status: "refuted,inconclusive", after: null, limit: 50 });
+    await act(async () => env.requests[1].pending.resolve(page("match-beyond-first-50", "filtered-next")));
+    assert.equal(env.container.textContent, "match-beyond-first-50");
+    await render({ status: "refuted,inconclusive", after: "filtered-next" });
+    assert.equal(env.requests[2].options?.verify_status, "refuted,inconclusive");
+    assert.equal(env.requests[2].options?.after, "filtered-next");
+    await render({ status: "needs_human" });
+    await act(async () => env.requests[3].pending.resolve(page("current")));
+    await act(async () => env.requests[2].pending.resolve(page("stale-page")));
+    assert.equal(env.container.textContent, "current");
+    await render({ enabled: false });
+    await render({ status: "needs_human" });
+    assert.deepEqual(latest!.rows, [], "reactivation must not revive previously successful rows");
+    assert.equal(latest!.nextCursor, null);
+    assert.equal(latest!.loading, true);
+    await act(async () => env.requests[4].pending.resolve(page("reactivated")));
+    await render({});
+    await act(async () => env.requests[5].pending.reject(new Error("403 revoked")));
+    assert.deepEqual(latest!.rows, []);
+    assert.match(latest!.error!, /403 revoked/);
+    await render({ canvas: "task-b" });
+    assert.equal(env.requests[6].options?.canvas_id, "task-b");
+    assert.deepEqual(latest!.rows, []);
+    await render({ enabled: false });
+    await act(async () => env.requests[6].pending.resolve(page("old-task")));
+    assert.deepEqual(latest!.rows, []);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test("manual dispositions stay available across every technical status with confirmed_vuln guarded", async () => {
+  const env = setup();
+  const writes: string[] = [];
+  try {
+    for (const status of FINDING_VERIFY_OPTIONS) {
+      writes.length = 0;
+      await act(async () => env.root.render(<FindingDispositionEditor
+        disposition="open" verifyStatus={status.value} busy={false} note=""
+        onNoteChange={() => {}} onChange={async value => { writes.push(value); }}
+      />));
+      const buttons = Array.from(env.container.querySelectorAll("button"));
+      const confirm = buttons.find(button => button.textContent?.trim() === "漏洞存在")!;
+      assert.equal(confirm.disabled, status.value !== "confirmed", status.value);
+      await act(async () => { for (const button of buttons) button.click(); });
+      assert.deepEqual(writes, status.value === "confirmed"
+        ? ["open", "accepted", "human_reproducing", "confirmed_vuln", "rejected_fp", "resolved", "archived"]
+        : ["open", "accepted", "human_reproducing", "rejected_fp", "resolved", "archived"]);
+    }
+    await act(async () => env.root.render(<FindingDispositionEditor
+      disposition="open" verifyStatus="confirmed" busy={true} note=""
+      onNoteChange={() => {}} onChange={async value => { writes.push(value); }}
+    />));
+    assert.ok(Array.from(env.container.querySelectorAll("button")).every(button => button.disabled));
+  } finally {
+    await env.cleanup();
+  }
+});
+
 test("Finding detail keeps one candidate entry and its state across conditional sections and reloads", async () => {
   const env = setup();
   const original = {
@@ -156,11 +236,12 @@ test("Finding detail keeps one candidate entry and its state across conditional 
     else originalError(...args);
   };
   let needsHuman = false;
+  let confirmed = false;
   let showResearch = false;
   function detail(id: string): FindingDetail {
     return {
       verification_control: { verify_status: needsHuman ? "needs_human" : "pending", subject_revision: null, latest_round_id: null },
-      finding: { ...finding(id), verify_status: needsHuman ? "needs_human" : "pending",
+      finding: { ...finding(id), verify_status: confirmed ? "confirmed" : needsHuman ? "needs_human" : "pending",
         raw_json: {}, source_job_type: "analyze", source_job_status: "succeeded" },
       verification_jobs: [], verification_rounds: [], source_events: [],
       cluster_members: showResearch ? [{ finding_id: id, is_canonical: true,
@@ -199,14 +280,19 @@ test("Finding detail keeps one candidate entry and its state across conditional 
   }
   try {
     await render("subject-a");
+    const confirmedButton = () => Array.from(env.container.querySelectorAll("button")).find(button => button.textContent === "漏洞存在")!;
+    assert.equal(confirmedButton().disabled, true, "pending findings cannot be manually confirmed as vulnerabilities");
+    assert.match(confirmedButton().title, /技术验证/);
     entries();
     assert.equal(candidateRequests.length, 0, "candidate reads stay opt-in");
     await click("查看已计算候选");
     const expandedEntry = env.container.querySelector('[aria-label="已计算的词法候选"]');
     for (let index = 0; index < 6; index++) {
       needsHuman = index % 2 === 0;
+      confirmed = index === 5;
       showResearch = index % 3 === 0;
       await click("待处置");
+      assert.equal(confirmedButton().disabled, !confirmed, "availability follows the refreshed technical status");
       entries();
       assert.equal(env.container.querySelector('[aria-label="已计算的词法候选"]'), expandedEntry);
       assert.equal(expandedEntry?.querySelector("button")?.getAttribute("aria-expanded"), "true");

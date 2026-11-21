@@ -2,8 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type FindingSummary, type ProjectFindingsSummary, type FindingQueryFilters } from "./api";
 import { FINDING_PAGE_SIZE } from "./finding-query-state";
 
+interface QueryKey {
+  serialized: string;
+}
+
 interface QueryState {
-  key: string;
+  key: QueryKey;
   rows: FindingSummary[];
   summary: ProjectFindingsSummary | null;
   facets: ProjectFindingsSummary | null;
@@ -12,19 +16,22 @@ interface QueryState {
   loading: boolean;
 }
 
-function emptyState(key: string): QueryState {
+function emptyState(key: QueryKey): QueryState {
   return { key, rows: [], summary: null, facets: null, nextCursor: null, error: null, loading: true };
 }
 
 /** Sequential polling avoids overlapping responses; query changes invalidate all visible cached rows. */
-export function useFindingsQuery(scope: "project" | "global", projectId: string | undefined, filters: FindingQueryFilters, after: string | null) {
-  const key = JSON.stringify({ scope, projectId, filters, after });
-  const pendingState = useMemo(() => emptyState(key), [key]);
+export function useFindingsQuery(scope: "project" | "global", projectId: string | undefined, filters: FindingQueryFilters, after: string | null, enabled = true) {
+  const serialized = JSON.stringify({ scope, projectId, filters, after, enabled });
+  // Each activation/query transition owns its results, including A → B → A.
+  const key = useMemo(() => ({ serialized }), [serialized]);
+  const pendingState = useMemo(() => ({ ...emptyState(key), loading: enabled }), [key, enabled]);
   const [state, setState] = useState<QueryState>(() => emptyState(key));
   useEffect(() => {
+    if (!enabled) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const query = JSON.parse(key) as { scope: "project" | "global"; projectId?: string; filters: FindingQueryFilters; after: string | null };
+    const query = JSON.parse(key.serialized) as { scope: "project" | "global"; projectId?: string; filters: FindingQueryFilters; after: string | null };
     const tick = async () => {
       try {
         if (query.scope === "project" && !query.projectId) throw new Error("缺少项目 ID");
@@ -48,6 +55,6 @@ export function useFindingsQuery(scope: "project" | "global", projectId: string 
     };
     void tick();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [key]);
-  return state.key === key ? state : pendingState;
+  }, [key, enabled]);
+  return enabled && state.key === key ? state : pendingState;
 }

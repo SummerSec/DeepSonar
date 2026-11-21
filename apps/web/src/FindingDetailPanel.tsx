@@ -23,11 +23,13 @@ import {
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
 import { FindingVerificationClose } from "./FindingVerificationClose";
+import { FindingDispositionEditor } from "./FindingDispositionEditor";
+import { FINDING_VERIFY_LABELS } from "./finding-verification";
 import { useFlashMessage } from "./use-flash-message";
 import { FindingCandidates } from "./FindingCandidates";
 import { FindingLexicalSearch } from "./FindingLexicalSearch";
 import { SearchableSelect } from "./SearchableSelect";
-import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
+import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 import { FindingSharedAssets } from "./SharedAssetsPanel";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { RepairFeedbackPanel } from "./task-workbench/RepairFeedbackPanel";
@@ -388,7 +390,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   <>
                     <span className="text-zinc-700">·</span>
                     <SeverityBadge severity={f.severity} />
-                    <StatusBadge status={f.verify_status} />
+                    <StatusBadge status={f.verify_status} label={FINDING_VERIFY_LABELS[f.verify_status]} />
                     <StatusBadge status={f.disposition ?? "open"} />
                   </>
                 )}
@@ -517,7 +519,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-[13px] text-zinc-200">{member.title}</span>
                             <span className="font-mono text-[10px] text-zinc-500">{member.is_canonical ? "canonical" : "duplicate"}</span>
-                            <StatusBadge status={member.verify_status} />
+                            <StatusBadge status={member.verify_status} label={FINDING_VERIFY_LABELS[member.verify_status]} />
                             <SeverityBadge severity={member.severity} />
                           </div>
                           {member.dedupe_reason && (
@@ -889,37 +891,12 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
               {/* ── Sidebar: like GH issue meta ── */}
               <aside className="px-5 py-5 sm:px-6 lg:px-4">
                 <SidebarField label="状态">
-                  <div className="flex flex-col gap-1.5">
-                    {DISPOSITION_OPTIONS.map((opt) => {
-                      const active = (f.disposition ?? "open") === opt.value;
-                      return (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          disabled={busy}
-                          onClick={() => setDisposition(opt.value as FindingDisposition)}
-                          className={`rounded-lg px-2.5 py-1.5 text-left text-[12px] ring-1 transition-colors disabled:opacity-50 ${
-                            active
-                              ? "bg-acc-500/15 text-acc-300 ring-acc-400/30"
-                              : "theme-surface text-zinc-500 hover:opacity-90"
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <textarea
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    placeholder="状态备注（切换时一并保存）"
-                    rows={2}
-                    className="theme-input-surface mt-2 w-full rounded-lg border px-2.5 py-1.5 text-[12px] outline-none focus:border-acc-500"
-                  />
+                  <FindingDispositionEditor disposition={f.disposition ?? "open"} verifyStatus={f.verify_status}
+                    busy={busy} note={note} onNoteChange={setNote} onChange={setDisposition} />
                 </SidebarField>
 
                 <SidebarField label="技术验证">
-                  <StatusBadge status={f.verify_status} />
+                  <StatusBadge status={f.verify_status} label={FINDING_VERIFY_LABELS[f.verify_status]} />
                   <FindingVerificationClose key={findingId} findingId={findingId} control={detail.verification_control} onChanged={reload} />
                   <p className="mt-1.5 text-[11px] leading-4 text-zinc-600">
                     技术 confirmed 只能由 Scheduler Verify 根据独立证据产生。

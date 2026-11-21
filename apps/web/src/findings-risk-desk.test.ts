@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { api, type FindingSummary } from "./api";
-import { clearFindingQuery, findingQueryFilters, updateFindingQuery } from "./finding-query-state";
+import { clearFindingQuery, findingQueryFilters, taskFindingQueryFilters, updateFindingQuery } from "./finding-query-state";
+import { FINDING_VERIFY_OPTIONS } from "./finding-verification";
 import {
   dispositionBadgeTone,
   PROJECT_DELIVERY_CAPTION,
@@ -13,6 +14,41 @@ import {
   researchDedupeLabel,
   researchPriorityLabel,
 } from "./findings-risk-desk";
+
+test("task finding filters preserve every verification state and reset pagination on changes", () => {
+  assert.deepEqual(FINDING_VERIFY_OPTIONS.map(option => option.value), [
+    "pending", "verifying", "confirmed", "false_positive", "needs_human", "refuted", "inconclusive",
+  ]);
+  assert.deepEqual(FINDING_VERIFY_OPTIONS.map(option => option.label), [
+    "待验证", "验证中", "已确认", "已排除", "待人工", "已反驳", "无定论",
+  ]);
+  let params = new URLSearchParams("tab=findings&finding=selected&cursor=old&severity=high&profile=security.vulnerability&project=other&canvas=other");
+  for (const statuses of [["pending"], ["refuted", "inconclusive"], ["false_positive"], []]) {
+    params = updateFindingQuery(params, "verify", statuses);
+    assert.equal(params.has("cursor"), false);
+    assert.equal(params.get("tab"), "findings");
+    assert.equal(params.get("finding"), "selected");
+    assert.deepEqual(taskFindingQueryFilters(new URLSearchParams(params), "task-a"), {
+      canvas_id: "task-a", severity: "high", profile: "security.vulnerability",
+      verify_status: statuses.join(",") || undefined,
+    });
+    params.set("cursor", "next");
+  }
+});
+
+test("task finding page wires translated states to scoped server queries and URL pagination", () => {
+  const source = readFileSync(new URL("./pages/TaskCanvasPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /useFindingsQuery\(\s*"global", undefined, taskFindingQueryFilters\(searchParams, canvasId\),\s*searchParams\.get\("cursor"\)/);
+  assert.match(source, /tab === "findings"/);
+  assert.match(source, /const visibleFindings = findingList\.rows/);
+  assert.match(source, /updateFindingQuery\(searchParams, key, values\)/);
+  assert.match(source, /label="验证状态"[^\n]+options=\{FINDING_VERIFY_OPTIONS\}/);
+  assert.match(source, /FINDING_VERIFY_LABELS\[f\.verify_status\]/);
+  assert.match(source, /\.\.\.findingIndex, \.\.\.findings, \.\.\.visibleFindings/);
+  assert.match(source, /aria-label="任务发现分页"/);
+  assert.match(source, /findingList\.error/);
+  assert.doesNotMatch(source, /const visibleFindings = findings\.filter/);
+});
 
 test("project delivery desk merges risk and reports and stays distinct from cross-project findings", () => {
   const shell = readFileSync(new URL("./layout/AppShell.tsx", import.meta.url), "utf8");

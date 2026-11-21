@@ -1,5 +1,7 @@
 # DeepSonar 系统架构设计
 
+#1199 的[任务发现状态与筛选](09-interface-specs.md#任务发现的状态显示与筛选1199)补齐 FR-WEB-001 的服务端范围筛选及 URL 游标、FR-WEB-003 的人工处置前置提示。既有 API、技术状态和权限约束继续作为事实入口，最终 SHA Actions 另验。
+
 #1133 将 FR-VERIFY-005 / FR-DEV-002 的人工技术决定与补证设备冻结接到[接口视图](09-interface-specs.md#人工结束技术验证1133)、运行时视图及既有设备专题，新增轮次与持久审计使用现有数据结构。补证无进展的既有关闭开关与真实 SQL 回归见[运行时规则](06-runtime-view.md#verify-补证无进展开关1133)。最终 SHA Actions 待验。
 
 #1118 的[持久跨项目公平领取](06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。

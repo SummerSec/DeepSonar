@@ -7,6 +7,16 @@
 
 Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用途、当前 Finding 实际引用及待处理原因（#1019）。列表采用有界范围查询，详情再读取既有留存证据与当前 Plan 判据；截断与无法确认明确呈现未知。投影不提供写入权限，人工信任、技术验证与完成判据仍走原契约。详见[证据追踪](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
 
+## 任务发现的状态显示与筛选（#1199）
+
+任务发现、项目发现和 Finding 详情复用[技术验证中文标签](../../apps/web/src/finding-verification.ts)，覆盖当前状态及历史可读的 `false_positive`。任务列表通过既有 `GET /findings` 携带路由画布范围及 severity/profile/verify_status 筛选，服务端过滤后分页。同一维度多选按 OR，不同维度按 AND。筛选与 cursor 保存在 URL，改变筛选时清除 cursor。切换筛选、画布或离开发现视图后，旧响应不能覆盖当前结果；加载失败明确展示错误并清空上一查询结果。
+
+详情中的人工处置与技术验证仍各自独立。`confirmed_vuln` 仅在技术状态为 `confirmed` 时可选，其余状态显示禁用原因，服务端继续执行最终校验。
+
+注意力成本方面，中文标签和可见的禁用原因减少对照内部状态值及失败后猜原因的负担。有界分页增加查看后续记录和返回第一页的操作，筛选自动回到第一页，避免用户手工清除旧游标。复用既有筛选、查询与权限边界，收益尚未实测。
+
+工程回归接既有 `pnpm ci:unit:web-facts` 中的 `findings-risk-desk.test.ts` 与 `findings-query-dom.test.tsx`，覆盖状态字典、路由范围、清空筛选、分页、迟到响应、权限错误及处置按钮随技术状态刷新。最终 SHA 的 Actions 结果另验，用户现场失败组合尚未逐一复现。
+
 ## 人工结束技术验证（#1133）
 
 `PATCH /findings/:id/verify-status` 的 `inconclusive` 分支复用 `findings:write` 和项目隔离。原因必填，`expected` 必须包含用户实际看到的 `verify_status`、`subject_revision` 和 `latest_round_id`，未知修订或无轮次显式为 null。共享严格契约位于 [finding-verification.ts](../../packages/shared-types/src/finding-verification.ts)，详情返回 `verification_control` 提供这组比较值。无画布的历史详情仍可读，其 `verification_control` 为 null，界面隐藏结束按钮，写操作拒绝为 `FINDING_CANVAS_INVALID`。

@@ -4,6 +4,16 @@ import { readMultiSearchParam, writeMultiSearchParam } from "./searchable-select
 export const FINDING_FILTER_PARAMS = ["severity", "profile", "verify", "disposition", "project", "canvas", "q"] as const;
 export const FINDING_PAGE_SIZE = 50;
 
+/** Task scope comes from the route, never from optional project/list URL parameters. */
+export function taskFindingQueryFilters(params: URLSearchParams, canvasId: string | undefined): FindingQueryFilters {
+  return {
+    canvas_id: canvasId,
+    severity: readMultiSearchParam(params, "severity").join(",") || undefined,
+    profile: readMultiSearchParam(params, "profile").join(",") || undefined,
+    verify_status: readMultiSearchParam(params, "verify").join(",") || undefined,
+  };
+}
+
 /** URL state is shared by list and aggregate; opening a detail never changes the query. */
 export function findingQueryFilters(params: URLSearchParams, scope: "project" | "global", projectId?: string): FindingQueryFilters {
   const csv = (key: string) => readMultiSearchParam(params, key).join(",") || undefined;
