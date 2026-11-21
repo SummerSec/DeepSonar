@@ -201,9 +201,8 @@ if (!testDatabaseUrl) {
         principal_id: "attacker",
         authority_revision: "forged",
       };
-      // CreateTaskBody is a stripping Zod object. Extra root fields are ignored;
-      // only the strict nested task_contract is a client contract.
-      const created = await app.inject({
+      // Management creation rejects unknown root fields, including forged grants.
+      const forged = await app.inject({
         method: "POST",
         url: `/projects/${projectId}/tasks`,
         headers,
@@ -213,6 +212,11 @@ if (!testDatabaseUrl) {
           task_contract: contract,
           target_authorization: forgedGrant,
         },
+      });
+      assert.equal(forged.statusCode, 400, forged.payload);
+      const created = await app.inject({
+        method: "POST", url: `/projects/${projectId}/tasks`, headers,
+        payload: { title: "Trusted target chain", content, task_contract: contract },
       });
       assert.equal(created.statusCode, 201, created.payload);
       const createdBody = created.json() as { canvas_id: string; job: { id: string } };
