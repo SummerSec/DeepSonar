@@ -260,7 +260,7 @@ export function TaskCanvasPage() {
     setInterventionPrefs(readHumanInterventionPrefs(prefUserKey, canvasId));
     loadFindingIndex(canvasId)
       .then((rows) => {
-        if (!stop) setFindingIndex(rows);
+        if (!stop) setFindingIndex((before) => mergeRefreshedPage(before, rows));
       })
       .catch((e) => {
         if (!stop) setFindingIndexError(String(e));
@@ -288,6 +288,12 @@ export function TaskCanvasPage() {
       clearInterval(t);
     };
   }, [canvasId, projectId, prefUserKey]);
+
+  useEffect(() => {
+    if (findingHead.rows.length) {
+      setFindingIndex((before) => mergeRefreshedPage(findingHead.rows, before));
+    }
+  }, [findingHead.rows]);
 
   useEffect(() => {
     if (!projectId || !canvasId) return;

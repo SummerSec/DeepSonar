@@ -9,10 +9,10 @@ import { AuthProvider, RequireAuth } from "./auth";
 import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 
 async function setup(context: TestContext, paginated = false) {
-  // Keep the actual task page and its requests. Graph/terminal/ledger rendering
+  // Keep the actual task page and its requests. Graph/terminal rendering
   // belongs to separate browser flows and does not participate in these queries.
   const hooks = registerHooks({ load(url, options, nextLoad) {
-    for (const name of ["CanvasView", "TerminalPanel", "UsageLedgerBoard"]) {
+    for (const name of ["CanvasView", "TerminalPanel"]) {
       if (url.endsWith(`/${name}.tsx`)) return { format: "module", source: `export function ${name}() { return null; }`, shortCircuit: true };
     }
     if (url.endsWith(".css")) return { format: "module", source: "export {};", shortCircuit: true };
@@ -36,6 +36,7 @@ async function setup(context: TestContext, paginated = false) {
   let jobCalls = 0;
   let failFindings = false;
   let failJobs = false;
+  let findingId = "first-page-finding";
   const finding = (id: string): FindingSummary => ({
     id, title: id, project_id: "project-a", job_id: "job-a", node_id: null,
     fingerprint: id, severity: "high", profile: "security.vulnerability", category: null,
@@ -48,14 +49,14 @@ async function setup(context: TestContext, paginated = false) {
       findingCalls.push(options);
       if (failFindings) throw new Error("findings unavailable");
       const more = paginated && !options?.after;
-      return { items: [finding(options?.after ? "second-page-finding" : "first-page-finding")],
+      return { items: [finding(options?.after ? "second-page-finding" : findingId)],
         after: options?.after ?? null, next_cursor: more ? "page-two" : null, has_more: more, watermark: "now", live: false };
     },
     jobsPage: async () => {
       jobCalls++;
       if (failJobs) throw new Error("jobs unavailable");
       return { items: [{ id: "job-a", project_id: "project-a", canvas_id: "task-a", type: "analyze",
-        status: jobCalls > 1 ? "succeeded" : "pending", created_at: "2026-01-01T00:00:00Z", payload_json: {}, agent_snapshot_json: {} }],
+        status: jobCalls > 2 ? "succeeded" : "pending", created_at: "2026-01-01T00:00:00Z", payload_json: {}, agent_snapshot_json: {} }],
       after: null, has_more: false, next_cursor: null };
     },
     factsPage: async () => ({ items: [], has_more: false, next_cursor: null }),
@@ -86,6 +87,7 @@ async function setup(context: TestContext, paginated = false) {
   return { dom, router, render, click, findingCalls, jobs: () => jobCalls,
     failFindings: (value: boolean) => { failFindings = value; },
     failJobs: (value: boolean) => { failJobs = value; },
+    findingId: (value: string) => { findingId = value; },
     tick: async () => { await act(async () => context.mock.timers.tick(5000)); },
   };
 }
@@ -106,9 +108,11 @@ test("task page has one live default finding query and refreshes Jobs when findi
   assert.match(env.dom.window.document.querySelector("tbody")!.textContent!, /已完成/);
   env.failFindings(false);
   env.failJobs(true);
+  env.findingId("new-finding-while-jobs-fail");
   await env.click("任务发现");
   await env.tick();
-  assert.match(env.dom.window.document.querySelector("tbody")!.textContent!, /first-page-finding/);
+  assert.match(env.dom.window.document.querySelector("tbody")!.textContent!, /new-finding-while-jobs-fail/);
+  assert.match(env.dom.window.document.body.textContent!, /jobs unavailable/);
 });
 
 test("task finding pagination preserves browser back and reuses the default first page", async context => {
@@ -124,4 +128,22 @@ test("task finding pagination preserves browser back and reuses the default firs
   assert.equal(env.router.state.location.search.includes("cursor="), false);
   assert.match(env.dom.window.document.querySelector("tbody")!.textContent!, /first-page-finding/);
   assert.equal(env.findingCalls.length, beforeBack, "default view reuses its live query");
+});
+
+test("task relationship options retain discoveries displaced from the live first page", async context => {
+  const env = await setup(context);
+  await env.render();
+  env.findingId("discovered-after-index-load");
+  await env.tick();
+  env.findingId("newer-first-page-finding");
+  await env.tick();
+  assert.doesNotMatch(env.dom.window.document.querySelector("tbody")!.textContent!, /discovered-after-index-load/);
+  await env.click("事实证据");
+  const selector = env.dom.window.document.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="关联 Finding"]');
+  assert.ok(selector);
+  await act(async () => selector.click());
+  const options = env.dom.window.document.querySelector('[role="listbox"]')!.textContent!;
+  assert.match(options, /discovered-after-index-load/);
+  assert.match(options, /newer-first-page-finding/);
+  assert.match(options, /first-page-finding/);
 });
