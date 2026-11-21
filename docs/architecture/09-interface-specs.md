@@ -173,6 +173,8 @@ Job 列表只为 `waiting_human` 项附加 Scheduler 当前 `execution_state`，
 
 同项目 `tasks:read` 下，`GET /projects/:id/canvases` 的默认与 `status=active` 排除已收口的知识整理，`status=knowledge_history` 只返回其中还处于 `active` 的 Canvas。识别需核对平台来源标记、work ID 与 Canvas 关联，未回填关联只接受双方标记一致且无 Job 的记录。有运行或人工续做、待审提案及未结算效果的 Canvas 仍留在常用列表。`status=archived`、`status=all` 和详情仍按原画布契约返回。
 
+任务工作台按项目与列表状态绑定结果、计数及错误。切换后等待当前列表读取，首次读取失败只显示错误，成功空结果才显示零计数与空列表提示。同一列表定时刷新时保留已有结果，刷新失败同时显示错误，迟到的旧列表响应不能覆盖当前列表。
+
 ## 项目知识接口（#752 与项目批次）
 
 Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。知识页从 activity 已有项目内 `usage_count` 和 `feedback_count` 派生反馈覆盖率及缺口，未记录显式反馈时效果未知（#1193）。
