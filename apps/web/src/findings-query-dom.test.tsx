@@ -6,6 +6,8 @@ import { createRoot } from "react-dom/client";
 import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { api, type FindingDetail, type FindingSummary, type PageEnvelope, type ProjectFindingsSummary } from "./api";
 import { FindingDetailPanel } from "./FindingDetailPanel";
+import { FindingDispositionEditor } from "./FindingDispositionEditor";
+import { FINDING_VERIFY_OPTIONS } from "./finding-verification";
 import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 import { FindingsPage } from "./pages/FindingsPage";
 import { useFindingsQuery } from "./useFindingsQuery";
@@ -188,6 +190,34 @@ test("task queries filter on the server, reset pages and ignore late responses a
     await render({ enabled: false });
     await act(async () => env.requests[6].pending.resolve(page("old-task")));
     assert.deepEqual(latest!.rows, []);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test("manual dispositions stay available across every technical status with confirmed_vuln guarded", async () => {
+  const env = setup();
+  const writes: string[] = [];
+  try {
+    for (const status of FINDING_VERIFY_OPTIONS) {
+      writes.length = 0;
+      await act(async () => env.root.render(<FindingDispositionEditor
+        disposition="open" verifyStatus={status.value} busy={false} note=""
+        onNoteChange={() => {}} onChange={async value => { writes.push(value); }}
+      />));
+      const buttons = Array.from(env.container.querySelectorAll("button"));
+      const confirm = buttons.find(button => button.textContent?.trim() === "漏洞存在")!;
+      assert.equal(confirm.disabled, status.value !== "confirmed", status.value);
+      await act(async () => { for (const button of buttons) button.click(); });
+      assert.deepEqual(writes, status.value === "confirmed"
+        ? ["open", "accepted", "human_reproducing", "confirmed_vuln", "rejected_fp", "resolved", "archived"]
+        : ["open", "accepted", "human_reproducing", "rejected_fp", "resolved", "archived"]);
+    }
+    await act(async () => env.root.render(<FindingDispositionEditor
+      disposition="open" verifyStatus="confirmed" busy={true} note=""
+      onNoteChange={() => {}} onChange={async value => { writes.push(value); }}
+    />));
+    assert.ok(Array.from(env.container.querySelectorAll("button")).every(button => button.disabled));
   } finally {
     await env.cleanup();
   }
