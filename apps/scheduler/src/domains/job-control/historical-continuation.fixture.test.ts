@@ -69,7 +69,6 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
       context.diagnostic(JSON.stringify({ target, claimed, jobs: await sql`SELECT id,project_id,canvas_id,status,
         agent_snapshot_json->>'agent_cli' AS cli,budget_owner_job_id,budget_execution_job_id FROM jobs
         WHERE id=${target} OR status IN ('claimed','provisioning','running')`,
-        queue: await sql`SELECT * FROM project_task_queue_items WHERE canvas_id=${f.canvasId}`,
         settings: await sql`SELECT rules_json FROM global_settings WHERE id='global'` }));
     }
     assert.ok(claimed.some(job => job.id === target));

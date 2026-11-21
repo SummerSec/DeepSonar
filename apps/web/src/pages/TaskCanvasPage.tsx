@@ -499,7 +499,6 @@ export function TaskCanvasPage() {
   const canvasStatus = (meta as ({ status?: string } | null))?.status;
   const scheduledStartAt = readScheduledStartAt(meta?.target_json);
   const taskLifecycle = deriveTaskLifecycle({
-    queueState: meta?.queue_state,
     status: canvasStatus,
     activeCount: meta?.active_count,
     jobs,
