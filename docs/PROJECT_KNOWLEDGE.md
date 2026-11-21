@@ -85,6 +85,12 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 `planKnowledgeBlobReachability` 提供只读离线根审计：所有历史版本（含 retired/revoked）、work/assignment 输入、历史 Job 目录、源清单及共享资产版本均保留。#960 将全局源的 `catalog_snapshot_hash` 与待批 `candidate_hash` 都作为同类 `skill_source` 根；候选字节保留至指针被覆盖/清除或 source 删除，移除某个引用不移除其它历史 Job/版本保留根。保留不是授权，新 Job 仍只冻结已批准 live 指针。没有引用的索引字节也仅列为保留项，当前没有自动 GC（`deletion_enabled=false`）。[现有真实 PG 可达性回归](../apps/scheduler/src/domains/project-knowledge/reachability.integration.test.ts)覆盖候选覆盖/删除后的根变化及冻结 live，沿既有知识集成 CI 入口；本次仅编写和静态核对，未执行本地测试。
 
+## 任务会话收尾（#1197）
+
+获授权的业务 Job 可在原会话使用 `submit_task_knowledge_suggestion` 提交待核验建议或明确无新增，再照常完成任务。每个 Attempt 最多接受一次，最多两项、每项最多四个本 Attempt 提交的 Fact 或 Evidence 引用，建议合计限 4 KiB。Scheduler 绑定来源哈希，拒绝识别出的凭据内容，并用现有持久回执记录提交结果。建议正文存入内容寻址存储，通用事件和画布只显示状态与引用。
+
+正式报告和根任务成功后，且任务画布没有活跃或等待人工的 Job、没有未决效果，Scheduler 汇总最新成功 Attempt 的建议。画布只出现一个收尾节点，显示有建议、无新增或未提交。详情读取重新核对来源和修订目标，同页有一条无法核对时不返回该页正文。通用回执仅公开登记结果和回执引用。旧任务在项目的「历史补做预览」中查看资格和原因，预览不会排队或重跑。已有收尾回执受知识历史保留门保护。首期不接评测或发布，也不切换现有来源采集流程。完整设计见[任务知识沉淀设计](superpowers/specs/2026-11-21-task-knowledge-closeout-design.md)。
+
 ## 验证与运维
 
 2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。

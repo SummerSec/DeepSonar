@@ -14,6 +14,9 @@ export const KNOWLEDGE_MANAGEMENT_OPERATIONS: Op[] = [
   get(prefix + "/backfill", "只读预览历史任务来源登记、当前补做资格与已有整理记录；不启动整理", {
     limit: { type: "integer", minimum: 1, maximum: 20, default: 10 }, offset: page.offset,
   }),
+  get(prefix + "/closeout/{rootId}", "按原任务轮次只读查看知识沉淀，建议正文按来源和目标权限显示", {
+    limit: { type: "integer", minimum: 1, maximum: 20, default: 10 }, offset: page.offset,
+  }),
   get(prefix, "项目知识目录（包含候选和历史状态，无人工激活入口）", { ...page, kind: { type: "string", enum: ["memory", "skill"] }, status: { type: "string", enum: ["draft", "active", "stale", "retired", "revoked"] }, query: { type: "string", maxLength: 200 } }),
   { ...get(prefix + "/receipts", "按原 Job 读取持久操作回执，适用于终态与重启后", { ...page, job_id: { type: "string", format: "uuid" } }), requiredQuery: ["job_id"] },
   get(prefix + "/receipts/{receiptId}", "读取项目范围内持久回执"),

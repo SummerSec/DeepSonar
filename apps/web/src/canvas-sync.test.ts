@@ -13,6 +13,9 @@ import {
   syncSelectedNode,
 } from "./canvas-sync.js";
 import type { CanvasData, CanvasDelta, CanvasNode } from "./api.js";
+import {
+  capRenderedIds, computeNodeDepths, computeVisibleIds, DEFAULT_CHILD_LIMIT, DEFAULT_MAX_DEPTH, DEFAULT_VISIBLE_NODE_BUDGET,
+} from "./graph-depth.js";
 
 const node = (id: string, body_json: Record<string, unknown>, x = 0): CanvasNode => ({
   id,
@@ -27,6 +30,32 @@ const node = (id: string, body_json: Record<string, unknown>, x = 0): CanvasNode
   verification_status: null,
   job_id: null,
   updated_at: "2026-08-04T00:00:00.000Z",
+});
+
+test("a closeout connected to the root appears in the default graph after a Canvas delta", () => {
+  const current: CanvasData = {
+    canvas_id: "canvas-1",
+    revision: "1",
+    nodes: [{ ...node("root", {}), node_type: "root" }],
+    edges: [],
+  };
+  const delta: CanvasDelta = {
+    canvas_id: current.canvas_id,
+    since: "1", upper_revision: "3", floor_revision: "0",
+    upsert_nodes: [{ ...node("closeout", {}), node_type: "knowledge_closeout", status: "suggestions_available" }],
+    upsert_edges: [{ id: "edge", from_node_id: "root", to_node_id: "closeout", edge_type: "child" }],
+    delete_node_ids: [], delete_edge_ids: [], upsert_meta: [],
+    active_count: 0, job_count: 1, started_at: null, ended_at: null,
+    root_status: "succeeded", report_status: "succeeded",
+  };
+  const visible = (data: CanvasData) => {
+    const depths = computeNodeDepths(data.nodes, data.edges);
+    const layered = computeVisibleIds(data.nodes, data.edges, depths, DEFAULT_MAX_DEPTH, new Set(), new Set(),
+      () => DEFAULT_CHILD_LIMIT);
+    return capRenderedIds(layered, data.nodes, depths, DEFAULT_VISIBLE_NODE_BUDGET).ids;
+  };
+  assert.equal(visible(applyCanvasDelta(current, { ...delta, upsert_edges: [] }, new Map())).has("closeout"), false);
+  assert.equal(visible(applyCanvasDelta(current, delta, new Map())).has("closeout"), true);
 });
 
 test("canvas skeleton refresh is only a slow consistency fallback", () => {

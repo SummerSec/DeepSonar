@@ -2,6 +2,11 @@ import { SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/catalog.js"
 import { PLATFORM_CONTROL_HTTP_BOOTSTRAP } from "./platform-control-skill.js";
 
 const PLATFORM_TOOL_USAGE: Record<string, string> = {
+  submit_task_knowledge_suggestion: [
+    "### `submit_task_knowledge_suggestion` — 登记本轮可复用的项目知识建议",
+    "- 仅在业务工作完成后、调用 mark_job_done 前使用。按当前能力发现的 Schema 提交至多两项带本次执行证据的通用结论或方法，或提交 no_new 与空 items。没有可复用的结果可省略此步。",
+    "- evidence_refs 复制 emit_fact 成功回执中的 knowledge_source_refs 条目（kind 和 ref），内容哈希由平台绑定。修订时在 target 中填入本次读取 Memory 或拉取 Skill 返回的 usage_ref。只写经过核验且可共享的项目知识。建议登记失败时照常完成业务。",
+  ].join("\n"),
   list_available_roles: [
     "### `list_available_roles` — 查询 Hub 当前可派发角色",
     "- 参数：无参数，调用时传空对象 `{}`。",

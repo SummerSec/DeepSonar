@@ -142,6 +142,8 @@ Artifact、Finding、Verify、Research 和 Report 不是同一张“结果表”
 
 #752 的知识目录在 Job 创建时冻结版本/hash/授权身份；读取时再检查当前撤销。全局 Skill 源额外冻结 source instance 与 source/project revocation epoch，避免禁用后重新启用扩张旧快照。知识 mutation 的事件 ID 由 Job ID 与幂等键派生，领域结果和持久 receipt 与事件在同一事务；相同输入重放原结果，不同输入冲突。试验 Evidence 必须绑定独立 trial Job/Attempt、asset 版本/hash 与 case×arm，不能把模型文字当事实。数据细节和保留根见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
 
+任务会话收尾复用 `project_knowledge_receipts`，回执绑定项目、Job、Attempt、根任务及会话标识。建议正文存入现有内容寻址存储，回执保留存储引用，受知识历史保留检查保护。画布节点只保存根任务引用和显示状态，无数据库结构变更。
+
 ### 项目知识来源审计与只读投影
 
 本轮反馈评审修正：`project_knowledge_usages` 的反馈持久记录与 work 创建分离，`record_knowledge_feedback` 的新结果为 `{usage_ref,state:"recorded"}`，不含 work_ref、不另建 work。成功 Job 的已接受反馈只经原来源审计/collector 进入批次，按源 Job 去重而非按 usage 数增加来源；manifest 冻结精确反馈、usage/target 版本/hash 基线及 evidence refs，仍计入既有输入上限，原 Job 整理权限不扩展。usage/反馈记录、来源登记、source_collected、候选/生效及复用证据分别保留；显式 request_project_knowledge 仍独立按原契约准入。不改写旧 work/receipt/预算，也不由反馈记录重置连续失败。

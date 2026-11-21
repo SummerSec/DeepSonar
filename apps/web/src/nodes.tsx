@@ -64,7 +64,7 @@ export function semanticNodeKind(n: CanvasNode): SemanticNodeKind {
   if (n.node_type === "fact") return "fact";
   if (n.node_type === "report") return "report";
   if (n.node_type === "human") return "human";
-  if (n.node_type === "note") return "note";
+  if (n.node_type === "note" || n.node_type === "knowledge_closeout") return "note";
   if (jobType === "hub_reason") return "hub";
   if (jobType === "verify_finding" || jobType === "verify") return "verify";
   return "subagent";
@@ -133,6 +133,8 @@ function kindIcon(semantic: SemanticNodeKind, size = 16): ReactNode {
 function broadcastStatsTitle(stats: BroadcastNodeStats, direction: "发出" | "接收"): string {
   return `${direction} ${stats.total} 条广播账本记录：已注入 ${stats.injected}，计划 ${stats.planned}，未知 ${stats.unknown}，失败 ${stats.failed}。已注入仅表示写入 Agent 会话，不表示模型已读。`;
 }
+
+const closeoutStatus: Record<string, string> = { suggestions_available: "有建议", no_new: "无新增", not_submitted: "未提交" };
 
 function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
   const n = data.canvas;
@@ -307,7 +309,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
                   style={{ background: statusColor }}
                 />
                 <span className="font-mono text-[10px]" style={{ color: statusColor }}>
-                  {status}
+                  {n.node_type === "knowledge_closeout" ? closeoutStatus[status] ?? "待查看" : status}
                 </span>
               </span>
             )}
@@ -418,4 +420,5 @@ export const nodeTypes = {
   intent: BaseNode,
   fact: BaseNode,
   report: BaseNode,
+  knowledge_closeout: BaseNode,
 };

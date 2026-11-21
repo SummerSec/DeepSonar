@@ -49,7 +49,7 @@ assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
 // Reviewed Plan v2, complete-objective bootstrap, governed completion-recovery guidance,
 // including #903 stale-grant exit, actionable human-request guidance and the #1032 P2-5
 // env-dump guard and #1094 HTTP-operation bootstrap.
-const expectedSkillSha256 = "db45ce351bfea9d5f465a1c1a3c5c613b8fdd0333a529a206ab285ae3edc6ec1";
+const expectedSkillSha256 = "f23cacd030e515430e368baf1c7d8e62af7075dd6c155f46e6fc187f760e2827";
 const canonicalSkillBytes = Buffer.from(
   `{"name":"deepsonar-control","files":{"SKILL.md":${JSON.stringify(skillContent)}}}`,
   "utf8",
@@ -116,9 +116,9 @@ assert.deepEqual(
 );
 
 const workerTools = resolvePlatformTools("explore", "role", {});
-assert.deepEqual(workerTools, ALL_PLATFORM_TOOLS.filter(tool => tool !== "suggest_project_skills" && tool !== "record_skill_choice"));
+assert.deepEqual(workerTools, ALL_PLATFORM_TOOLS.filter(tool => tool !== "suggest_project_skills" && tool !== "record_skill_choice" && tool !== "submit_task_knowledge_suggestion"));
 assert.deepEqual(resolvePlatformTools("explore", "role", {
-  suggest_project_skills: true, record_skill_choice: true,
+  suggest_project_skills: true, record_skill_choice: true, submit_task_knowledge_suggestion: true,
 }), ALL_PLATFORM_TOOLS);
 assert.deepEqual(PLATFORM_OPERATION_IDS, ALL_PLATFORM_TOOLS);
 const workerGuide = platformToolGuide(["emit_progress", "emit_fact", "mark_job_done", "request_human"]);

@@ -1,19 +1,52 @@
-import { KNOWLEDGE_OPERATION_IDS, ListAvailableSkillsPayload, PullSkillPayload, SearchSkillsPayload } from "@deepsonar/shared-types";
+import { KNOWLEDGE_OPERATION_IDS, ListAvailableSkillsPayload, PullSkillPayload, SearchSkillsPayload, TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "@deepsonar/shared-types";
 import type { PlatformRuntimeHandlerContext } from "../platform-api/registry.js";
 import { PlatformRuntimeHandlerError } from "../platform-api/registry.js";
 import { availableSkillEntries } from "../../skill-sources.js";
 import { loadJobSkillCatalog, pullFrozenJobSkill, JobSkillCatalogError, type FrozenJobSkillCatalog } from "../../job-skill-catalog.js";
 import { createProjectKnowledgeApplication, recordKnowledgeUsage, KnowledgeOperationError } from "./application.js";
+import { submitTaskKnowledgeSuggestion } from "./closeout-intake.js";
 import { projectSkillMetadata, pullProjectSkill, visibleKnowledgeEntries, type FrozenKnowledgeCatalog } from "./catalog-snapshot.js";
 import type { KnowledgeDb } from "./types.js";
+import { EventRateLimitError } from "../event-ingestion/rate-limit.js";
 
-export function createKnowledgeRuntime(input: { db: KnowledgeDb; governanceHash: string }) {
+/** Return only published references from this exact Fact submission and Attempt. */
+export async function readTaskSuggestionFactRefs(db: KnowledgeDb, owner: {
+  jobId: string; projectId: string; canvasId: string; attemptId: string; eventId: string;
+}): Promise<{ knowledge_source_refs: { kind: "fact" | "evidence"; ref: string }[] } | undefined> {
+  try {
+    const [fact] = await db<{ node_id: string; evidence_ids: string[] }[]>`SELECT a.node_id,
+      ARRAY(SELECT ae.id FROM artifact_evidence ae WHERE ae.artifact_id=a.id ORDER BY ae.ordinal LIMIT 4) AS evidence_ids
+      FROM artifacts a JOIN canvas_nodes n ON n.id=a.node_id AND n.job_id=a.job_id AND n.canvas_id=a.canvas_id
+      JOIN events e ON e.job_id=a.job_id AND e.event_id=a.source_event_id AND e.type='fact'
+      WHERE a.job_id=${owner.jobId} AND a.project_id=${owner.projectId} AND a.canvas_id=${owner.canvasId}
+        AND a.source_event_id=${owner.eventId} AND e.attempt_id=${owner.attemptId}
+        AND a.status='submitted' AND n.node_type='fact' LIMIT 1`;
+    if (!fact) return undefined;
+    return { knowledge_source_refs: [
+      { kind: "fact", ref: fact.node_id },
+      ...fact.evidence_ids.map(ref => ({ kind: "evidence" as const, ref })),
+    ] };
+  } catch {
+    // The Fact already committed. A failed reference lookup must not reject it.
+    return undefined;
+  }
+}
+
+export function createKnowledgeRuntime(input: {
+  db: KnowledgeDb;
+  governanceHash: string;
+  taskSuggestionContext?: () => { attemptId: string | null | undefined; secrets: readonly string[] };
+}) {
   const application = createProjectKnowledgeApplication(input);
   return async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown> | undefined> => {
     const operation = context.operationId;
     if (!(KNOWLEDGE_OPERATION_IDS as readonly string[]).includes(operation)
       && !["list_available_skills", "search_skills", "pull_skill"].includes(operation)) return undefined;
     try {
+      if (operation === TASK_KNOWLEDGE_SUGGESTION_OPERATION) {
+        if (!input.taskSuggestionContext) throw new PlatformRuntimeHandlerError("OPERATION_HANDLER_NOT_REGISTERED", "Task suggestion requires a running business session");
+        return await submitTaskKnowledgeSuggestion(context, input.db, input.taskSuggestionContext());
+      }
       if ((KNOWLEDGE_OPERATION_IDS as readonly string[]).includes(operation)) return await application.invoke(context);
       const [job] = await input.db`SELECT j.agent_snapshot_json,a.id AS attempt_id FROM jobs j
         JOIN LATERAL (SELECT id,status,cancel_requested FROM job_attempts WHERE job_id=j.id ORDER BY attempt_no DESC LIMIT 1) a ON true
@@ -53,6 +86,11 @@ export function createKnowledgeRuntime(input: { db: KnowledgeDb; governanceHash:
       return { accepted: true, operation, skills: all.slice(offset, offset + limit), total: all.length,
         offset, limit, next_offset: offset + limit < all.length ? offset + limit : null };
     } catch (error) {
+      if (operation === TASK_KNOWLEDGE_SUGGESTION_OPERATION && error instanceof EventRateLimitError) {
+        throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", error.message, {
+          statusCode: 429, errorCode: error.code, retryable: true, details: { ...error.metadata },
+        });
+      }
       if (error instanceof KnowledgeOperationError || error instanceof JobSkillCatalogError) {
         throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", error.message, {
           statusCode: error instanceof JobSkillCatalogError ? 409 : 422,

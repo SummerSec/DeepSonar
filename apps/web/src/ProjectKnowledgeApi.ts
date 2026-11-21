@@ -49,6 +49,34 @@ export interface KnowledgeVersionDetail extends KnowledgeVersion {
 
 type Page<T> = { items: T[]; next_offset: number | null };
 
+export type KnowledgeCloseoutStatus = "suggestions_available" | "no_new" | "not_submitted" | "restricted";
+
+export interface KnowledgeCloseoutSuggestion {
+  kind: "memory" | "skill";
+  title: string;
+  scope: string;
+  content: string;
+  evidence_refs: Array<{ kind: "fact" | "evidence"; ref: string }>;
+  target?: { item_ref: string; version_ref: string };
+}
+
+export interface KnowledgeCloseout {
+  status: KnowledgeCloseoutStatus;
+  items?: KnowledgeCloseoutSuggestion[];
+  next_offset: number | null;
+}
+
+export interface KnowledgeBackfillRow {
+  job_id: string;
+  canvas_id?: string | null;
+  job_status: string;
+  finished_at: string | null;
+  status: "eligible" | "skipped";
+  reason?: string;
+  closeout_status: KnowledgeCloseoutStatus | "legacy_preview";
+  closeout_root_ref: string | null;
+}
+
 export interface KnowledgeActivityWork {
   id: string;
   state: string;
@@ -88,11 +116,11 @@ export interface KnowledgeActivity extends Page<KnowledgeActivityWork> {
   skipped_sources: Array<{ job_id: string; reason: string; at: string }>;
 }
 
-async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+async function request<T>(path: string, method = "GET", body?: unknown, readOptions?: Pick<RequestInit, "cache" | "signal">): Promise<T> {
   const token = getLocalToken();
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   if (body !== undefined) headers["content-type"] = "application/json";
-  const response = await fetch(`/api${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const response = await fetch(`/api${path}`, { ...readOptions, method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   if (!response.ok) {
     const detail = await response.json().catch(() => ({})) as { error?: string; error_code?: string };
     throw new Error(detail.error_code ?? detail.error ?? `HTTP ${response.status}`);
@@ -103,6 +131,12 @@ async function request<T>(path: string, method = "GET", body?: unknown): Promise
 const base = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/knowledge`;
 
 export const projectKnowledgeApi = {
+  closeout: (projectId: string, rootId: string, offset: number, signal?: AbortSignal) =>
+    request<KnowledgeCloseout>(`${base(projectId)}/closeout/${encodeURIComponent(rootId)}?limit=10&offset=${offset}`,
+      "GET", undefined, { cache: "no-store", signal }),
+  backfill: (projectId: string, offset: number, signal?: AbortSignal) =>
+    request<Page<KnowledgeBackfillRow>>(`${base(projectId)}/backfill?limit=10&offset=${offset}`,
+      "GET", undefined, { cache: "no-store", signal }),
   activity: (projectId: string, input: { limit?: number; offset?: number } = {}) =>
     request<KnowledgeActivity>(`${base(projectId)}/activity?limit=${input.limit ?? 10}&offset=${input.offset ?? 0}`),
   list: (projectId: string, input: { kind?: string; status?: string; query?: string; offset?: number }) => {

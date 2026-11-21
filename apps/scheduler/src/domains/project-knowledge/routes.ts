@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "@deepsonar/shared-types";
 import { audit } from "../../audit.js";
 import { actorHasScope } from "../../auth.js";
 import { sql } from "../../db.js";
@@ -27,6 +28,11 @@ const ReceiptList = Page.extend({ job_id: Id });
 
 type Db = KnowledgeDb;
 type Row = Record<string, unknown>;
+
+function publicReceipt(row: Row): Row {
+  if (row.operation !== TASK_KNOWLEDGE_SUGGESTION_OPERATION) return row;
+  return { ...row, result_json: { accepted: true, operation: row.operation, receipt_ref: row.id, receipt_status: row.state } };
+}
 
 function errorReply(reply: FastifyReply, error: unknown): FastifyReply {
   const validation = validationHttpError(error);
@@ -123,7 +129,7 @@ export function registerProjectKnowledgeRoutes(
         FROM project_knowledge_receipts r JOIN jobs j ON j.id=r.job_id AND j.project_id=r.project_id
         WHERE r.project_id=${projectId} AND r.job_id=${input.job_id}
         ORDER BY r.created_at DESC,r.id DESC LIMIT ${input.limit + 1} OFFSET ${input.offset}`;
-      return { items: rows.slice(0, input.limit), next_offset: rows.length > input.limit ? input.offset + input.limit : null };
+      return { items: rows.slice(0, input.limit).map(publicReceipt), next_offset: rows.length > input.limit ? input.offset + input.limit : null };
     } catch (error) { return errorReply(reply, error); }
   });
 
@@ -136,7 +142,7 @@ export function registerProjectKnowledgeRoutes(
           r.state,r.result_json,r.event_id,r.created_at,r.settled_at
         FROM project_knowledge_receipts r JOIN jobs j ON j.id=r.job_id AND j.project_id=r.project_id
         WHERE r.project_id=${projectId} AND r.id=${Id.parse(receiptId)}`;
-      return row ?? reply.code(404).send({ error_code: "KNOWLEDGE_RECEIPT_NOT_FOUND" });
+      return row ? publicReceipt(row) : reply.code(404).send({ error_code: "KNOWLEDGE_RECEIPT_NOT_FOUND" });
     } catch (error) { return errorReply(reply, error); }
   });
 

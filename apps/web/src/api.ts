@@ -275,7 +275,7 @@ export interface SharedAssetPage { items: SharedAsset[]; limit: number; offset: 
 
 export interface CanvasNode {
   id: string;
-  node_type: "root" | "job" | "finding" | "note" | "human" | "intent" | "fact" | "report";
+  node_type: "root" | "job" | "finding" | "note" | "human" | "intent" | "fact" | "report" | "knowledge_closeout";
   title: string;
   body_json: Record<string, unknown>;
   x: number;

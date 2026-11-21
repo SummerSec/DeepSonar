@@ -1,4 +1,4 @@
-import type { KnowledgeJobAssignment, PlatformToolName } from "@deepsonar/shared-types";
+import { TASK_KNOWLEDGE_SUGGESTION_OPERATION, type KnowledgeJobAssignment, type PlatformToolName } from "@deepsonar/shared-types";
 import type { AgentRuntimeSnapshot } from "../role-runtime-snapshot/index.js";
 import { canonical, sha256 } from "./types.js";
 import { isolateKnowledgeConfiguration } from "./job-isolation-config.js";
@@ -13,7 +13,10 @@ const stageTools = {
 
 /** Creation-time restriction only. Existing immutable Jobs are never rewritten. */
 export function isolateKnowledgeJob<T extends AgentRuntimeSnapshot>(snapshot: T, assignment?: KnowledgeJobAssignment): T {
-  if (!assignment || (assignment.stage !== "trial" && assignment.source_mode !== "project_collection")) return snapshot;
+  if (!assignment) return snapshot;
+  if (assignment.stage !== "trial" && assignment.source_mode !== "project_collection") {
+    return { ...snapshot, platform_tools: snapshot.platform_tools.filter(tool => tool !== TASK_KNOWLEDGE_SUGGESTION_OPERATION) };
+  }
   const tools = new Set([...baseTools, ...stageTools[assignment.stage]]);
   const emptyCatalog = { entries: [], hash: sha256("[]") };
   return {

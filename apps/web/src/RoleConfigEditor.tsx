@@ -43,6 +43,7 @@ const inputCls =
 const labelCls = "mb-1.5 block font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500";
 
 const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description: string }> = {
+  submit_task_knowledge_suggestion: { title: "登记任务知识建议（需启用）", description: "让业务任务在完成前用本轮证据登记可复用的结论或方法。须先在全局角色启用，项目可关闭。" },
   suggest_project_skills: { title: "Skill 条件建议（需启用）", description: "按当前 Job 条件筛选本项目精确 Skill；效果不足时标为未知。须先在全局角色显式启用，项目只能进一步收紧。" },
   record_skill_choice: { title: "记录 Skill 选择（需启用）", description: "保存采用、拒绝或无候选的声明回执；不会执行 Skill、授予权限或证明效果。须先在全局角色显式启用。" },
   list_available_roles: { title: "查询可用角色", description: "让 Hub 按需获取当前项目可派发的数据库角色。" },
@@ -441,7 +442,7 @@ export function RoleConfigEditor({
             <label className={labelCls}>
               平台工具
               <HelpTip>
-                常规平台工具默认启用；Skill 条件建议和选择记录需在全局角色显式启用，项目只能进一步关闭。mark_job_done 为终态必需且不可关闭，Hub 另需 graph_query。
+                常规平台工具默认启用。Skill 条件建议、选择记录和任务知识建议需在全局角色显式启用，项目可关闭。mark_job_done 为终态必需且不可关闭，Hub 另需 graph_query。
                 保存后从下一 Job 起生效并冻结到快照；关闭的工具不会注入 MCP，也不会出现在动态 AGENTS.md、CLAUDE.md 和运行清单的可用列表中。
               </HelpTip>
             </label>
@@ -450,7 +451,7 @@ export function RoleConfigEditor({
                 const required = requiredPlatformToolSet.has(tool);
                 const enabled = configuredPlatformToolSet.has(tool);
                 const inheritsSuggestion = Boolean(projectId && form.platform_tools[tool] === undefined
-                  && (tool === "suggest_project_skills" || tool === "record_skill_choice"));
+                  && (tool === "suggest_project_skills" || tool === "record_skill_choice" || tool === "submit_task_knowledge_suggestion"));
                 const meta = PLATFORM_TOOL_META[tool];
                 return (
                   <label
