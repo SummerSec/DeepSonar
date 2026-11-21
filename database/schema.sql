@@ -460,6 +460,8 @@ CREATE TABLE findings (
   disposition_note text,
   disposition_by text,
   disposition_at timestamptz,
+  -- 重复处置目标（#1206 R4）：仅当 disposition='duplicate' 时非空，且必须同 project
+  duplicate_of uuid,
   raw_json jsonb NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -470,12 +472,14 @@ CREATE TABLE findings (
   scoring_json jsonb NOT NULL DEFAULT '{}',
   CONSTRAINT findings_job_id_fingerprint_key UNIQUE (job_id, fingerprint),
   CONSTRAINT findings_source_digest_check CHECK (source_digest IS NULL OR source_digest ~ '^v1:[a-f0-9]{64}$'),
+  CONSTRAINT findings_duplicate_of_self_check CHECK (duplicate_of IS NULL OR duplicate_of <> id),
+  CONSTRAINT findings_duplicate_disposition_check CHECK ((disposition = 'duplicate') = (duplicate_of IS NOT NULL)),
   CONSTRAINT findings_severity_check CHECK (severity IS NULL OR severity IN ('low', 'medium', 'high', 'critical')),
   CONSTRAINT findings_verify_status_check CHECK (
     verify_status IN ('pending', 'verifying', 'confirmed', 'false_positive', 'needs_human', 'refuted', 'inconclusive')
   ),
   CONSTRAINT findings_disposition_check CHECK (
-    disposition IN ('open', 'accepted', 'human_reproducing', 'confirmed_vuln', 'rejected_fp', 'resolved', 'archived')
+    disposition IN ('open', 'accepted', 'human_reproducing', 'confirmed_vuln', 'rejected_fp', 'resolved', 'duplicate', 'archived')
   )
 );
 -- Rebuildable C projection. Generation work is durable; no relationship truth lives here.
@@ -509,6 +513,10 @@ CREATE TABLE project_finding_features (
 );
 CREATE INDEX project_finding_features_project ON project_finding_features(project_id, generation, finding_id);
 CREATE UNIQUE INDEX findings_project_scan_idx ON findings(project_id, id);
+-- 重复处置目标同 project 由复合外键保证，避免只在路由层校验（#1206 R4）
+ALTER TABLE findings ADD CONSTRAINT findings_duplicate_of_same_project_fk
+  FOREIGN KEY (project_id, duplicate_of) REFERENCES findings(project_id, id);
+CREATE INDEX findings_project_fingerprint_idx ON findings (project_id, fingerprint);
 
 -- Rebuildable lexical candidates only; source Finding/Verify state remains authoritative.
 CREATE TABLE project_finding_candidate_scan (

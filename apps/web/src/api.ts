@@ -749,6 +749,7 @@ export type FindingDisposition =
   | "confirmed_vuln"
   | "rejected_fp"
   | "resolved"
+  | "duplicate"
   | "archived";
 
 export interface FindingQueryFilters {

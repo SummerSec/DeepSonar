@@ -46,6 +46,7 @@ const STATUS_LABEL: Record<string, string> = {
   confirmed_vuln: "漏洞存在",
   rejected_fp: "拒绝误报",
   resolved: "处理完成",
+  duplicate: "重复（已提交）",
   archived: "已归档",
 };
 

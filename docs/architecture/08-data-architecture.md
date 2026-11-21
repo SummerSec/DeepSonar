@@ -29,7 +29,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 #1082 未确认用量诊断沿用 `audit_logs.after_json`。宿主绑定 Job/Attempt/token/effect，固定形态及形态哈希总计最多 2 KiB，权限复用原审计入口。诊断与账本独立、尽力写入，不作为用量证明或重试授权，数据边界见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)。最终 SHA Actions 待验。
 
-[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v77 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
+[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v78 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
 
 ### 直接重建的授权保全（#1002 P2-13）
@@ -52,7 +52,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 | `job_usage_ledger` | Gateway 观测用量、workload 归因和结算 | 新记录绑定 `job_token_id`；总量与 memory 用量分开，凭据删除不删除 token 或修改账本引用/用量；历史缺失引用保持历史读取，不补造来源 |
 | `events`、`event_dedup`、`job_event_rate_limits` | 语义事件、Job 序列和 durable 限流 | event id、Job sequence 和事件 dedup 约束重复；原始运行流不进入 events |
 | `artifacts`、`artifact_claims`、`artifact_evidence`、`artifact_relations` | 版本化内部写入真相 | claim/evidence polarity 和 relation 类型结构化保存，旧版本可追溯 |
-| `findings`、`finding_verification_rounds` | Finding 处置和 Verify 门 | `verify_status` 与人的 `disposition` 分离；round 保存 eligibility/evidence/rework 状态 |
+| `findings`、`finding_verification_rounds` | Finding 处置和 Verify 门 | `verify_status` 与人的 `disposition` 分离；`disposition=duplicate` 时 `duplicate_of` 必填并由复合外键约束同 project（#1206）；round 保存 eligibility/evidence/rework 状态 |
 | `finding_research_runs` 及 cluster/anchor/priority 表 | Research 语义结果与运行审计 | batch 有界、输入幂等；失败不回滚主 Finding/Report |
 | `project_finding_identity_sources`、`project_finding_identity_source_revisions` | 每个 Finding 的操作员见证身份来源及不可变 revision | 只接受已知身份字段的 SHA-256 digest；revision 只追加，source 当前指针可撤销 |
 | `project_finding_identity_mappings` | Finding 字段到已登记身份来源的显式绑定 | source revision、mapping version、项目/Finding 外键及 CAS；撤销和来源变化在当前读时失效 |
@@ -66,7 +66,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前 schema v77，#1074 增加人工请求与累计时钟；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+保鲜门禁的单处编号核对：当前 schema v78，#1206 增加重复候选查询、`distinct_by_*` 去重口径与 `duplicate`/`duplicate_of` 处置；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
 
 
 ### Canvas 节点引用索引（#1002 P1-6）
@@ -193,7 +193,7 @@ jobs.payload_json.plan_protocol 按 Canvas/项目冻结到报告输入。规范�
 
 ## Finding 来源身份（#770 A）
 
-Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 `(job_id, fingerprint)` 唯一约束。fingerprint 仍由 profile、规范化 title、location、rule_id 生成，只是 Job 内来源标识，不是跨任务问题身份。Job UUID 不同，即使文本完全相同也建立独立 Finding、Artifact 和画布节点；新 Artifact key 为 `finding:<job UUID>:<fingerprint>`，不共享修订链、不继承其他来源的 Verify/disposition/report。
+Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 `(job_id, fingerprint)` 唯一约束。fingerprint 仍由 profile、规范化 title、location、rule_id 生成，只是 Job 内来源标识，不是跨任务问题身份；读取侧另提供同项目跨 canvas 的只读重复候选（fingerprint 精确、location 双向前缀、同 canvas research cluster）与 `distinct_by_fingerprint` / `distinct_by_cluster` 去重口径计数（#1206），不合并记录、不改写 `emit_finding` 冲突语义。Job UUID 不同，即使文本完全相同也建立独立 Finding、Artifact 和画布节点；新 Artifact key 为 `finding:<job UUID>:<fingerprint>`，不共享修订链、不继承其他来源的 Verify/disposition/report。
 
 同 Job 同 fingerprint 的完整规范化提案以 `source_digest` 比较（v1 前缀的 SHA-256，递归排序对象键，数组有序，含 raw 来源）。相同提案重交无新增效果；内容不同明确拒绝并回滚，不能静默丢弃新证据。当前没有 Finding 修订协议，title/location/rule_id/profile 身份字段变化是新提案；同 Job 同身份却环境/版本不同必须冲突，不能伪装同源。Job 行锁与同事务 event_dedup 保证并发重放顺序。hash 不是根因或目标版本证据，资产/版本未知仍未知。
 
