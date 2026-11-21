@@ -65,7 +65,7 @@ test("task lists and counters belong to the selected project and status through 
     return createElement(TasksPage);
   }
   const text = () => container.textContent ?? "";
-  const counters = () => [...container.querySelectorAll("strong")].map(node => node.textContent);
+  const counters = () => [...container.querySelectorAll('[role="group"][aria-label="任务列表统计"] strong')].map(node => node.textContent);
   const request = () => requests.at(-1)!.result;
   const poll = () => act(async () => {
     assert.equal(polls.size, 1, "only the current list poll remains installed");
@@ -115,6 +115,10 @@ test("task lists and counters belong to the selected project and status through 
 
     await poll();
     assert.match(text(), /知识历史 A/, "a refresh of the same filter keeps its last successful result");
+    const pendingRefresh = request();
+    await poll();
+    assert.equal(request(), pendingRefresh, "a slow refresh must not overlap another poll that could finish out of order");
+    assert.match(text(), /知识历史 A/);
     await act(async () => request().reject(new Error("刷新暂不可用")));
     assert.match(text(), /知识历史 A/);
     assert.match(text(), /刷新暂不可用/);

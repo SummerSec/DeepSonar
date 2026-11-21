@@ -17,7 +17,10 @@ export function useTaskCanvasList(projectId: string | undefined, status: ListSta
   useEffect(() => {
     if (!projectId) return;
     let stop = false;
+    let inFlight = false;
     const tick = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const canvases = await api.canvases(projectId, { status });
         if (!stop) setResult({ projectId, status, canvases, error: null });
@@ -26,6 +29,8 @@ export function useTaskCanvasList(projectId: string | undefined, status: ListSta
           projectId, status, error: String(error),
           canvases: previous?.projectId === projectId && previous.status === status ? previous.canvases : null,
         }));
+      } finally {
+        inFlight = false;
       }
     };
     void tick();
