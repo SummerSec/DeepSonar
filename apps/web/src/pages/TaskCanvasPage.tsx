@@ -62,7 +62,10 @@ import { MarkdownView } from "../MarkdownView";
 import { ReportPanel } from "../ReportPanel";
 import { taskWorkbenchCanvasLayerClass, taskWorkbenchListPaneClass } from "../task-workbench-layers";
 import { SearchableMultiSelect } from "../SearchableSelect";
-import { readMultiSearchParam, writeMultiSearchParam } from "../searchable-select-model";
+import { readMultiSearchParam } from "../searchable-select-model";
+import { taskFindingQueryFilters, updateFindingQuery } from "../finding-query-state";
+import { FINDING_VERIFY_OPTIONS, FINDING_VERIFY_LABELS } from "../finding-verification";
+import { useFindingsQuery } from "../useFindingsQuery";
 import { TaskOverview } from "../task-workbench/TaskOverview";
 import { TaskWorkbenchHeader } from "../task-workbench/TaskWorkbenchHeader";
 import { TaskWorkbenchShell } from "../task-workbench/TaskWorkbenchShell";
@@ -137,6 +140,10 @@ export function TaskCanvasPage() {
   const severities = readMultiSearchParam(searchParams, "severity");
   const profiles = readMultiSearchParam(searchParams, "profile");
   const verifyStatuses = readMultiSearchParam(searchParams, "verify");
+  const findingList = useFindingsQuery(
+    "global", undefined, taskFindingQueryFilters(searchParams, canvasId),
+    searchParams.get("cursor"), Boolean(projectId && canvasId && tab === "findings"),
+  );
   const factFilterKey = factPageFilterKey(readFactPageFilters(searchParams));
   const factFilters = useMemo(
     () => readFactPageFilters(searchParams),
@@ -155,7 +162,6 @@ export function TaskCanvasPage() {
   const [facts, setFacts] = useState<FactSummary[]>([]);
   const [findingIndex, setFindingIndex] = useState<FindingSummary[]>([]);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
-  const [findingsCursor, setFindingsCursor] = useState<string | null>(null);
   const [findingsHasMore, setFindingsHasMore] = useState(false);
   const [jobsCursor, setJobsCursor] = useState<string | null>(null);
   const [jobsHasMore, setJobsHasMore] = useState(false);
@@ -227,7 +233,6 @@ export function TaskCanvasPage() {
     let stop = false;
     setFindings([]);
     setFindingIndex([]);
-    setFindingsCursor(null);
     setFindingsHasMore(false);
     setJobs([]);
     setJobsCursor(null);
@@ -262,7 +267,6 @@ export function TaskCanvasPage() {
           setFindings((before) => mergeRefreshedPage(fs.items, before));
           if (!paginationRef.current.findings) {
             paginationRef.current.findings = initializePageProgress(null, fs);
-            setFindingsCursor(paginationRef.current.findings.cursor);
             setFindingsHasMore(paginationRef.current.findings.hasMore);
           }
           setJobs((before) => mergeRefreshedPage(js.items, before));
@@ -385,18 +389,6 @@ export function TaskCanvasPage() {
     setConvergence(canvas.convergence ?? parseConvergenceFromTarget(canvas.canvas?.target_json));
     setNodesCanvasId(canvasId ?? null);
   }, [canvasId]);
-
-  const loadMoreFindings = async () => {
-    if (!canvasId || !findingsHasMore || !findingsCursor) return;
-    try {
-      const next = await api.findingsPage({ canvas_id: canvasId, after: findingsCursor, limit: 50 });
-      setFindings((before) => appendUniqueRows(before, next.items));
-      setFindingsCursor(next.next_cursor);
-      setFindingsHasMore(next.has_more);
-    } catch (e) {
-      setError(String(e));
-    }
-  };
 
   const loadMoreFacts = async () => {
     if (!canvasId || !factsHasMore || !factsCursor || factsLoadingMore) return;
@@ -764,9 +756,7 @@ export function TaskCanvasPage() {
   };
 
   const setMultiQuery = (key: "severity" | "profile" | "verify", values: string[]) => {
-    const sp = new URLSearchParams(searchParams);
-    writeMultiSearchParam(sp, key, values);
-    setSearchParams(sp, { replace: true });
+    setSearchParams(updateFindingQuery(searchParams, key, values), { replace: true });
   };
 
   const setFactQuery = (key: FactFilterKey | "fact", value: string | readonly string[] | null) => {
@@ -856,11 +846,11 @@ export function TaskCanvasPage() {
       if (isCurrent()) setIgnoreBusyId(null);
     }
   };
-  const visibleFindings = findings.filter(
-    (finding) => (!severities.length || severities.includes(finding.severity ?? ""))
-      && (!profiles.length || profiles.includes(finding.profile))
-      && (!verifyStatuses.length || verifyStatuses.includes(finding.verify_status ?? "pending")),
-  );
+  const visibleFindings = findingList.rows;
+  const profileOptions = Array.from(new Set([
+    ...profiles,
+    ...[...findingIndex, ...findings, ...visibleFindings].map(finding => finding.profile),
+  ])).sort().map(value => ({ value, label: value }));
   const findingProtocol = (meta?.target_json?.effective_finding_protocol ?? null) as EffectiveFindingProtocol | null;
   const findingIdByNodeId = useMemo(
     () => new Map(
@@ -1271,11 +1261,11 @@ export function TaskCanvasPage() {
         {tab === "findings" && (
           <div className={`${taskWorkbenchListPaneClass()} overflow-y-auto p-4 sm:p-6`}>
             <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-              <p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前筛选 {visibleFindings.length} / {findings.length} 条。</p>
+              <p className="text-[11px] leading-5 text-zinc-600">只列出本任务产出的发现；当前页 {visibleFindings.length} 条，筛选覆盖整个任务。</p>
               <div className="flex flex-wrap gap-2">
-                <SearchableMultiSelect label="PROFILE" value={profiles} onChange={(values) => setMultiQuery("profile", values)} placeholder="全部 profile" options={Array.from(new Set(findings.map((finding) => finding.profile))).sort().map((value) => ({ value, label: value }))} />
+                <SearchableMultiSelect label="PROFILE" value={profiles} onChange={(values) => setMultiQuery("profile", values)} placeholder="全部 profile" options={profileOptions} />
                 <SearchableMultiSelect label="SEVERITY" value={severities} onChange={(values) => setMultiQuery("severity", values)} placeholder="全部 severity" options={["critical", "high", "medium", "low", "info"].map((value) => ({ value, label: value }))} />
-                <SearchableMultiSelect label="VERIFY" value={verifyStatuses} onChange={(values) => setMultiQuery("verify", values)} placeholder="全部验证状态" options={["pending", "verifying", "confirmed", "false_positive", "needs_human"].map((value) => ({ value, label: value }))} />
+                <SearchableMultiSelect label="验证状态" value={verifyStatuses} onChange={(values) => setMultiQuery("verify", values)} placeholder="全部验证状态" options={FINDING_VERIFY_OPTIONS} />
               </div>
             </div>
 
@@ -1301,8 +1291,12 @@ export function TaskCanvasPage() {
               </div>
             )}
 
-            {visibleFindings.length === 0 ? (
-              <EmptyState title="本任务暂无发现" hint="审计 Job 产出 finding 后会出现在这里" />
+            {findingList.error ? (
+              <p role="alert" className="text-[13px] text-red-300">发现加载失败：{findingList.error}</p>
+            ) : findingList.loading ? (
+              <p role="status" className="text-[13px] text-zinc-500">正在加载发现…</p>
+            ) : visibleFindings.length === 0 ? (
+              <EmptyState title="当前筛选暂无发现" hint="可以清空筛选或返回第一页，查看本任务的其他发现。" />
             ) : (
               <>
               <DataTable>
@@ -1342,7 +1336,7 @@ export function TaskCanvasPage() {
                         <td className={`${tdCls} max-w-[220px] truncate font-mono text-[13px] text-zinc-500`}>
                           {f.location || "—"}
                         </td>
-                        <td className={`${tdCls} font-mono text-[13px]`}>{f.verify_status}</td>
+                        <td className={`${tdCls} font-mono text-[13px]`}>{FINDING_VERIFY_LABELS[f.verify_status] ?? f.verify_status}</td>
                         <td
                           className={`${tdCls} font-mono text-[13px] text-zinc-500`}
                           title={formatTime(f.created_at)}
@@ -1354,13 +1348,24 @@ export function TaskCanvasPage() {
                   </tbody>
                 </table>
               </DataTable>
-              {findingsHasMore && (
-                <button type="button" onClick={() => void loadMoreFindings()} className="mt-3 rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08]">
-                  加载更多发现
-                </button>
-              )}
               </>
             )}
+            <nav aria-label="任务发现分页" className="mt-3 flex gap-2">
+              {searchParams.has("cursor") && (
+                <button type="button" disabled={findingList.loading}
+                  onClick={() => setSearchParams(updateFindingQuery(searchParams, "cursor", null), { replace: true })}
+                  className="rounded-full px-3 py-1.5 text-[12px] text-acc-300 disabled:opacity-50">
+                  返回第一页
+                </button>
+              )}
+              {findingList.nextCursor && (
+                <button type="button" disabled={findingList.loading}
+                  onClick={() => setSearchParams(updateFindingQuery(searchParams, "cursor", findingList.nextCursor), { replace: true })}
+                  className="rounded-full px-3 py-1.5 text-[12px] text-acc-300 disabled:opacity-50">
+                  下一页发现
+                </button>
+              )}
+            </nav>
           </div>
         )}
 

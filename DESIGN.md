@@ -414,7 +414,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 1. **总览**：目标、当前阶段、活跃工作、人工介入、质量和下一步动作；
 2. **研究地图**：Finding cluster、canonical anchor、priority 与语义关系；
 3. **事实证据**：Fact、Artifact、验证状态、证据边和来源；
-4. **任务发现**：本任务 Finding、Verify 状态、disposition 和追踪入口；
+4. **任务发现**：本任务 Finding、中文技术验证状态、disposition 和追踪入口，按整个任务范围服务端筛选后分页，筛选与游标随 URL 保存，详见[状态显示与筛选](docs/architecture/09-interface-specs.md#任务发现的状态显示与筛选1199)；
 5. **任务运行**：Job、Attempt、Session、流、广播和用量；
 6. **报告**：任务工作台报告 tab 仍展示 Finding Report、Task Report、版本、输入 checksum 和正文。项目侧「风险与报告」统一台（`/projects/:id/findings`，`?panel=reports` 切报告区）复用同一 `ReportDeliverable` 投影（可阅读 / 生成中 / 失败 / 尚未生成 / 已过时），任务只作上下文，不默认展开；旧 `/projects/:id/reports` redirect 到合并页。
 

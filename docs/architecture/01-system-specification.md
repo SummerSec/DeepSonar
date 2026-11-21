@@ -743,7 +743,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Web 必须提供 overview、canvas、facts、findings、jobs、report 六个一级视图，当前视图由 URL `tab` 决定；后台刷新不得强制切换用户视图，缺省必须进入 overview。
 - **决策来源**：任务工作台需要稳定导航、可分享 URL 和刷新后上下文一致。
-- **实现状态**：as-built；旧研究地图/运行别名只解析到 canonical key，不改变当前六视图。
+- **实现状态**：as-built；旧研究地图/运行别名只解析到 canonical key，不改变当前六视图。#1199 任务发现按整个任务范围服务端筛选后分页，筛选变化清除 URL 游标，迟到响应不能覆盖当前查询；中文状态字典与详情处置前置提示见[接口视图](09-interface-specs.md#任务发现的状态显示与筛选1199)，最终 SHA Actions 另验。
 - **代码入口**：[workbench tabs](../../apps/web/src/task-workbench/task-workbench-tabs.ts)、[workbench shell](../../apps/web/src/task-workbench/TaskWorkbenchShell.tsx)、[tab tests](../../apps/web/src/task-workbench/task-workbench-tabs.test.ts)。
 - **验证证据**：`pnpm ci:unit:web-facts`；人工直接打开含 `tab`、筛选和选中对象的 URL 后刷新核对状态。
 
