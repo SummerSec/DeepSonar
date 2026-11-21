@@ -2,7 +2,7 @@ import { sql } from "../../db.js";
 import { QueryParameterError } from "../../pagination.js";
 import { isUuid } from "../../project-scope.js";
 
-const FILTER_KEYS = ["project_id", "canvas_id", "severity", "profile", "category", "verify_status", "disposition"] as const;
+const FILTER_KEYS = ["project_id", "canvas_id", "severity", "profile", "category", "verify_status", "disposition", "fingerprint"] as const;
 type FilterKey = typeof FILTER_KEYS[number];
 export type FindingQuery = Record<FilterKey, string[] | null> & { q: string | null };
 
@@ -34,6 +34,7 @@ export function findingQueryPredicate(query: FindingQuery) {
     AND (${query.category}::text[] IS NULL OR f.category = ANY(${query.category}::text[]))
     AND (${query.verify_status}::text[] IS NULL OR f.verify_status = ANY(${query.verify_status}::text[]))
     AND (${query.disposition}::text[] IS NULL OR f.disposition = ANY(${query.disposition}::text[]))
+    AND (${query.fingerprint}::text[] IS NULL OR f.fingerprint = ANY(${query.fingerprint}::text[]))
     AND (${query.q}::text IS NULL OR f.title ILIKE ${query.q} OR f.location ILIKE ${query.q}
       OR f.summary ILIKE ${query.q} OR f.fingerprint ILIKE ${query.q})`;
 }

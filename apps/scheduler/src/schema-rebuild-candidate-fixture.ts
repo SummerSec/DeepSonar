@@ -48,7 +48,9 @@ async function captureHistory(db: ReturnType<typeof postgres>): Promise<Record<s
       ? { execution_deadline_at: null, budget_owner_job_id: null, budget_execution_job_id: null, ...row.row }
           : table === 'projects'
             ? { dispatch_last_served: 0, dispatch_scan_priority: null, dispatch_scan_created_at: null, dispatch_scan_job_id: null, ...row.row }
-            : row.row);
+            : table === 'findings'
+              ? { duplicate_of: null, ...row.row }
+              : row.row);
   }
   return records;
 }

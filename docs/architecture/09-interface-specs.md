@@ -114,7 +114,20 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 
 任务/profile 选项从未筛选的授权汇总取得，不以当前页推断。URL 保存筛选、游标、详情与交付视图；查询失败隐藏旧列表、计数和详情，重试仍保留 URL。记录展示源 `updated_at`，不虚构异步计算状态。证据内容、任务详情和报告仍由各自 scope 校验，列表权限不扩大证据读取；普通 Job 无新增查询通道。
 
-本切片不提供猜测资产/版本筛选、关联边或数据完整性承诺。来源提前去重修复、权威特征覆盖率与样本质量、查询规模性能需分别验收；字面文本检索不是语义同一性判断。既有默认无分页 API 窗口仍供其他调用方使用，项目页面不再依赖该窗口。
+本切片不提供猜测资产/版本筛选、关联边或数据完整性承诺；同项目跨 canvas 重复候选见[重复候选与重复处置](#finding-重复候选与重复处置1206)。来源提前去重修复、权威特征覆盖率与样本质量、查询规模性能需分别验收；字面文本检索不是语义同一性判断。既有默认无分页 API 窗口仍供其他调用方使用，项目页面不再依赖该窗口。
+
+### Finding 重复候选与重复处置（#1206）
+
+记录仍是不可变历史真相：重复只体现在查询与计数口径，不合并、不改写 `emit_finding` 冲突语义，也不把 `fingerprint` 升为跨任务问题身份。
+
+| 方法和路径 | scope | 接口边界 |
+| --- | --- | --- |
+| `GET /findings/:id/duplicates` | `findings:read` | 同项目跨 canvas 三类候选并集：`fingerprint` 精确、`location` 双向 `starts_with` 前缀、同 canvas research cluster；逐条给出 `match_reason`。只读，不返回证据正文或凭据；显式 `project_id` 与本记录不同时返回 403 `CROSS_PROJECT_DUPLICATE_QUERY`，`limit` 1–200 |
+| `GET /findings`（`fingerprint` 过滤） | `findings:read` | 逗号分隔精确匹配，用于跨 Job 同值查询；仍受项目 scope 与游标页约束 |
+| `PATCH /findings/:id/disposition`（`duplicate`） | `findings:write` | `disposition=duplicate` 必须提供同项目、存在、非自身的 `duplicate_of`；非 duplicate 携带 `duplicate_of` 返回 400 `DUPLICATE_TARGET_NOT_ALLOWED`；`confirmed_vuln` 仍要求 `verify_status=confirmed` |
+| `GET /projects/:id/findings/summary` | `findings:read` | 记录数之外返回 `distinct_by_fingerprint` / `distinct_by_cluster`（无 research 行按记录计）；`duplicate` 在 disposition 桶中单列，不与 `refuted`/`inconclusive` 混算 |
+
+数据库侧由复合外键 `(project_id, duplicate_of) → findings(project_id, id)` 与成对约束 `duplicate ⟺ duplicate_of NOT NULL` 兜底；`duplicate_of` 指向自身由 CHECK 拒绝。
 
 ### Finding 评论的停止目标拒绝（#1002）
 

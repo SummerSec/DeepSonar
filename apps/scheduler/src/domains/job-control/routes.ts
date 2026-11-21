@@ -343,10 +343,40 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       .object({
         disposition: z.enum(DISPOSITIONS),
         note: z.string().max(2000).optional(),
+        duplicate_of: z.string().uuid().optional(),
       })
       .parse(req.body);
     const [cur] = await sql`SELECT id, disposition, verify_status, project_id FROM findings WHERE id = ${id}`;
     if (!cur) return reply.code(404).send({ error: "finding not found" });
+    // 重复处置必须绑定同 project 的具体记录（#1206 R4），非 duplicate 不接受目标。
+    let duplicateTarget: string | null = null;
+    if (body.disposition === "duplicate") {
+      if (!body.duplicate_of) {
+        return reply.code(400).send({
+          error_code: "DUPLICATE_TARGET_REQUIRED",
+          error: "disposition=duplicate 必须提供 duplicate_of",
+        });
+      }
+      if (body.duplicate_of === id) {
+        return reply.code(400).send({ error_code: "DUPLICATE_TARGET_SELF", error: "duplicate_of 不能指向自身" });
+      }
+      const [target] = await sql`SELECT id, project_id FROM findings WHERE id = ${body.duplicate_of}`;
+      if (!target) {
+        return reply.code(400).send({ error_code: "DUPLICATE_TARGET_NOT_FOUND", error: "duplicate_of 目标不存在" });
+      }
+      if (String(target.project_id) !== String(cur.project_id)) {
+        return reply.code(409).send({
+          error_code: "DUPLICATE_TARGET_PROJECT_MISMATCH",
+          error: "duplicate_of 目标必须与本记录同 project",
+        });
+      }
+      duplicateTarget = body.duplicate_of;
+    } else if (body.duplicate_of) {
+      return reply.code(400).send({
+        error_code: "DUPLICATE_TARGET_NOT_ALLOWED",
+        error: "仅 disposition=duplicate 允许 duplicate_of",
+      });
+    }
     // 技术 confirmed 唯一入口是系统 Verify；人工 disposition 不得旁路
     const allowed = dispositionAllowed(String(cur.verify_status), body.disposition);
     if (!allowed.ok) {
@@ -363,6 +393,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         disposition_note = ${body.note ?? null},
         disposition_by = ${actorName},
         disposition_at = now(),
+        duplicate_of = ${duplicateTarget},
         updated_at = now()
       WHERE id = ${id}
       RETURNING *`;
@@ -374,7 +405,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       resourceId: id,
       projectId: row.project_id as string,
       before: { disposition: cur.disposition, verify_status: cur.verify_status },
-      after: { disposition: body.disposition, note: body.note ?? null, verify_status: row.verify_status },
+      after: { disposition: body.disposition, note: body.note ?? null, duplicate_of: duplicateTarget, verify_status: row.verify_status },
     });
     return row;
   });
