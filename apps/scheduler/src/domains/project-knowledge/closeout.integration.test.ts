@@ -39,8 +39,9 @@ test("task suggestions are private, attributable, idempotent and readable withou
     setSharedAssetBlobStoreForTests(store);
     const app = Fastify();
     let scopes = ["projects:read", "tasks:read"];
+    let actorName = "reader";
     app.addHook("onRequest", async request => {
-      request.actor = { type: "api_token", id: tokenId, name: "reader", projectId: owner.projectId, scopes };
+      request.actor = { type: "api_token", id: tokenId, name: actorName, projectId: owner.projectId, scopes };
     });
     registerProjectKnowledgeRoutes(app, { db });
     const item = { kind: "memory", title: "Result", scope: "Known fixture", content: "Useful measurement", evidence_refs: [{ kind: "fact", ref: factId }] };
@@ -100,9 +101,29 @@ test("task suggestions are private, attributable, idempotent and readable withou
       assert.equal(first.statusCode, 202, first.body);
       assert.equal(repeat.statusCode, 202, repeat.body);
       assert.deepEqual(first.json(), repeat.json());
+      const concurrentAudits = await db`SELECT after_json FROM audit_logs WHERE project_id=${owner.projectId}
+        AND action='project_knowledge.closeout_evaluation_requested' AND resource_id=${first.json().work_ref}`;
+      assert.deepEqual(concurrentAudits.map(row => row.after_json.reused).sort(), [false, true]);
+      actorName = "repeat-reader";
+      const reused = await send(memory.candidate_ref);
+      assert.equal(reused.statusCode, 202, reused.body);
+      assert.deepEqual(reused.json(), first.json());
+      const repeatedAudits = await db`SELECT actor_type,actor_id,request_id,result,after_json FROM audit_logs
+        WHERE project_id=${owner.projectId} AND action='project_knowledge.closeout_evaluation_requested'
+          AND resource_id=${first.json().work_ref}`;
+      assert.equal(repeatedAudits.length, 3);
+      assert.equal(new Set(repeatedAudits.map(row => row.request_id)).size, 3);
+      const repeatActorAudit = repeatedAudits.find(row => row.actor_id === actorName);
+      assert.ok(repeatActorAudit);
+      assert.equal(repeatActorAudit.actor_type, "api_token");
+      assert.equal(repeatActorAudit.result, "ok");
+      assert.deepEqual(repeatActorAudit.after_json, { root_id: rootId, candidate_ref: memory.candidate_ref, reused: true });
+      assert.ok(!JSON.stringify(repeatedAudits).includes(item.content));
+      actorName = "reader";
       const skillWork = await send(skill.candidate_ref);
       assert.equal(skillWork.statusCode, 202, skillWork.body);
       assert.notEqual(skillWork.json().work_ref, first.json().work_ref);
+      assert.equal((await db`SELECT id FROM project_knowledge_work WHERE project_id=${owner.projectId}`).length, 2);
       const queued = (await app.inject({ url })).json();
       assert.equal(queued.can_evaluate, true);
       assert.deepEqual(queued.items.map((row: {evaluation: unknown}) => row.evaluation), [

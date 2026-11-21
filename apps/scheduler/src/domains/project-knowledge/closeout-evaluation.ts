@@ -15,8 +15,17 @@ export async function requestCloseoutEvaluation(db: KnowledgeDb, req: FastifyReq
   if (!selected) return reject("KNOWLEDGE_CLOSEOUT_UNAVAILABLE", "Candidate or its sources are unavailable");
   const { owner, item, target, refs } = selected;
   const key = closeoutEvaluationKey(rootId, fingerprint);
+  const auditRequest = (auditDb: KnowledgeDb, workRef: string, reused: boolean) => recordDurableAudit(req, {
+    action: "project_knowledge.closeout_evaluation_requested", projectId,
+    resourceType: "project_knowledge_work", resourceId: workRef,
+    after: { root_id: rootId, candidate_ref: fingerprint, reused },
+  }, auditDb);
   const [existing] = await db`SELECT id FROM project_knowledge_work WHERE project_id=${projectId} AND trigger_key=${key}`;
-  if (existing) return { work_ref: String(existing.id) };
+  if (existing) {
+    const workRef = String(existing.id);
+    await auditRequest(db, workRef, true);
+    return { work_ref: workRef };
+  }
   const bases = target ? [{ item_ref: target.item_ref, version_ref: target.version_ref,
     generation: Number(target.generation), content_hash: target.content_hash }] : [];
   const content = `适用条件：${item.scope}\n\n${item.content}`;
@@ -26,6 +35,8 @@ export async function requestCloseoutEvaluation(db: KnowledgeDb, req: FastifyReq
   const draft = await writeKnowledgeBlob(db, candidate);
   const descriptor = await writeKnowledgeBlob(db, { candidate, base_refs: bases, source_refs: refs });
   const actor = { ...owner, snapshot: {} };
+  // Outside the transaction, resolve only manifest text and deduplication references.
+  // Authorization is established by recheckKnowledgeSources inside the transaction.
   const manifest = await Promise.all(refs.map(ref => resolveKnowledgeSource(db, actor, ref)));
   return db.begin(async raw => {
     const tx = raw as unknown as KnowledgeDb;
@@ -37,7 +48,11 @@ export async function requestCloseoutEvaluation(db: KnowledgeDb, req: FastifyReq
     if (canonical(current) !== canonical(selected))
       return reject("KNOWLEDGE_CLOSEOUT_UNAVAILABLE", "Candidate or its sources changed");
     const [prior] = await tx`SELECT id FROM project_knowledge_work WHERE project_id=${projectId} AND trigger_key=${key}`;
-    if (prior) return { work_ref: String(prior.id) };
+    if (prior) {
+      const workRef = String(prior.id);
+      await auditRequest(tx, workRef, true);
+      return { work_ref: workRef };
+    }
     const [unsettled] = await tx`SELECT 1 FROM job_attempt_effects WHERE job_id=${owner.jobId}
       AND status IN ('effect_pending','unknown') LIMIT 1`;
     if (unsettled) return reject("KNOWLEDGE_CLOSEOUT_UNAVAILABLE", "Source Job effects have not settled");
@@ -57,8 +72,7 @@ export async function requestCloseoutEvaluation(db: KnowledgeDb, req: FastifyReq
     const [work] = await tx`INSERT INTO project_knowledge_work(project_id,origin_job_id,canvas_id,trigger_key,input_manifest_json,governance_hash,reason)
       VALUES(${projectId},${owner.jobId},${owner.canvasId},${key},${tx.json(entries as never)},${PROJECT_KNOWLEDGE_GOVERNANCE_HASH},'closeout_evaluation_requested') RETURNING id`;
     const workRef = String(work!.id);
-    await recordDurableAudit(req, { action: "project_knowledge.closeout_evaluation_requested", projectId,
-      resourceType: "project_knowledge_work", resourceId: workRef, after: { root_id: rootId, candidate_ref: fingerprint } }, tx);
+    await auditRequest(tx, workRef, false);
     // Serialize with collector claim and wake under the same project lock.
     await recordSystemAudit({ action: SOURCE_SKIPPED_ACTION, projectId, resourceType: "job", resourceId: owner.jobId,
       result: "ok", after: { reason: "explicit_closeout_evaluation", work_ref: workRef } }, tx);

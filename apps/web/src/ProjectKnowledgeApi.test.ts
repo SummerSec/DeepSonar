@@ -239,13 +239,16 @@ test("history preview reads on demand, drops closed responses, and renders sugge
     await act(async () => calls[1].respond({ status: "suggestions_available", next_offset: null, items: [candidate] }));
     assert.doesNotMatch(container.textContent!, /示例建议/);
     await click("查看建议");
-    await act(async () => calls[2].respond({ status: "restricted", next_offset: null, items: [candidate] }));
+    await act(async () => calls[2].respond({ status: "restricted", next_offset: null, items: [candidate],
+      evaluation_source_unavailable: true }));
     assert.match(container.textContent!, /当前无法查看建议内容/);
+    assert.match(container.textContent!, /已有建议送评，原证据或修订版本已不可用/);
     assert.doesNotMatch(container.textContent!, /示例建议|fact-1/);
     await click("收起建议");
     await click("查看建议");
     await act(async () => calls[3].respond({ status: "suggestions_available", next_offset: null, items: [candidate] }));
     assert.match(container.textContent!, /示例建议/);
+    assert.doesNotMatch(container.textContent!, /已有建议送评，原证据或修订版本已不可用/);
     assert.ok(container.textContent!.includes(candidate.content));
     assert.equal(container.querySelector("img"), null);
     await click("下一页历史");
