@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import Fastify from "fastify";
+import { closeoutEvaluationKey } from "./closeout-evaluation-key.js";
+import { readCloseoutEvaluation } from "./closeout-evaluation-result.js";
+import { readKnowledgeBlob } from "./blobs.js";
+import { registerProjectKnowledgeRoutes } from "./routes.js";
 import { KNOWLEDGE_CASE_KINDS, type KnowledgeJobAssignment } from "@deepsonar/shared-types";
 import { createKnowledgeRuntime } from "./runtime.js";
 import { createKnowledgeWorkScheduler } from "./work.js";
@@ -86,17 +91,51 @@ async function trialEvidence(db: TestSql, jobId: string, attemptId: string, proj
   return String(evidence!.id);
 }
 
-for (const kind of ["memory", "skill"] as const) test(`registered source activates ${kind}, a later Job reads its exact version and feedback stays attributable`, async () => {
+for (const [kind, evaluationOnly] of [["memory", false], ["skill", false], ["memory", true], ["skill", true]] as const)
+test(evaluationOnly ? `closeout ${kind} settles behavior and stays private without a reviewer`
+  : `registered source activates ${kind}, a later Job reads its exact version and feedback stays attributable`, async () => {
   await withKnowledgeDatabase(async db => {
     const origin = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
-    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
-      VALUES(${origin.canvasId},${origin.jobId},'fact','raw input','succeeded','unverified','{"input":"raw fixture"}'::jsonb)`;
+    const factId = randomUUID();
+    await db`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,verification_status,body_json)
+      VALUES(${factId},${origin.canvasId},${origin.jobId},'fact','raw input','succeeded','unverified','{"input":"raw fixture"}'::jsonb)`;
     await db`UPDATE jobs SET status='succeeded' WHERE id=${origin.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${origin.attemptId}`;
     await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
       VALUES('system','scheduler','project_knowledge.source_registered',${origin.projectId},'job',${origin.jobId},'ok',now()-interval '25 hours')`;
-    await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, origin.jobId, "succeeded"));
-    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    let closeoutKey: string | undefined;
+    if (evaluationOnly) {
+      const rootId = randomUUID(), eventId = randomUUID();
+      await db`INSERT INTO canvas_nodes(id,canvas_id,node_type,title,status) VALUES(${rootId},${origin.canvasId},'root','Task','succeeded')`;
+      await db`INSERT INTO canvas_nodes(canvas_id,node_type,title,body_json) VALUES(${origin.canvasId},'knowledge_closeout','Knowledge',
+        ${db.json({ root_node_id: rootId, state: "suggestions_available" })})`;
+      await db`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type) VALUES(${origin.jobId},${eventId},1,${origin.attemptId},'fact')`;
+      await db`INSERT INTO artifacts(project_id,canvas_id,job_id,node_id,artifact_key,kind,source_event_id,source_operation)
+        VALUES(${origin.projectId},${origin.canvasId},${origin.jobId},${factId},'fixture','fact',${eventId},'emit_fact')`;
+      const suggestion = { kind, title: "Reusable knowledge", scope: "Fixture", content: "fixture guidance",
+        evidence_refs: [{ kind: "fact", ref: factId }] };
+      const fingerprint = sha256(canonical(suggestion));
+      const source = { kind: "fact", id: factId, body: { input: "raw fixture" }, verification_status: "unverified" };
+      const blob = await writeKnowledgeBlob(db, { input: { result: "suggestions", items: [suggestion] }, source_hashes: [[sha256(canonical(source))]] });
+      await registerKnowledgeBlob(db, blob.hash, blob.bytes);
+      await db`INSERT INTO project_knowledge_receipts(project_id,job_id,attempt_id,operation,idempotency_key,input_digest,event_id,result_json)
+        VALUES(${origin.projectId},${origin.jobId},${origin.attemptId},'submit_task_knowledge_suggestion',${randomUUID()},${fingerprint},${randomUUID()},
+          ${db.json({ root_node_id: rootId, result: "suggestions", blob_hash: blob.hash, fingerprints: [fingerprint] })})`;
+      const app = Fastify();
+      app.addHook("onRequest", async request => { request.actor = { type: "api_token", id: randomUUID(), name: "fixture",
+        projectId: origin.projectId, scopes: ["projects:read", "projects:write", "tasks:read"] }; });
+      registerProjectKnowledgeRoutes(app, { db });
+      try {
+        const response = await app.inject({ method: "POST", url: `/projects/${origin.projectId}/knowledge/closeout/${rootId}/evaluate`,
+          payload: { candidate_ref: fingerprint } });
+        assert.equal(response.statusCode, 202, response.body);
+      } finally { await app.close(); }
+      closeoutKey = closeoutEvaluationKey(rootId, fingerprint);
+      assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+    } else {
+      await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, origin.jobId, "succeeded"));
+      assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    }
     const [work] = await db`SELECT id,input_manifest_json FROM project_knowledge_work WHERE project_id=${origin.projectId}`;
     const workId = String(work!.id);
     const first = (work!.input_manifest_json as Array<{ input_ref: string; content_hash: string }>)[0]!;
@@ -110,9 +149,11 @@ for (const kind of ["memory", "skill"] as const) test(`registered source activat
       ...(kind === "target" ? { prompt: "Perform the raw fixture task", expected: "candidate solves the fixture" } : KNOWLEDGE_FIXED_CASES[kind]),
       task_inputs: kind === "target" ? [ref] : [],
     }));
+    const descriptor = (work!.input_manifest_json as Array<{ input_ref: string; content_hash: string }>).find(entry => entry.input_ref.startsWith("closeout-draft:"));
+    const frozen = descriptor ? await readKnowledgeBlob(db, descriptor.content_hash) as { candidate: unknown } : undefined;
     const proposed = await invoke(db, runtime, makerId, "propose_project_knowledge", {
       work_ref: workId, action: "create", revision: 1, base_refs: [], source_refs: [ref], reason: "fixture grounded in registered source",
-      candidate: { kind, logical_key: "fixture/closed-loop", title: "Reusable knowledge",
+      candidate: frozen?.candidate ?? { kind, logical_key: "fixture/closed-loop", title: "Reusable knowledge",
         ...(kind === "memory" ? { content: "fixture guidance" } : { files: { "SKILL.md": "# Fixture guidance\nUse for the fixture task; keep unsupported inputs unknown." } }) }, evaluation_plan: plan,
     });
     await finish(db, runner, makerId);
@@ -156,14 +197,25 @@ for (const kind of ["memory", "skill"] as const) test(`registered source activat
         if (probe) await assert.rejects(invoke(db, runtime, jobId, "read_knowledge_input", {
           work_ref: workId, input_ref: probe.input_ref, expected_hash: probe.content_hash,
         }), /outside|revoked/i);
-        const outcome = assignment!.case_id === "target" && assignment!.arm === "without" ? "fail" : "pass";
+        const outcome = assignment!.case_id === "target"
+          && (assignment!.arm === "without" || (evaluationOnly && kind === "skill" && assignment!.arm === "candidate")) ? "fail" : "pass";
         const evidence = await trialEvidence(db, jobId, attemptId, origin.projectId, String(assignment!.case_id), String(assignment!.arm), outcome);
         results.push({ case_id: assignment!.case_id, arm: assignment!.arm, outcome,
           trial_job_ref: jobId, trial_attempt_ref: attemptId, evidence_refs: [evidence], reason: "actual fixture observation" });
       }
       await finish(db, runner, jobId);
+      if (evaluationOnly && assignment!.stage === "evaluator") break;
     }
     assert.equal(results.length, 12);
+    if (closeoutKey) {
+      await runner.tick();
+      assert.deepEqual(await readCloseoutEvaluation(db, origin.projectId, closeoutKey),
+        { work_ref: workId, status: kind === "memory" ? "passed" : "failed" });
+      assert.equal((await db`SELECT 1 FROM project_knowledge_job_assignments WHERE work_id=${workId} AND stage='reviewer'`).length, 0);
+      assert.equal((await db`SELECT 1 FROM project_knowledge_items WHERE project_id=${origin.projectId} AND active_version_id IS NOT NULL`).length, 0);
+      assert.equal((await db`SELECT state FROM project_knowledge_proposals WHERE work_id=${workId}`)[0]!.state, "candidate");
+      return;
+    }
     assert.ok(reviewerId);
     // Comparator target failure is allowed, but a failed candidate or safety case must still block.
     await invoke(db, runtime, reviewerId, "review_project_knowledge", { proposal_ref: proposed.proposal_ref,

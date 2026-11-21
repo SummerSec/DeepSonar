@@ -333,7 +333,7 @@ Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_con
 
 ## 任务会话收尾（#1197）
 
-`submit_task_knowledge_suggestion` 是可选 Job 控制操作。它要求当前 Attempt 的冻结工具授权与幂等键，返回持久回执。`GET /projects/:id/knowledge/closeout/:rootId` 返回该任务已汇总的状态及分页建议，详情重新校验来源和修订目标的访问权限。历史资格仍由下文的只读预览接口返回。
+`submit_task_knowledge_suggestion` 是可选 Job 控制操作。它要求当前 Attempt 的冻结工具授权与幂等键，返回持久回执。`GET /projects/:id/knowledge/closeout/:rootId` 返回该任务已汇总的状态、分页建议和评测摘要，详情重新校验来源和修订目标的访问权限。`POST /projects/:id/knowledge/closeout/:rootId/evaluate` 以 `candidate_ref` 送评，要求项目读写和任务读取权限，并以同一候选复用现有评测工作。历史资格仍由下文的只读预览接口返回。
 
 ## 项目知识来源与历史资格（#1035）
 

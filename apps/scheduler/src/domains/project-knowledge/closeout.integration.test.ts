@@ -44,7 +44,7 @@ test("task suggestions are private, attributable, idempotent and readable withou
     });
     registerProjectKnowledgeRoutes(app, { db });
     const item = { kind: "memory", title: "Result", scope: "Known fixture", content: "Useful measurement", evidence_refs: [{ kind: "fact", ref: factId }] };
-    const secondItem = { ...item, title: "Independent result", content: "Another observation", evidence_refs: [{ kind: "fact", ref: secondFactId }] };
+    const secondItem = { ...item, kind: "skill", title: "Independent result", content: "Another observation", evidence_refs: [{ kind: "fact", ref: secondFactId }] };
     const context = { ...owner, tokenId, operationId: operation, eventId: randomUUID(), idempotencyKey: randomUUID(), input: { result: "suggestions", items: [item, secondItem] } };
     const runtime = { attemptId: owner.attemptId, secrets: ["fixture-secret-value"] };
     const submit = (request = context, origin = runtime) => submitTaskKnowledgeSuggestion(request, db, origin);
@@ -87,12 +87,34 @@ test("task suggestions are private, attributable, idempotent and readable withou
       const url = `${path}/closeout/${rootId}`;
       const read = await app.inject({ url });
       assert.equal(read.statusCode, 200);
-      assert.deepEqual(read.json().items, [item, secondItem]);
+      const [memory, skill] = read.json().items;
+      assert.deepEqual(read.json().items.map(({ candidate_ref, ...value }: Record<string, unknown>) => {
+        assert.match(String(candidate_ref), /^[a-f0-9]{64}$/);
+        return value;
+      }), [item, secondItem]);
+      assert.equal(read.json().can_evaluate, false);
+      const send = (ref: string) => app.inject({ method: "POST", url: `${url}/evaluate`, payload: { candidate_ref: ref } });
+      assert.equal((await send(memory.candidate_ref)).statusCode, 403);
+      scopes = ["projects:read", "tasks:read", "projects:write"];
+      const [first, repeat] = await Promise.all([send(memory.candidate_ref), send(memory.candidate_ref)]);
+      assert.equal(first.statusCode, 202, first.body);
+      assert.equal(repeat.statusCode, 202, repeat.body);
+      assert.deepEqual(first.json(), repeat.json());
+      const skillWork = await send(skill.candidate_ref);
+      assert.equal(skillWork.statusCode, 202, skillWork.body);
+      assert.notEqual(skillWork.json().work_ref, first.json().work_ref);
+      const queued = (await app.inject({ url })).json();
+      assert.equal(queued.can_evaluate, true);
+      assert.deepEqual(queued.items.map((row: {evaluation: unknown}) => row.evaluation), [
+        { work_ref: first.json().work_ref, status: "queued" }, { work_ref: skillWork.json().work_ref, status: "queued" },
+      ]);
       scopes = ["projects:read"];
       assert.deepEqual((await app.inject({ url })).json(), { status: "restricted", items: [], next_offset: null });
       scopes = ["projects:read", "tasks:read"];
+      scopes.push("projects:write");
       await db`UPDATE artifacts SET status='superseded',superseded_at=now() WHERE node_id=${factId}`;
       assert.deepEqual((await app.inject({ url })).json(), { status: "restricted", items: [], next_offset: null });
+      assert.equal((await send(memory.candidate_ref)).statusCode, 409);
     } finally {
       await app.close();
       setSharedAssetBlobStoreForTests(null);

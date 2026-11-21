@@ -3,6 +3,7 @@ import { requireKnowledgeCasePolicy } from "./case-policy.js";
 import type { KnowledgeActor } from "./inputs.js";
 import { registerKnowledgeBlob } from "./blobs.js";
 import { canonical, KnowledgeOperationError, reject, sha256, type KnowledgeDb } from "./types.js";
+import { closeoutDraftRef, isCloseoutEvaluation } from "./closeout-evaluation-key.js";
 import { requiredArms } from "./evaluation.js";
 
 export interface PreparedCandidate { hash: string; bytes: number }
@@ -11,7 +12,7 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
   candidate: PreparedCandidate | undefined, governanceHash: string, idempotencyKey: string, requestDigest: string): Promise<Record<string, unknown>> {
   // #1130：读写两侧必须用同一份 manifest。读侧（read_knowledge_input / prompt）用的是随 Job 冻结的
   // assignment manifest，写侧此前误取 work 的 manifest（现场 18 vs 16 条），导致「读得到、引用不了」。
-  const [assignment] = await tx`SELECT a.work_id,a.stage,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,a.input_manifest_json,w.revision_count,w.job_count,w.run_seconds
+  const [assignment] = await tx`SELECT a.work_id,a.stage,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,w.trigger_key,a.input_manifest_json,w.revision_count,w.job_count,w.run_seconds
     FROM project_knowledge_job_assignments a JOIN project_knowledge_work w ON w.id=a.work_id AND w.project_id=a.project_id
     WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId} AND a.work_id=${input.work_ref} FOR UPDATE OF w`;
   if (!assignment || assignment.stage !== "maker" || assignment.state !== "running" || assignment.work_stage !== "maker" || assignment.active_job_id !== actor.jobId)
@@ -35,6 +36,16 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
   const frozenManifest = assignment.input_manifest_json as
     Array<{ input_ref: string; content_hash: string; blob_hash?: string }>;
   const manifests = frozenManifest;
+  if (isCloseoutEvaluation(assignment.trigger_key)) {
+    const action = input.base_refs.length ? "revise" : "create";
+    const sourceRefs = input.source_refs.map(ref => `${ref.kind}:${ref.ref}:${ref.content_hash}`).sort();
+    const expected = manifests.filter(entry => /^(fact|evidence):/.test(entry.input_ref))
+      .map(entry => `${entry.input_ref}:${entry.content_hash}`).sort();
+    if (!candidate || input.action !== action || input.revision !== 1
+      || !manifests.some(entry => entry.input_ref === closeoutDraftRef(candidate.hash, input.base_refs))
+      || canonical(sourceRefs) !== canonical(expected))
+      return reject("KNOWLEDGE_CLOSEOUT_DRAFT_MISMATCH", "Submit the exact candidate, base_refs, and source_refs from the frozen closeout draft");
+  }
   if (["create", "revise", "merge"].includes(input.action) && input.source_refs.length === 0)
     return reject("KNOWLEDGE_SOURCE_REQUIRED", "Candidate requires at least one frozen source", "source_refs");
   for (const source of input.source_refs) {

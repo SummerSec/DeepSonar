@@ -156,7 +156,7 @@ sequenceDiagram
 
 Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批新 Job，保留前驱已写入的 terminal result，并把 Canvas convergence 持久暂停；Plan v2 依赖 admission 使用同一错误持久停止，不撤销前驱已证明输出。详细协议见 [目标授权专题](../TARGET_AUTHORIZATION.md) 和 [ADR-0011](adr/0011-trusted-target-authorization.md)。若契约不能安全表达写入目标，不自动把原目标降级为只读；由创建者重新下发明确的较窄目标。
 
-任务会话收尾由业务 Job 在原会话可选提交。正式报告与根任务成功后，Scheduler 在同一画布、同一根任务下只投影一个知识沉淀节点。节点投影失败可从已提交结算补登，建议失败不会阻塞正式报告。[专题](../PROJECT_KNOWLEDGE.md#任务会话收尾1197)
+任务会话收尾由业务 Job 在原会话可选提交。正式报告与根任务成功后，Scheduler 在同一画布、同一根任务下只投影一个知识沉淀节点。节点投影失败可从已提交结算补登，建议失败不会阻塞正式报告。单条候选可复用现有独立试验和评测工作，结果绑定 evaluator 的最新成功 Attempt。评测链在独立评测后停在草稿。[专题](../PROJECT_KNOWLEDGE.md#任务会话收尾1197)
 
 ## 项目知识工作链（#752 与项目批次）
 

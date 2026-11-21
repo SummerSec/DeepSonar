@@ -2,6 +2,7 @@ import { KNOWLEDGE_CASE_KINDS, KNOWLEDGE_LIMITS, type SubmitKnowledgeEvaluationP
 import type { KnowledgeActor } from "./inputs.js";
 import { reject, sha256, type KnowledgeDb } from "./types.js";
 import { getSharedAssetBlobStore } from "../../blob-store/index.js";
+import { isCloseoutEvaluation } from "./closeout-evaluation-key.js";
 import { requireKnowledgeCasePolicy } from "./case-policy.js";
 
 export function requiredArms(action: string): readonly string[] {
@@ -37,7 +38,7 @@ export async function prepareTrialEvidence(db: KnowledgeDb, input: SubmitKnowled
 
 export async function evaluateKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, input: SubmitKnowledgeEvaluationPayload,
   evidenceProofs: Map<string, TrialEvidenceProof>): Promise<Record<string, unknown>> {
-  const [assignment] = await tx`SELECT a.work_id,a.proposal_id,a.stage,a.input_digest,w.state,w.stage AS work_stage,w.active_job_id
+  const [assignment] = await tx`SELECT a.work_id,a.proposal_id,a.stage,a.input_digest,w.state,w.stage AS work_stage,w.active_job_id,w.trigger_key
     FROM project_knowledge_job_assignments a JOIN project_knowledge_work w ON w.id=a.work_id AND w.project_id=a.project_id
     WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId} FOR UPDATE OF w`;
   if (!assignment || assignment.stage !== "evaluator" || assignment.proposal_id !== input.proposal_ref || assignment.input_digest !== input.input_digest
@@ -101,7 +102,10 @@ export async function evaluateKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, 
   if (expected.size) return reject("KNOWLEDGE_EVALUATION_REQUIRED", "Fixed trial matrix is incomplete");
   const [evaluation] = await tx`INSERT INTO project_knowledge_evaluations(project_id,proposal_id,proposal_revision,kind,actor_job_id,actor_attempt_id,input_digest,result_json)
     VALUES(${actor.projectId},${input.proposal_ref},${input.revision},'behavior',${actor.jobId},${actor.attemptId},${input.input_digest},${tx.json({ case_results: input.case_results })}) RETURNING id`;
-  await tx`UPDATE project_knowledge_proposals SET state='review_pending' WHERE id=${input.proposal_ref}`;
-  await tx`UPDATE project_knowledge_work SET stage='reviewer',generation=generation+1,updated_at=now() WHERE id=${assignment.work_id}`;
-  return { evaluation_ref: evaluation!.id, state: "review_pending" };
+  const evaluationOnly = isCloseoutEvaluation(assignment.trigger_key);
+  const state = evaluationOnly ? "candidate" : "review_pending";
+  await tx`UPDATE project_knowledge_proposals SET state=${state} WHERE id=${input.proposal_ref}`;
+  const nextStage = evaluationOnly ? "settle" : "reviewer";
+  await tx`UPDATE project_knowledge_work SET stage=${nextStage},generation=generation+1,updated_at=now() WHERE id=${assignment.work_id}`;
+  return { evaluation_ref: evaluation!.id, state };
 }

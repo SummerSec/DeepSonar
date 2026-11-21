@@ -242,7 +242,7 @@ export function Sidebar({
       {tab !== "stream" && (
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-3">
           {tab === "overview" && isCloseout && (projectId && closeoutRoot
-            ? <KnowledgeCloseoutDetails key={`${projectId}:${closeoutRoot}`} projectId={projectId} rootId={closeoutRoot} />
+            ? <KnowledgeCloseoutDetails key={`${projectId}:${closeoutRoot}`} projectId={projectId} rootId={closeoutRoot} allowEvaluation />
             : <p className="text-sm text-zinc-400">暂未取得知识沉淀详情。</p>)}
           {tab === "overview" && !isCloseout && (
             <>

@@ -8,6 +8,7 @@ import { validationHttpError } from "../../http-validation-error.js";
 import { projectScopeAllows } from "../../project-scope.js";
 import { readKnowledgeBlob } from "./blobs.js";
 import type { KnowledgeDb } from "./types.js";
+import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
 import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
 import { registerKnowledgeActivityRoutes } from "./activity-routes.js";
@@ -51,14 +52,26 @@ function access(req: FastifyRequest, reply: FastifyReply, projectId: string, wri
   return true;
 }
 
+// Evaluation-only drafts use the existing version store, but stay private to the
+// source-checked closeout detail. A revision must not hide the existing active item.
+function publicKnowledgeVersion(db: Db) {
+  return db`NOT EXISTS (SELECT 1 FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
+    WHERE p.project_id=v.project_id AND p.candidate_version_id=v.id AND w.trigger_key LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"})`;
+}
+
+function publicKnowledgeItem(db: Db) {
+  return db`(i.active_version_id IS NOT NULL OR NOT EXISTS (
+    SELECT 1 FROM project_knowledge_versions v WHERE v.project_id=i.project_id AND v.item_id=i.id AND NOT (${publicKnowledgeVersion(db)})))`;
+}
+
 async function itemFor(db: Db, projectId: string, itemId: string): Promise<Row | undefined> {
-  const [item] = await db`SELECT * FROM project_knowledge_items WHERE project_id=${projectId} AND id=${itemId}`;
+  const [item] = await db`SELECT i.* FROM project_knowledge_items i WHERE i.project_id=${projectId} AND i.id=${itemId} AND ${publicKnowledgeItem(db)}`;
   return item as Row | undefined;
 }
 
 async function versionFor(db: Db, projectId: string, itemId: string, versionId: string): Promise<Row | undefined> {
-  const [version] = await db`SELECT * FROM project_knowledge_versions
-    WHERE project_id=${projectId} AND item_id=${itemId} AND id=${versionId}`;
+  const [version] = await db`SELECT v.* FROM project_knowledge_versions v
+    WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND v.id=${versionId} AND ${publicKnowledgeVersion(db)}`;
   return version as Row | undefined;
 }
 
@@ -67,12 +80,12 @@ async function itemDetail(db: Db, projectId: string, itemId: string) {
   if (!item) return null;
   const versions = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
       governance_hash,revoked_at,revoked_reason,created_at
-    FROM project_knowledge_versions WHERE project_id=${projectId} AND item_id=${itemId}
+    FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
     ORDER BY version DESC LIMIT 51`;
   const proposals = await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
       p.candidate_version_id,p.maker_job_id,p.base_refs_json,p.evaluation_plan_json,p.reason,p.created_at
-    FROM project_knowledge_proposals p
-    WHERE p.project_id=${projectId} AND
+    FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
+    WHERE p.project_id=${projectId} AND w.trigger_key NOT LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"} AND
       (p.candidate_version_id IN (SELECT id FROM project_knowledge_versions WHERE project_id=${projectId} AND item_id=${itemId})
        OR p.base_refs_json @> ${db.json([{ item_ref: itemId }])})
     ORDER BY p.created_at DESC LIMIT 50`;
@@ -110,7 +123,7 @@ export function registerProjectKnowledgeRoutes(
           v.version,v.content_sha256
         FROM project_knowledge_items i
         LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
-        WHERE i.project_id=${projectId}
+        WHERE i.project_id=${projectId} AND ${publicKnowledgeItem(db)}
           AND (${input.kind ?? null}::text IS NULL OR i.kind=${input.kind ?? null})
           AND (${input.status ?? null}::text IS NULL OR i.status=${input.status ?? null})
           AND (${pattern}::text IS NULL OR i.title ILIKE ${pattern} ESCAPE '\\' OR i.logical_key ILIKE ${pattern} ESCAPE '\\')
@@ -166,7 +179,7 @@ export function registerProjectKnowledgeRoutes(
       const page = Page.parse(req.query);
       const rows = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
           governance_hash,revoked_at,revoked_reason,created_at
-        FROM project_knowledge_versions WHERE project_id=${projectId} AND item_id=${itemId}
+        FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
         ORDER BY version DESC LIMIT ${page.limit + 1} OFFSET ${page.offset}`;
       return { items: rows.slice(0, page.limit), next_offset: rows.length > page.limit ? page.offset + page.limit : null };
     } catch (error) { return errorReply(reply, error); }

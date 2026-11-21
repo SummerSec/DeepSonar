@@ -10,6 +10,8 @@ import { canonical, sha256 } from "./types.js";
 import { automaticPreparationPredicate, isAutomaticWork } from "./automatic-marker.js";
 import { PROJECT_COLLECTION_PREFIX } from "./collector-sources.js";
 import { COEXISTENCE_INPUT_REF, prepareTrialSupport } from "./trial-support.js";
+import { closeoutEvaluationSelection, isCloseoutEvaluation } from "./closeout-evaluation-key.js";
+import { findTaskKnowledgeCandidate } from "./closeout-preview.js";
 import { prepareKnowledgeRevisionFeedback } from "./revision-feedback.js";
 
 type Db = typeof sql;
@@ -247,9 +249,12 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     const workId = String(work.id);
     const projectId = String(work.project_id);
     const canvasId = String(work.canvas_id);
-    const prompt = stage === "maker" && proposal
+    const basePrompt = stage === "maker" && proposal
       ? `${promptFor(stage, work, proposal, trial)}${await baseRefsHint(tx, projectId, proposal)}`
       : promptFor(stage, work, proposal, trial);
+    const prompt = stage === "maker" && isCloseoutEvaluation(work.trigger_key)
+      ? `${basePrompt} 这是原画布候选的独立评测。读取 closeout-draft 输入，原样复制 candidate、base_refs 和 source_refs。base_refs 为空用 create，否则用 revise。只设计评测用例，不改写候选。`
+      : basePrompt;
     const assignment: KnowledgeJobAssignment = {
       work_id: workId, stage, inputs: manifest, governance_hash: String(work.governance_hash),
       ...(String(work.trigger_key).startsWith(PROJECT_COLLECTION_PREFIX) ? { source_mode: "project_collection" as const } : {}),
@@ -303,7 +308,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
           title: `项目知识整理 ${workId}`,
           target: { kind: "standard", title: `项目知识整理 ${workId}`,
             goal: "受治理的项目知识整理与独立评测", knowledge_work_id: workId,
-            network_policy: { allow_egress: !String(before.trigger_key).startsWith(PROJECT_COLLECTION_PREFIX) && originNetwork.allow_egress === true } },
+            network_policy: { allow_egress: !isCloseoutEvaluation(before.trigger_key) && !String(before.trigger_key).startsWith(PROJECT_COLLECTION_PREFIX) && originNetwork.allow_egress === true } },
           triggerSource: "project_knowledge", triggerEventId: workId,
         });
       }
@@ -333,6 +338,21 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         if (!isTerminal(active.status)) return false;
         await onKnowledgeJobTerminal(tx, active as { id: unknown; project_id?: unknown; canvas_id?: unknown; started_at?: unknown; finished_at?: unknown }, active.status);
         return true;
+      }
+      const closeout = closeoutEvaluationSelection(work.trigger_key);
+      if (closeout) {
+        if (work.stage === "reviewer" || work.stage === "settle") {
+          await block(tx, workId, "closeout_evaluation_stopped");
+          return true;
+        }
+        const selected = await findTaskKnowledgeCandidate(tx, String(work.project_id), closeout.rootId, closeout.fingerprint);
+        const [admissible] = await tx`SELECT 1 FROM projects p WHERE p.id=${String(work.project_id)} AND p.status='active'
+          AND NOT EXISTS (SELECT 1 FROM job_attempt_effects e WHERE e.job_id=${String(work.origin_job_id)}
+            AND e.status IN ('effect_pending','unknown'))`;
+        if (!admissible || !selected || selected.owner.jobId !== work.origin_job_id) {
+          await block(tx, workId, "closeout_source_unavailable");
+          return true;
+        }
       }
       // 最小可执行预算准入（#1111）：只在准备派发下一个 Job 时判定。放在 active Job 对账之后，
       // 升级时仍在运行/待对账的旧短余额 Job 不会被提前解绑，其耗时与真实终态仍能累计一次。

@@ -40,7 +40,7 @@ export async function suggestionSourceHashes(db: KnowledgeDb, owner: SuggestionO
         AND octet_length(n.body_json::text)<=${KNOWLEDGE_LIMITS.readBytes} LIMIT 1`;
     if (!row) return undefined;
     const content = { kind: "fact", body: row.body_json, verification_status: row.verification_status };
-    return { integrity: sha256(canonical({ ...content, id: row.id })), content: sha256(canonical(content)) };
+    return { integrity: sha256(canonical({ ...content, id: row.id })), content: sha256(canonical(content)), knowledge: sha256(canonical({ ...content, id: row.id })) };
   }
   const [row] = await db`SELECT e.id,e.kind,e.statement,e.polarity,e.uri,e.payload_json,e.sha256 FROM artifact_evidence e
     JOIN artifacts a ON a.id=e.artifact_id
@@ -51,12 +51,13 @@ export async function suggestionSourceHashes(db: KnowledgeDb, owner: SuggestionO
   if (!row) return undefined;
   const content = { kind: "evidence", evidenceKind: row.kind, statement: row.statement, polarity: row.polarity,
     uri: row.uri, payload: row.payload_json, sha256: row.sha256 };
-  return { integrity: sha256(canonical({ ...content, id: row.id })), content: sha256(canonical(content)) };
+  return { integrity: sha256(canonical({ ...content, id: row.id })), content: sha256(canonical(content)),
+    knowledge: sha256(canonical({ kind: "evidence", id: row.id, statement: row.statement, payload: row.payload_json, sha256: row.sha256 })) };
 }
 
 export async function resolveSuggestionTarget(db: KnowledgeDb, owner: SuggestionOwner, item: SuggestionItem) {
   if (!item.target) return undefined;
-  const [row] = await db<{ item_ref: string; version_ref: string }[]>`SELECT i.id AS item_ref,v.id AS version_ref
+  const [row] = await db<{ item_ref: string; version_ref: string; logical_key: string; generation: string; content_hash: string }[]>`SELECT i.id AS item_ref,v.id AS version_ref,i.logical_key,i.generation,v.content_sha256 AS content_hash
     FROM project_knowledge_usages u JOIN project_knowledge_versions v
       ON v.project_id=u.owner_project_id AND v.id=u.version_id AND v.content_sha256=u.content_sha256
     JOIN project_knowledge_items i ON i.id=v.item_id AND i.project_id=v.project_id
@@ -123,7 +124,7 @@ export async function submitTaskKnowledgeSuggestion(context: PlatformRuntimeHand
       if (item.target && !target)
         return reject("KNOWLEDGE_REVOKED", "Suggestion target version is unavailable", `items.${i}.target`);
       sourceHashes.push(hashes);
-      fingerprints.push(sha256(canonical({ ...item, target: target ?? null, evidence_refs: [...new Set(contentHashes)].sort() })));
+      fingerprints.push(sha256(canonical({ ...item, target: target ? { item_ref: target.item_ref, version_ref: target.version_ref } : null, evidence_refs: [...new Set(contentHashes)].sort() })));
     }
     await consumeEventRateLimit(tx, jobId, "control_receipt", new Date());
     const blob = input.items.length ? await writeKnowledgeBlob(tx, { input, source_hashes: sourceHashes }) : undefined;
