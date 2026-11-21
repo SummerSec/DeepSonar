@@ -1,7 +1,7 @@
 # 人工等待的断点与续做（#1074）
 
 > 状态：as-built 代码契约；最终提交的 GitHub Actions 验收另验
-> 同步日期：2026-11-20
+> 同步日期：2026-11-21
 > 需求：FR-JOB-008、FR-CTRL-006；决策：[ADR 0022](architecture/adr/0022-human-continuation.md)
 
 人工等待超过响应阈值只记 overdue，Job 保持 waiting_human。有权限的用户可在 Job 详情读取完整问题并「回复并继续」。2026-11-11 的两个历史 failed Job 不自动复活，也不据历史回执重放外部效果。此实现不部署现场，不更换用户运行配置。
@@ -69,7 +69,7 @@ v1、缺少 mode 或其他权限值均拒绝恢复。正常加载入口对不符
 
 回复先保存为 answered，返回 202/reply_state=reply_saved。即使准备中、暂停、缺文件或预算不足，回复仍持久存在，不要求重复输入。202 只证明保存，UI 通过 human_continuation 和 execution_state 展示后续阻塞。generic job/hub 消息和「忽略」都不能直接恢复 waiting_human。
 
-既有 reconciliation 有界公平轮转扫描 answered 请求，核文件、旧执行退出/回收、最新 Attempt、冻结身份、目标实时授权、FIFO 席位、任务暂停、全部效果/用量和累计预算。全部通过才在同一 Canvas→预算根→Job→Attempt→请求事务写 Scheduler-owned human_continuation 事件、唯一下一 attempt_no 并转 pending。有 rejected-completion root 时还用原 repair_generation 授权精确新 owner，保持原 deadline 和额度；无 root 仍有独立续做归属事件。
+既有 reconciliation 有界公平轮转扫描 answered 请求，核文件、旧执行退出/回收、最新 Attempt、冻结身份、目标实时授权、任务暂停、全部效果/用量和累计预算。全部通过才在同一 Canvas→预算根→Job→Attempt→请求事务写 Scheduler-owned human_continuation 事件、唯一下一 attempt_no 并转 pending。有 rejected-completion root 时还用原 repair_generation 授权精确新 owner，保持原 deadline 和额度；无 root 仍有独立续做归属事件。
 
 Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；开始前重新核冻结身份，目标授权仍走现有实时门。取消、过期、文件丢失或 owner 漂移不能空白启动。原 token 被撤销，旧执行不能收到新请求的回复。新执行通过原 inbox 注入消息并显式 ack_human_message；已保存、已注入、已 ACK 与已完成分别记账，注入 unknown 不自动再发。
 
@@ -83,7 +83,7 @@ structured 模式恢复验证后的业务文件、原问题、用户回复和有
 
 有效执行时间由 job_execution_clocks 从首个受理 human 的原运行区间累计；可信回收且在途 Gateway 效果/用量结算后暂停，等待期间仍有未决模型调用则保守继续计时。资源释放后的时钟收敛独立于回复，以持久化的退出、回收与最后 Gateway 结算/用量观察时间的较晚值关闭区间；用户尚未回复、轮询延迟或 Scheduler 停机不会在结清后额外扣时。jobs.started_at 保留本次实际开始时间用于停滞检测，execution_deadline_at 单独保存原剩余有效时间与 repair 硬期限的较早值；Control token、Gateway、完成/Plan 门与 Reaper 共同使用它。排队和纯人工等待不耗有效执行时间，重复清理不重复扣时。请求数、主/repair token、修正次数与 Plan lifetime 沿原账本，unknown 不按零消耗，原 repair deadline 不延长。
 
-封存等待保留当前 FIFO 占位，不占活跃执行槽。暂停/取消/归档和授权撤销仍由既有门控制。历史 failed 通过详情页显式创建新 Job，必须具备合法检查点和原始账本。原生 Session 按上述能力矩阵和精确来源绑定加载。
+封存等待不占活跃执行槽；#1180 已删除完整任务 FIFO 占位，不阻塞其它任务按普通并发调度。暂停/取消/归档和授权撤销仍由既有门控制。历史 failed 通过详情页显式创建新 Job，必须具备合法检查点和原始账本。原生 Session 按上述能力矩阵和精确来源绑定加载。
 
 ## 注意力成本与验收
 
@@ -113,7 +113,7 @@ schema76 的 jobs.budget_owner_job_id 指向第一 Job，第一 Job 的 budget_e
 
 ## 组合实现与验证边界（2026-11-19）
 
-PR #1159 集成文字历史 #1152、维护预检 #1154、文件权限 #1155、FIFO #1156 和受限原生会话 #1157，并补历史 failed 新 Job、跨 Job 原预算链及其正常管理入口。各切片保留原评审和 Actions 证据，组合候选必须重新完成全部适用 Actions。schema 76 完整基线包含 FIFO 的 schema 75 表和状态，按仓库既有重建基线机制使用。
+PR #1159 集成文字历史 #1152、维护预检 #1154、文件权限 #1155、FIFO #1156 和受限原生会话 #1157，并补历史 failed 新 Job、跨 Job 原预算链及其正常管理入口。各切片保留原评审和 Actions 证据，组合候选必须重新完成全部适用 Actions。该集成当时的 schema 76 包含 FIFO 专属结构；当前 schema 78 已删除这些结构，保留人工请求、回复、检查点、预算链与历史，按既有受控重建处理。
 
 历史详情入口通过受授权的 POST `/jobs/:id/continuations` 先保存回复，再判断准入。事务锁内要求 source failed、请求 closed 且 close_reason=failed，普通 waiting_human 误用此入口不会写回复、推进请求或触发恢复。明确未保存的拒绝可修改重提，已保存或响应未知保持原 payload 重试。正常 JobDetail DOM 回归覆盖成功、明确拒绝、已保存 blocker、响应丢失与普通角色权限。
 
@@ -123,9 +123,13 @@ PR #1159 集成文字历史 #1152、维护预检 #1154、文件权限 #1155、FI
 
 上述测试已接既有 Actions 入口。最终组合 SHA 的结果在 PR 记录，源码接线和切片旧绿灯不能替代组合验收。文件契约保全受支持普通文件与 0600/0700 权限，空目录、完整任意文件系统状态、跨副本 blob 可见性和任意崩溃交错仍无穷尽保证。固定格式之外的会话使用有原因的 structured 模式，损坏的已绑定归档拒绝执行。真实模型理解/恢复率、生产重跑、部署和 SLA 未验证。
 
-## 项目队列显式让位（#1074 第 8 节）
+## 删除队列依赖后继续人工续做（#1180）
 
-默认人工等待保留席位。用户可在项目队列显式暂存让位，限单一已安全封存的人工等待。回复持久保存事务内原子回队尾一次，保留原完成代际。未轮到、项目暂停或其他任务仍 active 时只保存回复；轮到后沿原断点、授权、退出、效果和预算准入创建唯一后继。状态、API 与验证边界见[队列专题](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+人工等待的 FIFO 占位、显式让位、回复回队尾及队列席位准入已删除，保留回复持久化、可信检查点/退出/回收、幂等、唯一后继、原授权和累计预算链。回复保存不等于启动；任务暂停/取消、归档、断点过期、撤权、未知效果及额度门继续有效。其它任务不再因本任务等待人工而额外阻塞。
+
+schema 78 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
+
+原生会话归档中的 queue-operation/enqueue/dequeue 是 CLI 输入消费记录，与被删除的项目任务队列无关，其主会话过滤规则保留。ADR 0022 的队列扩展仅作历史，由 [ADR 0026](architecture/adr/0026-remove-project-task-queue.md) 取代，细则见[删除专题](PROJECT_TASK_QUEUE.md)。最终 SHA Actions 待验。
 
 ## 私有凭据与宿主清理组合验收
 

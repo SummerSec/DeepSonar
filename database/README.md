@@ -1,6 +1,6 @@
 # Database schema
 
-schema76 增加历史 continuation 的可信前驱/预算 owner 关联，累计额度复用原账本。正常管理入口、单 owner、时钟和证据保留见[人工续做](../docs/HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。schema75 FIFO 的最终变更组合后保留。
+schema76 增加历史 continuation 的可信前驱/预算 owner 关联，累计额度复用原账本。正常管理入口、单 owner、时钟和证据保留见[人工续做](../docs/HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。schema 78 保留人工续做与预算链，删除 FIFO 专属结构。
 
 schema 74 仅新增列表索引 `jobs_project_created_idx (project_id, created_at DESC, id DESC)`（#1136：不带 status 的列表原先顺序扫描 `jobs`）。
 
@@ -99,11 +99,15 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f database/schema.sql
 `schema.sql` 不包含 `psql` 专用的 `\i` / `\ir` 指令，也可以粘贴到 Supabase、
 Neon、RDS Query Editor 等 PostgreSQL SQL 控制台执行。仅适配 PostgreSQL。
 
-## 项目任务队列基线（#1018）
+## 删除项目任务队列的重建安全（#1180）
 
-schema 72 增加项目队列与条目，Canvas 的项目复合唯一键支持队列归属外键，active 部分唯一索引约束单任务占位。条目使用现有重建支持的序列默认值。新基线仍通过备份、列交集回填和序列校准重建，旧库结构不匹配时启动拒绝；最终 Actions 的迁移与 SQL 行为证据另记。调度语义见[队列专题](../docs/PROJECT_TASK_QUEUE.md)。
+schema 78 已删除全部队列专属表、索引、序列及归属约束，保留任务、Job/Attempt、人工请求/回复、Evidence、报告与审计。具体基线只认 SCHEMA_VERSION 与 schema.sql；仍走备份、受控重建和列交集回填，启动不自动升级旧库。
 
-schema 75 增加人工等待 yielded 队列状态与 project_task_queue_yields，绑定显式操作、请求版本与已消费回复。回复原子回队尾保留原完成代际，唯一基线重建及最终 Actions 另验。
+schema 78 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
+
+停止意图仅在 schema-rebuild 候选回填时保全，旧队列数据不进入新运行时。无法识别旧队列结构时在破坏性操作前拒绝，不默认为无暂停。运行中 Job 身份保持，不创建替代执行、不重复领取、不重放未知效果，冻结快照和历史终态不变。原备份、plan 无写入、失败回滚、维护与资源前置条件继续生效。
+
+旧 schema 夹具覆盖 manual/failure/cancelled/running/ordinary/acknowledged/task_pause，以及已封存 waiting_human；比较已有 task pause 原文、完整 jobs（含冻结快照）、events 与 audit 一致性，核对专属结构不再存在。回归沿既有迁移及调度/人工续做 Actions 入口，最终 SHA Actions 待验；未在本地或生产重建，未运行测试/构建/typecheck。行为与决策见[删除专题](../docs/PROJECT_TASK_QUEUE.md)。
 
 ## schema 77 项目公平调度
 

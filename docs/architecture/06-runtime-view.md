@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-20
+> 同步日期：2026-11-21
 
 #1133 的自动 Hub worker intent 与人工 Finding 补证入口，在冻结网络策略后、运行配置前统一调用设备要求冻结。显式 adb/hdc 要求重核项目 opt-in、已配置 rig、已启用 transport、独占及出网授权，进入 Job snapshot 后由既有设备租约入口再次授权并发放短期 grant。无显式设备要求的目标继续远端路径，镜像缺 SDK 或固件不用于推断设备能力。人工无定论事务、CAS 和审计见[接口边界](09-interface-specs.md#人工结束技术验证1133)。
 
@@ -86,7 +86,7 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 3. 唯一候选决定 CLI，但仍须核对容量。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好。模型/CLI/协议硬约束先行，再排除明确失败的健康候选。`health_status=unknown` 仍可用，`error` 且 `health_error_category=unknown` 沿用 #491 的目录探测限制语义，不能据此证明推理不可用。其他 `error` 暂时排除，全部不可用返回 `provider_credential_health_unavailable`。冻结账号健康失败同样返回该错误，不换账号。显式名单内删除、停用或不可访问引用仍先使整次解析以 `provider_credential_allowlist_stale` 拒绝。
 4. 显式授权白名单内 Provider、CLI 和解析后上游模型一致的多账号池，合法冻结身份保持原账号。新 Job 先排除满额候选，再按三层最小剩余容量比例降序、全项目真实凭据在途数升序、同项目历史分配数升序、同项目当前非终态分配数升序、默认账号优先、稳定 ID 选择。未设上限的层剩余比例为 1，显式 0 为 0。冻结身份满额时等待原账号，不转同伴。默认账号仅在前述负载条件相同时优先。异身份池仍保留显式默认账号硬选，不自动跨身份轮换。缺少白名单或模型/Provider 身份不同且没有明确默认或恢复身份时，继续 `provider_credential_multi_match`。不同 Provider 的同名模型及同 base_url 没有受治理等价证明，不能自动池化。
 5. #1078 的凭据、模型、Provider 三层容量共用 Dispatcher 的计数函数及全项目 `claimed` / `provisioning` / `running` 账本。凭据和模型限制读取 `public_metadata_json.max_concurrent` / `model_concurrency`，模型键使用真实上游 ID，Provider 限制复用全局 `maxConcurrentByProvider` 及同一纯解析函数。`pending` / `waiting_human` 只参与项目分配排序，不占执行名额。恢复重验用内核持有的当前 Job ID 在同一查询中排除自身，其他 Job 仍计入。选择不预留名额，readiness 不消费轮次。真正领取仍在 `DISPATCH_CLAIM_ADVISORY_KEY` 锁内复核，历史身份漂移、累计预算和未知效果门保持。运行中不换 key、不因故障重选账号或重置预算。升级离线预检仍仅消费导出的配置，不加载数据库或 core 初始化，不验证实时容量，并在 `not_checked` 明示 `live_credential_capacity`。
-6. 严格解析及 readiness 在全部可选身份满额时返回 `provider_credential_all_at_capacity`，分类为 `transient_retryable`，下一步为等待容量。Job 创建显式允许持久化等待决定并保存 pending Job，防止派发输入丢失。Dispatcher 在暂停、定时、依赖及项目 FIFO 资格满足后观测容量阻挡，合并为单个 5 秒定时器，按既有每页最多 500 个候选的领取扫描重读，释放后再由领取锁准入。没有最大排队时长契约，pending 不因创建时间或执行 timeout 到期而取消。此计时器不创建预约或等待预算。
+6. 严格解析及 readiness 在全部可选身份满额时返回 `provider_credential_all_at_capacity`，分类为 `transient_retryable`，下一步为等待容量。Job 创建显式允许持久化等待决定并保存 pending Job，防止派发输入丢失。Dispatcher 在暂停、定时及依赖资格满足后观测容量阻挡，合并为单个 5 秒定时器，按既有每页最多 500 个候选的领取扫描重读，释放后再由领取锁准入。没有最大排队时长契约，pending 不因创建时间或执行 timeout 到期而取消。此计时器不创建预约或等待预算。
 7. 新快照的可选 `credential_selection` 使用 `deepsonar.credential-selection/v1`，记录观测时刻、选中 UUID、选择理由、稳定错误码，以及经过授权/模型/协议硬约束后的候选 UUID、健康状态、跳过原因及三层容量。健康排除的候选容量为 null。`reason=capacity_wait` 仅表示创建时容量已满的观测，其他选择的 `error_code=null`，不携带等待起点、deadline 或执行预算。 显式同质池全满时，新 Job 优先冻结凭据、模型、Provider 三层均未显式设为 0 的暂满账号；没有此类账号时保留原等待选择，恢复与异质池默认身份不轮换。该投影没有密钥、原生设置、账号名或地址。已有快照不补写，负载释放及恢复重验不改写原冻结决定。
 
 回归接既有 `ci:unit:capability-pack`、`ci:unit:runtime-cleanup`、并发单测、`ci:integration:role-config` 与 `ci:integration:dispatch-limits`。覆盖管理 API 配额、跨项目占用、三层零上限、健康与失效引用、默认仅平局优先、连续十次创建及领取不超 3/10 上限、冻结恢复、全满保留 pending、无通知释放唤醒和并发 claim。`role-config` 另接凭据选择及 Job 插入后的事务回滚、并发创建、重复 ingress 拒绝与释放后领取的组合回归，核对三层占用和原冻结审计。新增回归尚未执行，最终提交的 Actions 结果另验。跨 Provider 受治理等价映射、版本/能力约束与迁移规则尚未交付，当前 ModelDescriptor/FrozenModelDescriptor 没有此类身份字段。用户于 2026-11-20 确认本轮收口同 Provider 容量、恢复身份与创建回滚修复，跨 Provider 自动选择另由增强 [#1178](https://github.com/SummerSec/DeepSonar/issues/1178) 跟踪。
@@ -333,17 +333,17 @@ FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 ac
 
 Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freeze，Control Intent 预检与最终 ingestion 均执行；最终事务在 pending Job 公开前冻结 runtime knobs、OM 配额、profile 与 launch。保留原 audit timeout、parent/finding/payload/priority 和图身份，shared assets 仅由既有 materializer 记录一次；冻结或图写入失败回滚整次 ingestion。
 
-## 项目队列领取与恢复（#1018）
+## 普通任务领取与恢复（#1180）
 
-项目 FIFO 队列在 Dispatcher 的全局 claim 事务锁内判定执行资格，实际 claim 后才标记当前占位。当前 Canvas 的内部 Job 可并行，下一 Canvas 等待治理 root/report 收敛、所有活动 Job 结束与效果结清。失败/取消保留队首并暂停，恢复必须确认当前失败项 ID；手动暂停只挡后续任务。Scheduler 按有界公平轮转对账，重启读取持久记录，硬重试在同一 claim 事务中以新条目 ID 排尾，保留暂停且废止旧失败项确认。Finding 报告再生成不创建任务新代际；终态 membership 保持不变，原报告权限和资源门不变。详见[队列专题](../PROJECT_TASK_QUEUE.md)。
+项目任务队列的资格、占位、推进、对账与重试依赖已删除；创建及待运行任务统一经原 Dispatcher claim、全局/项目/Provider/凭据/模型/CLI 并发与 provisioning 门。多个任务可在额度内执行，上限外等待，额度释放后继续；统一锁、租约与唯一归属防止多 Scheduler 超发和重复领取。保留定时、任务暂停/取消、归档、重试和报告治理，未知效果不重放。升级停止意图与旧库夹具见[删除专题](../PROJECT_TASK_QUEUE.md#升级安全)，最终 SHA Actions 待验。
 
 ## 历史 failed 新 Job 与预算归属
 
 #1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
 
-## 人工等待显式释放 FIFO 席位（#1074）
+## 人工等待沿普通准入续做（#1180）
 
-默认人工等待占位，用户显式让位将唯一等待 Canvas 标记 yielded。回复保存事务持有 claim advisory 锁、Canvas→Job→Attempt→请求锁，原子回队尾一次，保留完成代际。轮到且无其他 active、队列未暂停才由原 requeueJob 准入取得席位和唯一后继，Dispatcher 再验。暂停、取消、断点过期、撤权、退出/效果/预算门仍生效，详见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+人工等待不保留完整任务 FIFO 席位，不需要显式让位。回复先持久保存，原 Canvas→预算根→Job→Attempt→请求锁与唯一后继准入继续重验检查点、退出/回收、当前授权、暂停/取消、效果、期限及累计额度，Dispatcher 再验；不以保存回复声明已执行。旧暂停队列的已封存 waiting_human 保全为任务暂停，既有任务暂停原文不变；仅 claimed/provisioning/running 排除升级暂停投影。见[人工续做](../HUMAN_CONTINUATION.md)，最终 SHA Actions 待验。
 
 ## 持久跨项目公平领取（#1118）
 
@@ -351,7 +351,7 @@ Scheduler 在现有 claim advisory 锁内，先按项目 dispatch_last_served、
 
 每个 tick 最多访问 32 个项目，每次最多读取 64 个 pending Job。global_settings 保存项目扫描位置，projects 保存项目内 keyset 位置，分页跨 tick 与进程推进。扫描项目行遇锁时同样推进全局扫描位置，保留已有延后唤醒。成功领取后重新从最久未服务项目比较，未成功项目在当前 tick 内跳过。下一轮继续未完成页，页尾后回绕，资格变化会重新核验。项目内优先级限定在沿当前持久游标的扫描顺序。前页任务在扫描期间恢复资格或新增高优先级任务时，当前页仍先完成，回绕或成功领取重置游标后重新考虑前缀。此暂时越过前缀的行为保证有限页能持续推进。有限项目持续合格、席位持续释放且行锁最终可用时，所有项目都能获得服务。该条件性活性不构成吞吐或等待时间 SLA。
 
-锁序沿用 claim advisory → Canvas → Project → budget root → Job → Attempt。Project 以 SKIP LOCKED 取得写锁后重核 active，取消、暂停、FIFO、图资格、账号、CLI、预算 owner、lease 与 provision 门保持权威。每个事务最多成功领取一个 Job，提交释放已有锁后再发现下一项目。扫描只读身份提示，不提前占用轮次。没有新增配置、管理 API 或 Web 操作。
+锁序沿用 claim advisory → Canvas → Project → budget root → Job → Attempt。Project 以 SKIP LOCKED 取得写锁后重核 active，取消、暂停、图资格、账号、CLI、预算 owner、lease 与 provision 门保持权威。每个事务最多成功领取一个 Job，提交释放已有锁后再发现下一项目。扫描只读身份提示，不提前占用轮次。没有新增配置、管理 API 或 Web 操作。
 
 真实 PostgreSQL 回归接入 `pnpm ci:integration:dispatch-limits`，由现有 gate-db-core 调用。覆盖五项目两席位连续补充高优先级、项目内优先级、513 个无资格候选后的可领取任务、37 项目跨 tick 扫描、项目资格变化、独立进程重启与并发正常 claim。仅 Actions 运行，最终 SHA 结果另验。
 
@@ -362,7 +362,7 @@ Scheduler 在现有 claim advisory 锁内，先按项目 dispatch_last_served、
 
 三项全局规则 `maxGlobalJobs`、`maxJobsPerProject`、`maxConcurrentProvisioning` 接受 null 或 1–1000 整数。null 表示不限，0 拒绝。仅缺少持久键时读取显式环境变量，环境变量缺省或空白时为 null。已存数字及显式环境变量数字保留，缺省直接采用新契约，不固化旧 20/5/2 默认值。非法显式值阻止启动或领取，升级预检报告字段名。
 
-项目 `maxConcurrentJobs=null` 清除覆盖并继承全局，全局也不限时项目不限。0 暂停该项目后续领取。有限项目配额仍与有限全局上限取最小值。全局不限仅解除对应三个闸，Canvas、FIFO、暂停、图资格、Provider、账号、模型、CLI、lease、镜像及 provision 准入继续核验。计数仍为 claimed/provisioning/running，改配额不终止运行任务。仅内部剩余槽计算使用 Infinity，数据库和 JSON API 使用 null。
+项目 `maxConcurrentJobs=null` 清除覆盖并继承全局，全局也不限时项目不限。0 暂停该项目后续领取。有限项目配额仍与有限全局上限取最小值。全局不限仅解除对应三个闸，Canvas、暂停、图资格、Provider、账号、模型、CLI、lease、镜像及 provision 准入继续核验。计数仍为 claimed/provisioning/running，改配额不终止运行任务。仅内部剩余槽计算使用 Infinity，数据库和 JSON API 使用 null。
 
 OpenSandbox 创建熔断半开恢复独立限制为一个 claimed/provisioning 席位，观察到半开的进程在现有 claim advisory 锁内重新读取熔断状态并按数据库计数核验。出站创建前同步核验 episode，过期准入沿现有未出站 provision 重排路径重新等待，使用 provision_admission_deferred 记录且不消耗或重置真实创建失败重试额度，并保留效果归属与 never_started 证明。全局配额不限仍保留该恢复门，当前失败探针重新打开熔断并保留其他 pending Job，下一次冷却翻倍至配置上限，成功恢复后重置。受控环境参数与默认退避序列见 [OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)，真实 Dispatcher/受控 runner create 500 到 PG 暂停认领组合回归接既有 `pnpm ci:integration:recovery`，最终 SHA Actions 待验。熔断状态仍在进程内，多副本或重启没有共享熔断 episode 的保证。
 

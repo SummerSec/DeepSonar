@@ -1,50 +1,40 @@
-# 项目任务串行队列
+# 删除项目任务队列（#1180）
 
-> 状态：实现与回归已接线，最终 SHA GitHub Actions 待验。
-> 同步日期：2026-11-19
+> 状态：队列专属实现已删除，普通调度与历史保留；最终 SHA GitHub Actions 待验，不表示已发布或升级。
+> 同步日期：2026-11-21
 
-## 行为与范围
+## 当前决定与范围
 
-#1018 为每个项目提供一个可选 FIFO 队列。新任务可以在创建时入队，也可以将尚未执行的任务通过管理 API 入队。同队列同时只有一个 Canvas 占据执行位置，当前任务内部的 Hub、Worker、Verify 与 Report 继续使用原 Job 并发、预算、权限及恢复规则。
+#1180 取代 #1018 的项目任务串行队列需求。队列界面、创建选项、管理 API、共享类型、请求/响应专属字段、OpenAPI、权限与路由映射，以及 Scheduler 的资格判定、占位、推进、对账、重试和人工续做依赖均已删除；数据库基线删除全部队列专属表、索引、序列、约束，相应专属存储、配置与测试移除。不以默认关闭、隐藏界面、开关、双读双写或兼容返回保留旧契约。
 
-任务整体完成后自动推进下一项。成功判定同时检查治理 root/report、实际执行、全部活动 Job 和未结算效果，单个 Job 完成或瞬时没有运行 Job 均不足以释放位置。等待人工、任务暂停、报告生成与未知效果保留占位。失败或取消后暂停队列，操作员明确继续时确认结清已结束的失败项；确认绑定当前条目 ID，旧确认拒绝。若当前任务经治理恢复后完整成功，则按成功策略推进；未知效果沿用既有对账流程。
+原功能按完整任务串行授予资格，普通并发按 Job 限制资源，两者粒度不同。本次是用户明确的产品简化决定，不是已证实的并发计算缺陷。减少一套控制入口、顺序与阻塞原因，不新增替代队列、设置或通知；注意力收益尚未实测。
 
-暂停队列阻止后续任务启动，当前占位任务的内部 Job 可继续。手动暂停不会因当前任务失败后重新成功而自动撤销；恢复时若队首仍失败或取消，仍须确认当前条目 ID。任务自身的暂停仍通过原 execution_control 管理。已结束的任务有合法新 pending 工作时重新排到队尾，当前其它任务的占位优先，原效果不会因排队而重放。硬重试在同一 claim 锁事务中给原 membership 新条目 ID 和队尾位置，即使旧失败项仍为 active；失败重试保留暂停，原失败确认失效时暂停原因转为 manual，仍须显式恢复。重排与重建任一失败均回滚。
+## 保留的调度与任务行为
 
-Finding 报告重新生成是独立报告投影，不建立新的任务完成代际，不使原 root/task_report 成功过期；已完成任务的 membership 保持原 ID/终态，该报告仍受原权限、资源、Job/Attempt 和报告门禁控制。占位任务上的活动报告及未知效果仍保留等待，任务级报告与真正新执行继续要求本轮完成记录，不能借旧成功推进。
+任务统一使用既有 Scheduler。全局、项目、Provider、凭据、模型、Agent CLI 并发及 provisioning 限制继续生效；达到上限的 pending Job 等待额度释放，保留跨项目公平领取、事务锁、租约、幂等及唯一执行归属。多个任务可在既有额度内执行，不再等另一个任务整体完成或人工回复；不保证完整任务 FIFO 顺序。
 
-## 权威与持久化
+普通任务创建、定时启动、任务自身暂停/取消、归档、重试、报告再生成和人工续做保留。删除队列不提前触发定时任务，不撤销任务或项目的暂停，不复活取消任务，不自动重跑历史 Job，不重放未知效果。历史 Canvas、Job/Attempt、Evidence、报告、审计、冻结快照及累计预算保持原有事实和权限。
 
-schema 72 在基线中增加 project_task_queues 与 project_task_queue_items。队列按项目唯一，条目以数据库序号排序，Canvas 外键包含项目归属，部分唯一索引约束每个项目最多一个 active 条目。创建时队列 membership 与首个 pending Job 同事务提交。
+人工请求、晚回复保存、检查点、可信退出/资源回收、唯一后继和原预算链继续使用[人工续做](HUMAN_CONTINUATION.md)准入。人工等待无需占位或显式让位；回复保存不等于执行，仍须核验任务暂停、取消、授权、原期限、效果和额度。
 
-所有入队、控制、对账和领取沿用 DISPATCH_CLAIM_ADVISORY_KEY 的 PostgreSQL 事务锁。Dispatcher 在真实 Job claim 成功后标记占位，按有限预算检查队列前驱。检查时间持久化用于有界公平轮转；领取候选同时核对其项目队首，避免默认关闭轮询时被其他项目长期阻塞。重启、多副本和重复回调重新读取数据库状态，队列不拥有 Attempt、lease、效果结算或终态 authority。
+## 升级安全
 
-队列是当前调度状态，不进入模型能力目录，也不改写历史 Job 快照、Evidence 或报告。数据库版本不匹配仍 fail closed，通过现有备份、列交集回填与重建流程升级基线。
+schema 78 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
 
-## 管理与界面
+数据库沿用唯一 schema 基线、备份和受控重建，旧库或结构漂移启动仍 fail closed。具体版本以 [schema-version.ts](../apps/scheduler/src/schema-version.ts) 与 [schema.sql](../database/schema.sql) 为准。无法识别旧队列结构时在破坏性操作前明确拒绝，不猜测暂停意图。停止意图只在 [schema-rebuild.ts](../apps/scheduler/src/schema-rebuild.ts) 删除旧结构前保全到候选库，不延续旧队列语义，新运行时不读取旧表。
 
-创建任务的 enqueue 可选字段与首 Job 原子入队。GET /projects/{id}/task-queue 使用 tasks:read，PATCH 同路径与 POST /projects/{id}/task-queue/items 使用 jobs:control，项目限定主体只能访问本项目。新队列控制请求严格拒绝未知字段。
+运行中任务保留执行身份，不因去队列化创建新 Job/Attempt 或重复领取。任务本体、历史结果、冻结快照、Evidence、报告、审计及人工请求/回复不作为队列专属数据删除。备份、plan 无写入、失败回滚及其它重建前置条件保持，详见[数据库说明](../database/README.md#删除项目任务队列的重建安全1180)。
 
-任务页展示当前占位、等待顺序、阻塞原因和有界历史，保留任务详情入口。队列控制仅在权限与项目范围匹配时展示。失败后的继续使用确认说明，读取失败和变更失败保留当前状态及可重试入口。轮询有界并清理旧项目请求，普通状态变化合并显示。
+## 决策与验收边界
 
-## 决策与验收
+当前需求为 [FR-TASK-008](architecture/01-system-specification.md#fr-task-008-删除项目任务队列并统一普通调度)，决策见 [ADR 0026](architecture/adr/0026-remove-project-task-queue.md)。[ADR 0019](architecture/adr/0019-project-task-queue.md) 保留原决策并标记被取代，ADR 0022 仅 FIFO 占位/让位部分被取代，其余人工续做边界保留。旧实施计划只作历史。[PR 1204](https://github.com/SummerSec/DeepSonar/pull/1204) 防止丢失旧停止意图的保护目标由 [PR 1208](https://github.com/SummerSec/DeepSonar/pull/1208) 的暂停投影与未知结构提前拒绝共同承接，不采用一律禁止删除旧结构的方案。本文件沿用原专题位置说明删除和验收，不构成旧功能支持。
 
-项目单队列、FIFO、成功自动继续以及失败/取消暂停是本次实施采用的默认选择。用户未逐项指定的策略在 PR 中明确记录。必要的工程回归覆盖 A/B/C、内部多 Job、报告等待、人工/暂停/未知效果、失败确认继续、重复/跨项目输入、重启与双会话竞争，均通过 GitHub Actions 执行。
+最终提交须在现有 Actions 中验证：
 
-本地仅做源码审查、分支与差异静态检查。数据库重建、SQL 集成、测试、构建、typecheck 和浏览器行为证据以最终提交的 Actions 记录为准。
+- UI、创建/列表/API 无队列入口或专属字段，旧控制路由和存储不再属于当前契约；旧输入不得获得兼容成功响应。
+- 同项目多任务按普通并发领取，上限外等待、释放后继续；多 Scheduler 不超发、不重复启动。
+- 普通创建、定时、任务暂停/取消、重试、报告和人工续做无回退；前一任务人工等待不额外阻塞其它任务。
+- 旧基线夹具覆盖 manual/failure/cancelled/running/ordinary/acknowledged/task_pause，以及已封存 waiting_human 的暂停投影；验证仍暂停/可执行分类、已有任务暂停原文、Job 冻结数据、events 与 audit 一致，以及运行中不重复领取。
+- 删除全部专属结构，重建失败回滚、plan 不写入；文档保鲜、需求追溯、API/路由归属和测试接线一致。
 
-当完成记录早于本轮工作代际时，队列显示 stale_completion 并保留位置。用户可打开任务核对当前目标、验证及报告，沿用现有恢复和报告收口入口取得本轮治理结果，队列不自行重写旧成功或清理证据。
-
-## 人工等待显式让位（#1074）
-
-默认保留等待人工的当前占位。用户在项目队列点击「暂存并让下一项先做」，POST /projects/{id}/task-queue/yield 携带共享严格契约的 mutation_id、canvas_id、expected_item_id、request_id 和 expected_revision。权限沿 jobs:control 与项目隔离。仅当前 active 条目、唯一已封存并可信退出/释放资源的 open 请求可让位。其他 pending/claimed/provisioning/running/waiting_human、未结清效果/费用、取消、归档、任务暂停、过期与额度不足均拒绝。此切片暂只支持单个人工等待。
-
-已让位等待若被取消、关闭或归档，对账将原 yielded 条目持久结为 cancelled。断点到期则结为 failed；真实续做泵仍发布 HUMAN_CHECKPOINT_EXPIRED 并回收断点。对账也扫描只有 yielded 的项目，并按 project/canvas/source_item_id 与 yielded 状态核验，避免结算后继代际。已有效回复回队但尚未续做的 queued 项若在等待期间过期，也按 requeued_item_id、请求与回复归属收口，必须 resumed_at 为空；active 和已创建后继不纳入此回收。回复先于下一轮对账到达时，保存回复的事务也先收口到期原条目，回复照常保留。收口写入同事务审计，不暂停其他已运行任务；取消归档后可由正常继续执行入口产生合法工作再入队。
-
-schema 75 的 yielded 状态不占执行席位，project_task_queue_yields 持久绑定原条目、请求版本、操作编号、消费回复及返回条目。相同操作编号和内容返回原决定，内容冲突返回 409。持有统一 claim advisory 锁后按 Canvas→Job→Attempt→请求锁序执行，状态与审计同事务提交。
-
-人工回复先保存，保存事务内将 yielded 条目原子改为 queued 并取得新序号，排在当时全部等待项之后。created_at 与 started_at 保留原完成代际。消息幂等重试、重复泵和并发回复不会二次移动位置。暂停队列时回复照常保存和回队，仍阻止执行。轮到且无其他 active 时，既有续做准入重新核断点、退出、权限、效果和预算，再与唯一后继同事务取得 active 席位。正在运行的下一任务始终优先。
-
-队列有界列表按 active→queued→yielded→history 排序，当前占位与失败队首先返回，旧暂存条目不能挤掉其操作入口。任务页单独显示「暂存等待回复」，默认等待显示「等待人工，未占运行资源，但阻挡串行队列」。按钮只在有控制权限及可引用的唯一请求时出现，服务端仍重验全部安全条件。普通刷新不新增通知，失败保留重试操作编号，用户无需重新输入已保存回复。
-
-回归接现有 ci:integration:platform-api 的 human-continuation SQL/HTTP 套件，覆盖 A 默认占位→显式让位→B 唯一领取→A 回复仅回队一次→暂停阻止恢复→B 完成→A 唯一后继。队列 HTTP 套件验证读权限与跨项目拒绝，单测覆盖 yielded 禁止领取与 Web 分组，SQL/DOM 补 100 个旧暂存项时当前占位与失败队首仍可操作。正常 HTTP 取消/归档→取消归档/继续执行/重新入队与 Dispatcher、真实 pump 到期覆盖末态收口及原条目身份隔离，包括有效回复回队后在 B 运行或队列暂停期间过期、A 收口后 C 正常领取。最终 SHA Actions 另验，本地仅静态检查。
+入口沿用 pnpm ci:unit:docs-freshness、pnpm ci:unit:file-size、pnpm ci:unit:bounded-contexts、pnpm ci:unit:migrations、pnpm ci:unit:dispatch-limits、pnpm ci:integration:dispatch-limits、pnpm ci:unit:web-facts、pnpm ci:integration:recovery、pnpm ci:integration:platform-api 和 pnpm ci:integration:finding-report。套件接线与新增场景通过是两回事，实际结果只认最终 SHA Actions。所有测试、构建、typecheck 仅 Actions 执行；本地只核对源码和静态差异，未执行数据库重建或生产操作。最终 SHA Actions 待验。
