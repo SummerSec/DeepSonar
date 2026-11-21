@@ -29,7 +29,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 #1082 未确认用量诊断沿用 `audit_logs.after_json`。宿主绑定 Job/Attempt/token/effect，固定形态及形态哈希总计最多 2 KiB，权限复用原审计入口。诊断与账本独立、尽力写入，不作为用量证明或重试授权，数据边界见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)。最终 SHA Actions 待验。
 
-[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v78 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
+[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v79 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
 
 ### 直接重建的授权保全（#1002 P2-13）
@@ -66,7 +66,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前 schema v78，#1180 已删除项目任务队列全部专属结构，保留 schema 77 的公平领取及人工请求/累计时钟/预算链。版本与 DDL 以源码为准；既有备份、列交集回填、序列校准与受控重建保持，不自动升级非空库，不改写历史用量或冻结快照。历史 Actions 仅证明对应历史切片，不能代替删除与重建安全的最终 SHA 验收；本机未执行 rebuild、测试、构建或 typecheck。
+保鲜门禁的单处编号核对：当前 schema v79，#1180 已删除项目任务队列全部专属结构，保留 schema 77 的公平领取及人工请求/累计时钟/预算链。版本与 DDL 以源码为准；既有备份、列交集回填、序列校准与受控重建保持，不自动升级非空库，不改写历史用量或冻结快照。历史 Actions 仅证明对应历史切片，不能代替删除与重建安全的最终 SHA 验收；本机未执行 rebuild、测试、构建或 typecheck。
 
 
 ### Canvas 节点引用索引（#1002 P1-6）
@@ -297,9 +297,9 @@ OM 客户端请求 UUID 保存在现有 `job_attempt_effects.intent_json.gateway
 
 ## 删除项目任务队列的数据边界（#1180）
 
-schema 78 已删除项目队列、条目、显式让位记录及专属序列、索引和归属约束；Canvas、Job/Attempt、人工请求/回复、Evidence、报告与审计保留，冻结快照和历史终态不改写。新运行时不读取旧结构，也不把历史审计转换为新队列。
+schema 79 已删除项目队列、条目、显式让位记录及专属序列、索引和归属约束；Canvas、Job/Attempt、人工请求/回复、Evidence、报告与审计保留，冻结快照和历史终态不改写。新运行时不读取旧结构，也不把历史审计转换为新队列。
 
-schema 78 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
+schema 79 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
 
 投影只在既有 schema-rebuild 的候选库回填内进行，源库备份、事务失败回滚与 plan 无写入保持。无法识别旧队列结构时必须在破坏性操作前明确拒绝，不能猜测停止意图后继续。夹具覆盖七类停止意图、waiting_human 及 jobs 冻结/events/audit 一致性，详见[数据库说明](../../database/README.md#删除项目任务队列的重建安全1180)；最终 SHA Actions 待验。
 

@@ -113,7 +113,7 @@ schema76 的 jobs.budget_owner_job_id 指向第一 Job，第一 Job 的 budget_e
 
 ## 组合实现与验证边界（2026-11-19）
 
-PR #1159 集成文字历史 #1152、维护预检 #1154、文件权限 #1155、FIFO #1156 和受限原生会话 #1157，并补历史 failed 新 Job、跨 Job 原预算链及其正常管理入口。各切片保留原评审和 Actions 证据，组合候选必须重新完成全部适用 Actions。该集成当时的 schema 76 包含 FIFO 专属结构；当前 schema 78 已删除这些结构，保留人工请求、回复、检查点、预算链与历史，按既有受控重建处理。
+PR #1159 集成文字历史 #1152、维护预检 #1154、文件权限 #1155、FIFO #1156 和受限原生会话 #1157，并补历史 failed 新 Job、跨 Job 原预算链及其正常管理入口。各切片保留原评审和 Actions 证据，组合候选必须重新完成全部适用 Actions。该集成当时的 schema 76 包含 FIFO 专属结构；当前 schema 79 已删除这些结构，保留人工请求、回复、检查点、预算链与历史，按既有受控重建处理。
 
 历史详情入口通过受授权的 POST `/jobs/:id/continuations` 先保存回复，再判断准入。事务锁内要求 source failed、请求 closed 且 close_reason=failed，普通 waiting_human 误用此入口不会写回复、推进请求或触发恢复。明确未保存的拒绝可修改重提，已保存或响应未知保持原 payload 重试。正常 JobDetail DOM 回归覆盖成功、明确拒绝、已保存 blocker、响应丢失与普通角色权限。
 
@@ -127,7 +127,7 @@ PR #1159 集成文字历史 #1152、维护预检 #1154、文件权限 #1155、FI
 
 人工等待的 FIFO 占位、显式让位、回复回队尾及队列席位准入已删除，保留回复持久化、可信检查点/退出/回收、幂等、唯一后继、原授权和累计预算链。回复保存不等于启动；任务暂停/取消、归档、断点过期、撤权、未知效果及额度门继续有效。其它任务不再因本任务等待人工而额外阻塞。
 
-schema 78 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
+schema 79 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
 
 原生会话归档中的 queue-operation/enqueue/dequeue 是 CLI 输入消费记录，与被删除的项目任务队列无关，其主会话过滤规则保留。ADR 0022 的队列扩展仅作历史，由 [ADR 0026](architecture/adr/0026-remove-project-task-queue.md) 取代，细则见[删除专题](PROJECT_TASK_QUEUE.md)。最终 SHA Actions 待验。
 

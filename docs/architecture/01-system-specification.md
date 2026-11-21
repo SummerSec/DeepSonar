@@ -33,8 +33,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：完整移除项目任务队列 UI、API、专属字段/类型、权限映射、调度资格/占位/推进/对账和数据库专属结构，不保留隐藏入口、开关或兼容分支。任务统一使用既有 Scheduler，保留全局、项目、Provider、凭据、模型及 Agent CLI 并发、定时、任务暂停/取消、重试、人工续做和历史；达到上限仍等待，不超发、不重复启动。
 - **决策来源**：#1180 明确调整 #1018 的同一需求，减少额外操作和理解成本；保留原需求 ID 追溯，由 [ADR 0026](adr/0026-remove-project-task-queue.md) 取代 ADR 0019，不将产品简化描述为已证实的并发缺陷。
-- **升级约束**：schema 78 受控重建仅对旧队列 paused=true 的非成功条目保全任务暂停，含无活动 Job 的 active 及已封存 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有任务暂停原文保留，已确认失败且队列恢复者不再次暂停。其余命中者转既有 execution_control.paused=true，不把删除功能当作启动同意。原可执行待办交普通调度，运行中身份和冻结历史保持。
-- **实现状态**：队列专属实现已删除，schema 78 通过受控重建保全停止意图，回归接入既有 Actions，最终 SHA Actions 待验，不表示已发布或已升级。人工等待不再以完整任务占位阻塞其它任务，任务自身与原授权/预算/效果门继续生效。
+- **升级约束**：schema 79 受控重建仅对旧队列 paused=true 的非成功条目保全任务暂停，含无活动 Job 的 active 及已封存 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有任务暂停原文保留，已确认失败且队列恢复者不再次暂停。其余命中者转既有 execution_control.paused=true，不把删除功能当作启动同意。原可执行待办交普通调度，运行中身份和冻结历史保持。
+- **实现状态**：队列专属实现已删除，schema 79 通过受控重建保全停止意图，回归接入既有 Actions，最终 SHA Actions 待验，不表示已发布或已升级。人工等待不再以完整任务占位阻塞其它任务，任务自身与原授权/预算/效果门继续生效。
 - **代码入口**：[任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[任务执行控制](../../apps/scheduler/src/task-execution-control.ts)、[重建](../../apps/scheduler/src/schema-rebuild.ts)、[基线](../../database/schema.sql)。
 - **验证证据**：沿用 `pnpm ci:unit:dispatch-limits`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:web-facts`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:migrations`、`pnpm ci:integration:recovery`、`pnpm ci:integration:platform-api`、`pnpm ci:integration:finding-report` 及文档门禁；验证旧基线暂停分类、已有暂停原文与 jobs 冻结/events/audit 一致，场景见[删除专题](../PROJECT_TASK_QUEUE.md#决策与验收边界)。最终 SHA Actions 待验。
 

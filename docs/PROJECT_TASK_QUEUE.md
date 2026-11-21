@@ -19,7 +19,7 @@
 
 ## 升级安全
 
-schema 78 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
+schema 79 在受控重建中，仅对旧队列 paused=true 的非成功条目投影任务暂停，包含无活动 Job 的 active 条目及已封存待续做的 waiting_human；仅 claimed/provisioning/running 的 Canvas 排除投影。已有 execution_control.paused=true 的控制内容原样保留，其余命中任务设置 execution_control.paused=true。已确认失败且旧队列已恢复者不再暂停，原本可执行的待办交普通调度。删除功能不构成启动同意，暂停任务以后沿既有任务继续执行入口恢复。
 
 数据库沿用唯一 schema 基线、备份和受控重建，旧库或结构漂移启动仍 fail closed。具体版本以 [schema-version.ts](../apps/scheduler/src/schema-version.ts) 与 [schema.sql](../database/schema.sql) 为准。无法识别旧队列结构时在破坏性操作前明确拒绝，不猜测暂停意图。停止意图只在 [schema-rebuild.ts](../apps/scheduler/src/schema-rebuild.ts) 删除旧结构前保全到候选库，不延续旧队列语义，新运行时不读取旧表。
 
