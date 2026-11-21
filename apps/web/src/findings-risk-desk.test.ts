@@ -38,7 +38,9 @@ test("task finding filters preserve every verification state and reset paginatio
 
 test("task finding page wires translated states to scoped server queries and URL pagination", () => {
   const source = readFileSync(new URL("./pages/TaskCanvasPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /useFindingsQuery\(\s*"global", undefined, taskFindingQueryFilters\(searchParams, canvasId\),\s*searchParams\.get\("cursor"\)/);
+  assert.match(source, /const findingFilters = taskFindingQueryFilters\(searchParams, canvasId\)/);
+  assert.match(source, /useFindingsQuery\(\s*"global", undefined, findingFilters, findingCursor/);
+  assert.match(source, /const findingList = hasFindingQuery \? filteredFindings : findingHead/);
   assert.match(source, /tab === "findings"/);
   assert.match(source, /const visibleFindings = findingList\.rows/);
   assert.match(source, /updateFindingQuery\(searchParams, key, values\)/);
