@@ -24,8 +24,8 @@ test("task knowledge closeout waits for settled work and recovers one safe node 
       WHERE canvas_id=${task.canvasId} AND node_type='knowledge_closeout'`;
     await db`INSERT INTO canvas_nodes(id,canvas_id,node_type,title,status,created_at)
       SELECT ${rootNodeId}::uuid,${task.canvasId}::text,'root','task','reporting',created_at FROM jobs WHERE id=${task.jobId}`;
-    await db`INSERT INTO jobs(id,project_id,canvas_id,type,status)
-      VALUES(${reportJobId},${task.projectId},${task.canvasId},'report','succeeded')`;
+    await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+      VALUES(${reportJobId},${task.projectId},${task.canvasId},'report','succeeded','{}'::jsonb)`;
     await db`INSERT INTO task_reports(canvas_id,project_id,report_job_id,version,status,input_uri,input_sha256)
       VALUES(${task.canvasId},${task.projectId},${reportJobId},1,'succeeded','fixture',${hash})`;
     await db`INSERT INTO project_knowledge_receipts(id,project_id,job_id,attempt_id,operation,idempotency_key,input_digest,event_id,result_json)
@@ -112,8 +112,8 @@ test("task report settles after a failed projection and recovery ignores a super
         VALUES(${receiptRef},${task.projectId},${task.jobId},${task.attemptId},'submit_task_knowledge_suggestion',
           ${randomUUID()},${inputHash},${randomUUID()},${db.json({ result: "suggestions", root_node_id: rootNodeId,
             count: 1, receipt_ref: receiptRef, blob_hash: "e".repeat(64) })})`;
-      await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,payload_json)
-        VALUES(${reportJobId},${task.projectId},${task.canvasId},'report','succeeded',${db.json({
+      await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
+        VALUES(${reportJobId},${task.projectId},${task.canvasId},'report','succeeded','{}'::jsonb,${db.json({
           kind: "task_report", report_version: 1, report_input_json: inputJson,
           report_input_sha256: inputHash, report_input_uri: inputUri,
         })})`;

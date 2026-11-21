@@ -174,7 +174,9 @@ if (!testDatabaseUrl) {
       const evidenceId = randomUUID();
       await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,verification_status)
         VALUES(${factId},${canvasId},${jobId},'fact','Published fact','unverified')`;
-      await sql`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type) VALUES(${jobId},${factKey},1,${attemptId},'fact')`;
+      await sql`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type)
+        SELECT ${jobId}::uuid,${factKey}::text,COALESCE(MAX(job_seq),0)+1,${attemptId}::uuid,'fact'
+        FROM events WHERE job_id=${jobId}`;
       const [{ id: artifactId }] = await sql<{ id: string }[]>`INSERT INTO artifacts(project_id,canvas_id,job_id,node_id,artifact_key,kind,source_event_id,source_operation)
         VALUES(${projectId},${canvasId},${jobId},${factId},'sample-fact','fact',${factKey},'emit_fact') RETURNING id`;
       await sql`INSERT INTO artifact_evidence(id,artifact_id,statement) VALUES(${evidenceId},${artifactId},'Published evidence')`;

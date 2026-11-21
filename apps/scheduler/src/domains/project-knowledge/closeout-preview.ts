@@ -28,6 +28,7 @@ export async function readTaskKnowledgeCloseout(db: KnowledgeDb, projectId: stri
       AND r.result_json->>'result'='suggestions'
     ORDER BY fp.value,r.created_at,r.id,fp.ordinality
   ) chosen ORDER BY chosen.created_at,chosen.id,chosen.ordinality LIMIT ${page.limit + 1} OFFSET ${page.offset}`;
+  // A page is returned only when every selected candidate still has a valid source and target.
   const items = [];
   for (const row of rows.slice(0, page.limit)) {
     const blobHash = hash.safeParse(row.blob_hash);

@@ -42,14 +42,15 @@ export async function suggestionSourceHashes(db: KnowledgeDb, owner: SuggestionO
     const content = { kind: "fact", body: row.body_json, verification_status: row.verification_status };
     return { integrity: sha256(canonical({ ...content, id: row.id })), content: sha256(canonical(content)) };
   }
-  const [row] = await db`SELECT e.id,e.statement,e.payload_json,e.sha256 FROM artifact_evidence e
+  const [row] = await db`SELECT e.id,e.kind,e.statement,e.polarity,e.uri,e.payload_json,e.sha256 FROM artifact_evidence e
     JOIN artifacts a ON a.id=e.artifact_id
     JOIN events ev ON ev.job_id=a.job_id AND ev.event_id=a.source_event_id
     WHERE e.id=${ref.ref} AND a.project_id=${owner.projectId} AND a.canvas_id=${owner.canvasId} AND a.job_id=${owner.jobId}
       AND a.status='submitted' AND ev.attempt_id=${owner.attemptId}
       AND octet_length(e.statement)+octet_length(e.payload_json::text)<=${KNOWLEDGE_LIMITS.readBytes}`;
   if (!row) return undefined;
-  const content = { kind: "evidence", statement: row.statement, payload: row.payload_json, sha256: row.sha256 };
+  const content = { kind: "evidence", evidenceKind: row.kind, statement: row.statement, polarity: row.polarity,
+    uri: row.uri, payload: row.payload_json, sha256: row.sha256 };
   return { integrity: sha256(canonical({ ...content, id: row.id })), content: sha256(canonical(content)) };
 }
 

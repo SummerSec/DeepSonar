@@ -81,7 +81,7 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /其它 CLI 与出口不得假定自动脱敏/);  // Reviewed static Skill now includes the env-dump guard (#1032 P2-5).
   assert.equal(
     DEEPSONAR_CONTROL_SKILL_SHA256,
-    "db45ce351bfea9d5f465a1c1a3c5c613b8fdd0333a529a206ab285ae3edc6ec1",
+    "f23cacd030e515430e368baf1c7d8e62af7075dd6c155f46e6fc187f760e2827",
   );
 });
 
