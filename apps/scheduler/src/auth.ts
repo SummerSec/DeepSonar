@@ -76,6 +76,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /projects/:id/knowledge": "projects:read",
   "GET /projects/:id/knowledge/backfill": "projects:read",
   "GET /projects/:id/knowledge/closeout/:rootId": "projects:read",
+  "POST /projects/:id/knowledge/closeout/:rootId/evaluate": "projects:write",
   "GET /projects/:id/knowledge/activity": "projects:read",
   "GET /projects/:id/knowledge/receipts": "projects:read",
   "GET /projects/:id/knowledge/receipts/:receiptId": "projects:read",

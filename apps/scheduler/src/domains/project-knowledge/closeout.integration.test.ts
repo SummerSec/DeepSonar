@@ -39,12 +39,13 @@ test("task suggestions are private, attributable, idempotent and readable withou
     setSharedAssetBlobStoreForTests(store);
     const app = Fastify();
     let scopes = ["projects:read", "tasks:read"];
+    let actorName = "reader";
     app.addHook("onRequest", async request => {
-      request.actor = { type: "api_token", id: tokenId, name: "reader", projectId: owner.projectId, scopes };
+      request.actor = { type: "api_token", id: tokenId, name: actorName, projectId: owner.projectId, scopes };
     });
     registerProjectKnowledgeRoutes(app, { db });
     const item = { kind: "memory", title: "Result", scope: "Known fixture", content: "Useful measurement", evidence_refs: [{ kind: "fact", ref: factId }] };
-    const secondItem = { ...item, title: "Independent result", content: "Another observation", evidence_refs: [{ kind: "fact", ref: secondFactId }] };
+    const secondItem = { ...item, kind: "skill", title: "Independent result", content: "Another observation", evidence_refs: [{ kind: "fact", ref: secondFactId }] };
     const context = { ...owner, tokenId, operationId: operation, eventId: randomUUID(), idempotencyKey: randomUUID(), input: { result: "suggestions", items: [item, secondItem] } };
     const runtime = { attemptId: owner.attemptId, secrets: ["fixture-secret-value"] };
     const submit = (request = context, origin = runtime) => submitTaskKnowledgeSuggestion(request, db, origin);
@@ -87,12 +88,62 @@ test("task suggestions are private, attributable, idempotent and readable withou
       const url = `${path}/closeout/${rootId}`;
       const read = await app.inject({ url });
       assert.equal(read.statusCode, 200);
-      assert.deepEqual(read.json().items, [item, secondItem]);
+      const [memory, skill] = read.json().items;
+      assert.deepEqual(read.json().items.map(({ candidate_ref, ...value }: Record<string, unknown>) => {
+        assert.match(String(candidate_ref), /^[a-f0-9]{64}$/);
+        return value;
+      }), [item, secondItem]);
+      assert.equal(read.json().can_evaluate, false);
+      const send = (ref: string) => app.inject({ method: "POST", url: `${url}/evaluate`, payload: { candidate_ref: ref } });
+      assert.equal((await send(memory.candidate_ref)).statusCode, 403);
+      scopes = ["projects:read", "tasks:read", "projects:write"];
+      const [first, repeat] = await Promise.all([send(memory.candidate_ref), send(memory.candidate_ref)]);
+      assert.equal(first.statusCode, 202, first.body);
+      assert.equal(repeat.statusCode, 202, repeat.body);
+      assert.deepEqual(first.json(), repeat.json());
+      const concurrentAudits = await db`SELECT after_json FROM audit_logs WHERE project_id=${owner.projectId}
+        AND action='project_knowledge.closeout_evaluation_requested' AND resource_id=${first.json().work_ref}`;
+      assert.deepEqual(concurrentAudits.map(row => row.after_json.reused).sort(), [false, true]);
+      actorName = "repeat-reader";
+      const reused = await send(memory.candidate_ref);
+      assert.equal(reused.statusCode, 202, reused.body);
+      assert.deepEqual(reused.json(), first.json());
+      const repeatedAudits = await db`SELECT actor_type,actor_id,request_id,result,after_json FROM audit_logs
+        WHERE project_id=${owner.projectId} AND action='project_knowledge.closeout_evaluation_requested'
+          AND resource_id=${first.json().work_ref}`;
+      assert.equal(repeatedAudits.length, 3);
+      assert.equal(new Set(repeatedAudits.map(row => row.request_id)).size, 3);
+      const repeatActorAudit = repeatedAudits.find(row => row.actor_id === actorName);
+      assert.ok(repeatActorAudit);
+      assert.equal(repeatActorAudit.actor_type, "api_token");
+      assert.equal(repeatActorAudit.result, "ok");
+      assert.deepEqual(repeatActorAudit.after_json, { root_id: rootId, candidate_ref: memory.candidate_ref, reused: true });
+      assert.ok(!JSON.stringify(repeatedAudits).includes(item.content));
+      actorName = "reader";
+      const skillWork = await send(skill.candidate_ref);
+      assert.equal(skillWork.statusCode, 202, skillWork.body);
+      assert.notEqual(skillWork.json().work_ref, first.json().work_ref);
+      assert.equal((await db`SELECT id FROM project_knowledge_work WHERE project_id=${owner.projectId}`).length, 2);
+      const queued = (await app.inject({ url })).json();
+      assert.equal(queued.can_evaluate, true);
+      assert.deepEqual(queued.items.map((row: {evaluation: unknown}) => row.evaluation), [
+        { work_ref: first.json().work_ref, status: "queued" }, { work_ref: skillWork.json().work_ref, status: "queued" },
+      ]);
+      await db`UPDATE project_knowledge_work SET state='blocked',reason='closeout_source_unavailable'
+        WHERE id=${first.json().work_ref}`;
+      await db`UPDATE artifacts SET status='superseded',superseded_at=now() WHERE node_id=${factId}`;
       scopes = ["projects:read"];
       assert.deepEqual((await app.inject({ url })).json(), { status: "restricted", items: [], next_offset: null });
-      scopes = ["projects:read", "tasks:read"];
-      await db`UPDATE artifacts SET status='superseded',superseded_at=now() WHERE node_id=${factId}`;
-      assert.deepEqual((await app.inject({ url })).json(), { status: "restricted", items: [], next_offset: null });
+      const activity = await app.inject({ url: `${path}/activity` });
+      assert.equal(activity.statusCode, 200, activity.body);
+      assert.deepEqual(activity.json().items, []);
+      assert.equal(activity.json().summary.blocked_work, 0);
+      assert.ok(!activity.body.includes(owner.canvasId));
+      scopes = ["projects:read", "tasks:read", "projects:write"];
+      assert.deepEqual((await app.inject({ url })).json(), {
+        status: "restricted", items: [], next_offset: null, evaluation_source_unavailable: true,
+      });
+      assert.equal((await send(memory.candidate_ref)).statusCode, 409);
     } finally {
       await app.close();
       setSharedAssetBlobStoreForTests(null);

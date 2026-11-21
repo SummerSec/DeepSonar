@@ -393,7 +393,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-KNOW-001 项目知识的受治理生命周期
 
-- **任务会话收尾（#1197 首期）**：普通业务 Job 按冻结权限在原会话可选提交有出处的项目知识建议。任务正式成功后在原画布汇总。历史资格只读预览。自动评测和发布归后续阶段。[设计](../superpowers/specs/2026-11-21-task-knowledge-closeout-design.md)
+- **任务会话收尾（#1197）**：普通业务 Job 按冻结权限在原会话可选提交有出处的项目知识建议。任务正式成功后在原画布汇总。历史资格只读预览。项目操作者可手动送评单条候选，结果在原节点显示，候选保留为草稿。[设计](../superpowers/specs/2026-11-21-task-knowledge-closeout-design.md)
 
 #1193 在知识页显示显式反馈覆盖率和缺口，缺反馈的拉取保持效果未知。验证入口为 `pnpm ci:integration:project-knowledge` 与 `pnpm ci:unit:web-facts`。
 

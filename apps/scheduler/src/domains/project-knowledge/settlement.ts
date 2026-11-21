@@ -2,14 +2,15 @@ import type { ReviewProjectKnowledgePayload } from "@deepsonar/shared-types";
 import type { KnowledgeActor } from "./inputs.js";
 import { requirePassingKnowledgeBehavior } from "./behavior-policy.js";
 import { reject, type KnowledgeDb } from "./types.js";
+import { isCloseoutEvaluation } from "./closeout-evaluation-key.js";
 import { requireKnowledgeCasePolicy } from "./case-policy.js";
 
 export async function reviewKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, input: ReviewProjectKnowledgePayload,
   candidateMetadata?: { hash: string; title: string; keywords: string[] }): Promise<Record<string, unknown>> {
-  const [assignment] = await tx`SELECT a.work_id,a.proposal_id,a.stage,a.input_digest,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash
+  const [assignment] = await tx`SELECT a.work_id,a.proposal_id,a.stage,a.input_digest,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,w.trigger_key
     FROM project_knowledge_job_assignments a JOIN project_knowledge_work w ON w.id=a.work_id AND w.project_id=a.project_id
     WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId} FOR UPDATE OF w`;
-  if (!assignment || assignment.stage !== "reviewer" || assignment.proposal_id !== input.proposal_ref || assignment.input_digest !== input.input_digest
+  if (!assignment || isCloseoutEvaluation(assignment.trigger_key) || assignment.stage !== "reviewer" || assignment.proposal_id !== input.proposal_ref || assignment.input_digest !== input.input_digest
     || assignment.state !== "running" || assignment.work_stage !== "reviewer" || assignment.active_job_id !== actor.jobId)
     return reject("KNOWLEDGE_SCOPE_DENIED", "Reviewer assignment does not match this active proposal");
   const [proposal] = await tx`SELECT * FROM project_knowledge_proposals WHERE id=${input.proposal_ref} AND project_id=${actor.projectId} FOR UPDATE`;
