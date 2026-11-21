@@ -73,15 +73,25 @@ test("activity separates registered sources, queued collection, active products 
       await db`UPDATE project_knowledge_items SET status=${state},active_version_id=${state === "active" ? version : null} WHERE id=${item}`;
       versions.push(version);
     }
+    const unreported = [];
+    for (const status of ["succeeded", "failed", "cancelled"] as const) {
+      const consumer = await seedKnowledgeJob(db, owner.projectId);
+      await db`UPDATE jobs SET status=${status},finished_at=now() WHERE id=${consumer.jobId}`;
+      unreported.push(consumer);
+    }
     for (const [consumer, ownerProject, version, outcome] of [
       [owner, owner.projectId, versions[0], "success"], [owner, owner.projectId, versions[1], "failure"],
-      [owner, owner.projectId, versions[0], null], [owner, other.projectId, versions[3], "success"],
+      ...unreported.map(consumer => [consumer, owner.projectId, versions[0], null] as const),
+      [owner, other.projectId, versions[3], "success"],
       [other, owner.projectId, versions[0], "success"], [owner, null, null, "success"],
     ] as const) {
+      const feedback = outcome ? db.json({ outcome, reason: "private feedback body", next_action: "reevaluate",
+        evidence_refs: [{ kind: "fact", ref: randomUUID(), content_hash: hash }] }) : null;
       await db`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,owner_project_id,version_id,feedback_json)
-        VALUES(${consumer.projectId},${consumer.jobId},${consumer.attemptId},${randomUUID()},${hash},${ownerProject},${version ?? null},
-          ${outcome ? db.json({ outcome, reason: "private feedback body" }) : null})`;
+        VALUES(${consumer.projectId},${consumer.jobId},${consumer.attemptId},${randomUUID()},${hash},${ownerProject},${version ?? null},${feedback})`;
     }
+    const readFeedback = async () => [...await db`SELECT id,feedback_json FROM project_knowledge_usages ORDER BY id`];
+    const originalFeedback = await readFeedback();
     const app = Fastify();
     app.addHook("onRequest", async req => { req.actor = { type: "api_token", id: "fixture", name: "fixture",
       projectId: owner.projectId, scopes: ["projects:read"] }; });
@@ -92,7 +102,7 @@ test("activity separates registered sources, queued collection, active products 
       assert.equal(res.statusCode, 200, res.body);
       assert.deepEqual(res.json().summary, { registered_sources: 4, collected_sources: 2, skipped_sources: 2, pending_sources: 1,
         active_memory: 1, active_skills: 1, draft_items: 1, completed_work: 0, blocked_work: 1,
-        usage_count: 3, feedback_count: 2, successful_feedback: 1 });
+        usage_count: 5, feedback_count: 2, successful_feedback: 1 });
       assert.equal(res.json().collection.state, "busy");
       assert.equal(res.json().collection.next_collection_at, null);
       assert.equal(res.json().items.length, 1);
@@ -101,6 +111,8 @@ test("activity separates registered sources, queued collection, active products 
       assert.equal(res.json().next_offset, 1);
       const next = await app.inject({ method: "GET", url: `${path}?limit=1&offset=1` });
       assert.equal(next.json().next_offset, null);
+      assert.deepEqual(next.json().summary, res.json().summary, "feedback counts are independent of work pagination");
+      assert.deepEqual(await readFeedback(), originalFeedback, "repeated reads preserve explicit feedback and leave all missing feedback unknown");
       assert.deepEqual(next.json().collection, res.json().collection, "collection status is project-level, independent of work pagination");
       const items = [...res.json().items, ...next.json().items];
       assert.equal(items.find(row => row.id === queued).state, "pending", "collection queues work; it does not activate knowledge");
