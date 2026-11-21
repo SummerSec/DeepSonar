@@ -1,3 +1,4 @@
+import { retiredQueueTargetProjection } from "./schema-rebuild-queue-retirement.js";
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -133,6 +134,7 @@ export function buildCopyInsertSql(options: {
   identityColumns: string[];
   sourceSchema?: string;
   resetRoleIdentity?: boolean;
+  retireQueueStops?: boolean;
 }): string {
   if (options.columns.length === 0) {
     throw new Error(`table ${options.table} has no overlapping columns to copy`);
@@ -146,10 +148,13 @@ export function buildCopyInsertSql(options: {
   const projection = options.resetRoleIdentity && options.table === "role_configs"
     ? columns.map((column) => column === "agent_cli" ? "NULL"
       : column === "model" ? 'CASE WHEN "project_id" IS NULL THEN "model" ELSE NULL END' : quoteIdent(column)).join(", ")
-    : quotedColumns;
+    : options.retireQueueStops && options.table === "canvases"
+      ? columns.map((column) => column === "target_json"
+        ? retiredQueueTargetProjection(quoteIdent(sourceSchema)) : `source.${quoteIdent(column)}`).join(", ")
+      : quotedColumns;
   return (
     `INSERT INTO public.${quoteIdent(options.table)} (${quotedColumns})${overriding} ` +
-    `SELECT ${projection} FROM ${quoteIdent(sourceSchema)}.${quoteIdent(options.table)}`
+    `SELECT ${projection} FROM ${quoteIdent(sourceSchema)}.${quoteIdent(options.table)}${options.retireQueueStops && options.table === "canvases" ? " AS source" : ""}`
   );
 }
 
@@ -609,6 +614,9 @@ export async function rebuildSchemaToLatest(
           identityColumns: [...target.identity],
           sourceSchema: REBUILD_STAGING_SCHEMA,
           resetRoleIdentity: options.resetRoleIdentity,
+          retireQueueStops: sourceTables.includes("project_task_queues")
+            && sourceTables.includes("project_task_queue_items")
+            && !targetColumns.has("project_task_queues"),
         }),
       );
       copiedTables.push(table);

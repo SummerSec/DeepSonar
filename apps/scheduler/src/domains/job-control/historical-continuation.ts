@@ -1,4 +1,3 @@
-import { enqueueProjectTask } from "../project-task/task-queue-store.js";
 import { recordDurableSystemAudit } from "../../audit.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -108,9 +107,6 @@ export async function createHistoricalContinuation(sourceId: string, input: z.in
       return deny("TARGET_AUTHORIZATION_BLOCKED");
     for (const file of manifest.data.files) await readCheckpointFile(String(request.id), file);
     await readAcknowledgedHumanAttachments(sourceId, db);
-    const [queue] = await db`SELECT q.paused,i.state FROM project_task_queues q JOIN project_task_queue_items i
-      ON i.project_id=q.project_id WHERE i.canvas_id=${source.canvas_id}`;
-    if (queue?.state === "yielded") return deny("HUMAN_CONTINUATION_WAITING_TURN");
     const targetId = randomUUID(), replyId = randomUUID(), nodeId = randomUUID();
     await reserveHistoricalPlanContinuation(db, source, canvas);
     await db`INSERT INTO jobs(id,project_id,canvas_id,parent_job_id,finding_id,type,status,priority,payload_json,
@@ -118,9 +114,6 @@ export async function createHistoricalContinuation(sourceId: string, input: z.in
       VALUES(${targetId},${source.project_id},${source.canvas_id},${source.parent_job_id},${source.finding_id},${source.type},
         'pending',${source.priority},${db.json(source.payload_json)},${db.json(source.agent_snapshot_json)},
         ${source.timeout_sec},${source.followup_depth},${rootId})`;
-    if (queue && !["active", "queued"].includes(String(queue.state))) {
-      await enqueueProjectTask(db, String(source.project_id), String(source.canvas_id));
-    }
     await recordJobSharedAssets(db, targetId, (source.agent_snapshot_json as AgentRuntimeSnapshot).shared_assets ?? []);
     await db`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
       VALUES(${nodeId},${source.canvas_id},${targetId},'job','历史断点续做','pending',${db.json({ source_job_id: sourceId })})`;

@@ -166,7 +166,6 @@ import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb, noteCl
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { readPlatformClaimsControl } from "./domains/platform-claims/store.js";
-import { canClaimQueuedTask, markQueuedTaskClaimed, reconcileProjectTaskQueues } from "./domains/project-task/task-queue-store.js";
 import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
 import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./opensandbox-health.js";
 import {
@@ -663,7 +662,6 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       return stop;
     }
     platformClaimsPauseLogged = null;
-    await reconcileProjectTaskQueues(tx as unknown as typeof sql);
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
     // global_settings is the scheduler-wide hard cap; per-project
     // maxConcurrentJobs may only tighten maxJobsPerProject at claim time.
@@ -708,7 +706,10 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     const project = await nextFairProject(tx as unknown as typeof sql, skippedProjects);
     if (!project) return stop;
     const counts = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
-    type PendingCandidate = DispatchCandidate & { id: string; priority: number; created_at_key: string; canvas_project_id: string | null };
+    type PendingCandidate = DispatchCandidate & {
+      id: string; priority: number; created_at_key: string;
+      canvas_project_id: string | null; canvas_status: string | null;
+    };
     const claimed: { id: string }[] = [];
     const projection = tx`
       SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
@@ -719,18 +720,18 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
              j.agent_snapshot_json->>'model' AS model,
              j.agent_snapshot_json->>'upstream_model' AS upstream_model,
              p.config_json AS project_config_json, c.public_metadata_json AS credential_metadata,
-             cv.target_json AS canvas_target_json, cv.project_id AS canvas_project_id
+             cv.target_json AS canvas_target_json, cv.project_id AS canvas_project_id, cv.status AS canvas_status
       FROM jobs j
       JOIN projects p ON p.id = j.project_id
       LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
       LEFT JOIN canvases cv ON cv.id = j.canvas_id`;
     const eligible = async (job: PendingCandidate, graphBatch: GraphEligibilityBatch): Promise<boolean> => {
       const skip = (reason: string): false => { logClaimSkip(String(job.id), reason); return false; };
+      if (job.canvas_id && job.canvas_status !== "active") return skip("canvas_inactive");
       if (job.canvas_id && (job.canvas_project_id !== job.project_id || canvasExecutionIsPaused(job.canvas_target_json))) return skip("canvas_paused");
       if (canvasScheduleBlocksDispatch(job.canvas_target_json)) return skip("canvas_schedule");
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       if (await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job, graphBatch)) return skip("graph_ineligible");
-      if (job.canvas_id && !await canClaimQueuedTask(/* SAFETY: same postgres.js transaction handle. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id), job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) return skip("project_task_queue");
       const dispatchSkip = dispatchSkipReason(job, counts, rules, projectJobLimitForCandidate(job, rules.maxJobsPerProject));
       if (["provider", "credential", "model"].includes(dispatchSkip ?? "")
         && (job.agent_snapshot_json as AgentRuntimeSnapshot | undefined)?.credential_selection) noteCredentialCapacityWake();
@@ -786,7 +787,6 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       if (!(await eligible(job, graphBatch))) continue;
       const row = await lifecycle.claimPendingJob(job.id);
       if (!row) continue;
-      if (job.canvas_id && !(job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) await markQueuedTaskClaimed(/* SAFETY: same postgres.js tx handle; the store only uses the tagged template interface. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id));
       await createOrGetActiveAttempt(
         tx as unknown as typeof sql, job.id, attemptSnapshotIdentity(job.agent_snapshot_json), { "deepsonar.job": job.id },
       );

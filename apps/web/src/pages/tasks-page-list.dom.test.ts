@@ -39,7 +39,6 @@ test("task lists and counters belong to the selected project and status through 
   let nextTimer = 0;
   const mocks = [
     mock.method(api, "projects", async () => []),
-    // An unauthenticated context keeps the independent project queue panel inactive.
     mock.method(api, "authStatus", async () => ({ auth_required: true, has_users: true, bootstrap_available: false, default_admin_credentials_active: false, session_ttl_days: 1 })),
     mock.method(api, "canvases", (projectId: string, options: { status: string }) => {
       const result = deferred();
