@@ -517,7 +517,7 @@ if (!testDatabaseUrl) {
         SELECT (SELECT count(*)::int FROM canvases) AS canvases, (SELECT count(*)::int FROM jobs) AS jobs`;
       const rejectedCreate = await app.inject({
         method: "POST", url: `/projects/${projectId}/tasks`, headers,
-        payload: { title: "Revoked creation", content, task_contract: contract, target_authorization: forgedGrant },
+        payload: { title: "Revoked creation", content, task_contract: contract },
       });
       assert.equal(rejectedCreate.statusCode, 409, rejectedCreate.payload);
       assert.equal(rejectedCreate.json().error_code, "task_contract_blocked");
