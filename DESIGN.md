@@ -474,7 +474,7 @@ v0.6.3 集成核对（2026-11-01）：[#831](https://github.com/SummerSec/DeepSo
 
 ## 14. 仓库地图与事实入口
 
-#1180 已完整删除项目任务队列，任务统一使用既有 Scheduler 及全局/项目/Provider/凭据/模型/Agent CLI 并发。保留普通创建、定时、任务自身暂停/取消、重试、报告、人工续做和历史；不再等待另一任务整体完成或人工回复，不保留队列 UI/API/字段/存储/资格及兼容分支。schema 78 受控重建保全旧暂停意图，原运行不重复领取、冻结历史不改写。细则见[删除专题](docs/PROJECT_TASK_QUEUE.md)和 [ADR 0026](docs/architecture/adr/0026-remove-project-task-queue.md)，最终 SHA Actions 待验。
+#1180 已完整删除项目任务队列，任务统一使用既有 Scheduler 及全局/项目/Provider/凭据/模型/Agent CLI 并发。保留普通创建、定时、任务自身暂停/取消、重试、报告、人工续做和历史；不再等待另一任务整体完成或人工回复，不保留队列 UI/API/字段/存储/资格及兼容分支。schema 79 受控重建保全旧暂停意图，原运行不重复领取、冻结历史不改写。细则见[删除专题](docs/PROJECT_TASK_QUEUE.md)和 [ADR 0026](docs/architecture/adr/0026-remove-project-task-queue.md)，最终 SHA Actions 待验。
 
 | 路径 | 职责 |
 | --- | --- |
