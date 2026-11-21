@@ -71,6 +71,7 @@ export interface KnowledgeCloseoutSuggestion {
 export interface KnowledgeCloseout {
   status: KnowledgeCloseoutStatus;
   can_evaluate?: boolean;
+  evaluation_source_unavailable?: boolean;
   items?: KnowledgeCloseoutSuggestion[];
   next_offset: number | null;
 }

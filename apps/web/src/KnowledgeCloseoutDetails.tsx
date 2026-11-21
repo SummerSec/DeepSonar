@@ -69,6 +69,7 @@ export function KnowledgeCloseoutDetails({ projectId, rootId, allowEvaluation = 
     className="text-acc-300 hover:underline" onClick={() => setRefresh(value => value + 1)}>重试</button></div>;
   return <section aria-label="本轮知识沉淀" className="space-y-3 text-sm text-zinc-300">
     <p>{knowledgeCloseoutStatusLabel(result.status)}</p>
+    {result.evaluation_source_unavailable && <p className="text-xs text-zinc-300">已有建议送评，原证据或修订版本已不可用。</p>}
     {result.status === "suggestions_available" && <>
       <p className="text-xs text-zinc-400">供参考的建议，尚未生效。</p>
       {allowEvaluation && (sendError || result.items?.some(item => item.evaluation?.status === "queued" || item.evaluation?.status === "running")) &&

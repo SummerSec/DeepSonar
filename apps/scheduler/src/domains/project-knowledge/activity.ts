@@ -1,3 +1,4 @@
+import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
 import type { KnowledgeDb } from "./types.js";
 import { readProjectCollectionStatus } from "./collection-policy.js";
 
@@ -46,7 +47,13 @@ interface ActivityWork {
 export async function readKnowledgeActivity(db: KnowledgeDb, projectId: string, page: { limit: number; offset: number }) {
   const [result] = await db<{ summary: Record<string, number>; items: ActivityWork[];
     skipped_sources: Array<{ job_id: string; reason: string; at: string }> }[]>`
-    WITH registered AS (
+    WITH private_work AS (
+      SELECT id FROM project_knowledge_work WHERE project_id=${projectId}
+        AND trigger_key LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"}
+    ), private_versions AS (
+      SELECT DISTINCT p.candidate_version_id AS id FROM project_knowledge_proposals p JOIN private_work w ON w.id=p.work_id
+      WHERE p.project_id=${projectId}
+    ), registered AS (
       SELECT DISTINCT resource_id FROM audit_logs
       WHERE project_id=${projectId} AND action='project_knowledge.source_registered'
         AND actor_type='system' AND actor_id='scheduler' AND result='ok'
@@ -80,9 +87,15 @@ export async function readKnowledgeActivity(db: KnowledgeDb, projectId: string, 
         (SELECT count(*)::int FROM project_knowledge_items i JOIN project_knowledge_versions v
           ON v.project_id=i.project_id AND v.item_id=i.id AND v.id=i.active_version_id
           WHERE i.project_id=${projectId} AND i.kind='skill' AND i.status='active' AND v.revoked_at IS NULL) AS active_skills,
-        (SELECT count(*)::int FROM project_knowledge_items WHERE project_id=${projectId} AND status='draft') AS draft_items,
-        (SELECT count(*)::int FROM project_knowledge_work WHERE project_id=${projectId} AND state='completed') AS completed_work,
-        (SELECT count(*)::int FROM project_knowledge_work WHERE project_id=${projectId} AND state='blocked') AS blocked_work,
+        (SELECT count(*)::int FROM project_knowledge_items i WHERE i.project_id=${projectId} AND i.status='draft'
+          AND (i.active_version_id IS NOT NULL OR (
+            SELECT bool_and(p.id IS NOT NULL) FROM project_knowledge_versions v LEFT JOIN private_versions p ON p.id=v.id
+            WHERE v.project_id=i.project_id AND v.item_id=i.id
+          ) IS NOT TRUE)) AS draft_items,
+        (SELECT count(*)::int FROM project_knowledge_work w WHERE w.project_id=${projectId} AND w.state='completed'
+          AND NOT EXISTS (SELECT 1 FROM private_work p WHERE p.id=w.id)) AS completed_work,
+        (SELECT count(*)::int FROM project_knowledge_work w WHERE w.project_id=${projectId} AND w.state='blocked'
+          AND NOT EXISTS (SELECT 1 FROM private_work p WHERE p.id=w.id)) AS blocked_work,
         (SELECT count(*)::int FROM project_knowledge_usages
           WHERE project_id=${projectId} AND owner_project_id=${projectId}) AS usage_count,
         (SELECT count(*)::int FROM project_knowledge_usages
@@ -100,7 +113,7 @@ export async function readKnowledgeActivity(db: KnowledgeDb, projectId: string, 
       FROM project_knowledge_work w
       LEFT JOIN jobs j ON j.id=w.active_job_id AND j.project_id=${projectId}
       LEFT JOIN canvases c ON c.id=w.canvas_id AND c.project_id=${projectId}
-      WHERE w.project_id=${projectId}
+      WHERE w.project_id=${projectId} AND NOT EXISTS (SELECT 1 FROM private_work p WHERE p.id=w.id)
       ORDER BY w.created_at DESC,w.id DESC LIMIT ${page.limit + 1} OFFSET ${page.offset}
     )
     SELECT (SELECT row_to_json(summary) FROM summary) AS summary,

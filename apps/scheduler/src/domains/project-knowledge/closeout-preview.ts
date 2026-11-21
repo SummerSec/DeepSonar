@@ -71,10 +71,17 @@ export async function readTaskKnowledgeCloseout(db: KnowledgeDb, projectId: stri
   const canvasId = String(node.canvas_id);
   const rows = await candidateRows(db, projectId, rootId, canvasId, page);
   const candidates = [];
+  const unavailableKeys = [];
   for (const row of rows.slice(0, page.limit)) {
     const candidate = await verifiedCandidate(db, projectId, canvasId, row);
-    if (!candidate) return restricted;
-    candidates.push({ ...candidate, fingerprint: String(row.fingerprint) });
+    const fingerprint = String(row.fingerprint);
+    if (candidate) candidates.push({ ...candidate, fingerprint });
+    else unavailableKeys.push(closeoutEvaluationKey(rootId, fingerprint));
+  }
+  if (unavailableKeys.length) {
+    const [submitted] = await db`SELECT 1 FROM project_knowledge_work WHERE project_id=${projectId}
+      AND canvas_id=${canvasId} AND trigger_key=ANY(${unavailableKeys}::text[]) LIMIT 1`;
+    return submitted ? { ...restricted, evaluation_source_unavailable: true } : restricted;
   }
   const items = [];
   for (const { item, target, fingerprint } of candidates) {

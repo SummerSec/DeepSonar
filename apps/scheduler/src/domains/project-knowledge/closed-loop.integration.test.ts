@@ -1,3 +1,4 @@
+import { readKnowledgeActivity } from "./activity.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -214,6 +215,10 @@ test(evaluationOnly ? `closeout ${kind} settles behavior and stays private witho
       assert.equal((await db`SELECT 1 FROM project_knowledge_job_assignments WHERE work_id=${workId} AND stage='reviewer'`).length, 0);
       assert.equal((await db`SELECT 1 FROM project_knowledge_items WHERE project_id=${origin.projectId} AND active_version_id IS NOT NULL`).length, 0);
       assert.equal((await db`SELECT state FROM project_knowledge_proposals WHERE work_id=${workId}`)[0]!.state, "candidate");
+      const activity = await readKnowledgeActivity(db, origin.projectId, { offset: 0, limit: 10 });
+      assert.deepEqual(activity.items, []);
+      assert.equal(activity.summary.completed_work, 0);
+      assert.equal(activity.summary.draft_items, 0);
       return;
     }
     assert.ok(reviewerId);

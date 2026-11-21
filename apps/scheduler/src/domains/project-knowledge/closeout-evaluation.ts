@@ -21,7 +21,7 @@ export async function requestCloseoutEvaluation(db: KnowledgeDb, req: FastifyReq
     generation: Number(target.generation), content_hash: target.content_hash }] : [];
   const content = `适用条件：${item.scope}\n\n${item.content}`;
   const candidate = KnowledgeCandidate.parse({ kind: item.kind, title: item.title,
-    logical_key: target?.logical_key ?? `closeout/${fingerprint}`, keywords: [],
+    logical_key: target?.logical_key ?? `closeout/${rootId}/${fingerprint}`, keywords: [],
     ...(item.kind === "memory" ? { content } : { files: { "SKILL.md": content } }) });
   const draft = await writeKnowledgeBlob(db, candidate);
   const descriptor = await writeKnowledgeBlob(db, { candidate, base_refs: bases, source_refs: refs });

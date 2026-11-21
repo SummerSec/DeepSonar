@@ -108,12 +108,20 @@ test("task suggestions are private, attributable, idempotent and readable withou
       assert.deepEqual(queued.items.map((row: {evaluation: unknown}) => row.evaluation), [
         { work_ref: first.json().work_ref, status: "queued" }, { work_ref: skillWork.json().work_ref, status: "queued" },
       ]);
+      await db`UPDATE project_knowledge_work SET state='blocked',reason='closeout_source_unavailable'
+        WHERE id=${first.json().work_ref}`;
+      await db`UPDATE artifacts SET status='superseded',superseded_at=now() WHERE node_id=${factId}`;
       scopes = ["projects:read"];
       assert.deepEqual((await app.inject({ url })).json(), { status: "restricted", items: [], next_offset: null });
-      scopes = ["projects:read", "tasks:read"];
-      scopes.push("projects:write");
-      await db`UPDATE artifacts SET status='superseded',superseded_at=now() WHERE node_id=${factId}`;
-      assert.deepEqual((await app.inject({ url })).json(), { status: "restricted", items: [], next_offset: null });
+      const activity = await app.inject({ url: `${path}/activity` });
+      assert.equal(activity.statusCode, 200, activity.body);
+      assert.deepEqual(activity.json().items, []);
+      assert.equal(activity.json().summary.blocked_work, 0);
+      assert.ok(!activity.body.includes(owner.canvasId));
+      scopes = ["projects:read", "tasks:read", "projects:write"];
+      assert.deepEqual((await app.inject({ url })).json(), {
+        status: "restricted", items: [], next_offset: null, evaluation_source_unavailable: true,
+      });
       assert.equal((await send(memory.candidate_ref)).statusCode, 409);
     } finally {
       await app.close();
