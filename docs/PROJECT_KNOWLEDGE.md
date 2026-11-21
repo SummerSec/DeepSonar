@@ -160,6 +160,10 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 | `completed_work` / `blocked_work` | 工作流程状态，不是激活产物数或质量通过数 |
 | `usage_count` / `feedback_count` / `successful_feedback` | 反馈 recorded 仅表示已保存，不等于 source_registered/source_collected、work 已创建或知识已生效；同 Job 多条 usage 反馈不变成多个来源。消费项目与 `owner_project_id` 都是本项目；排除全局和跨项目使用。拉取不证明实际采用，反馈及 success 仅为模型报告，保留 usage/provenance，不宣称效果已证明 |
 
+知识页用 `feedback_count / usage_count` 显示反馈覆盖率，并分别显示显式反馈数与未反馈数。没有拉取显示「无样本」，没有反馈的拉取效果保持未知。统计沿用现有项目内口径。
+
+任务工作台的「知识整理历史」展示尚未归档、能确认归属且已收口的知识 Canvas。默认任务列表保留在途或有待处理审核、人工续做、未结算外部效果的记录。切换筛选只改变列表，Canvas 详情及已归档历史仍可访问。页面复用原轮询和活动统计，减少日常任务列表的干扰，反馈缺口可直接看到。
+
 工作项只含 id/state/stage/reason、Job 数、累计运行秒、当前 Job/Canvas 引用、创建/更新时间、可选最新提案状态及 `source_count`。来源数按 source_collected 的 work_ref 关联去重；没有采集链接的显式 work 仅在存在 origin Job 时按 1 回退。Job/Canvas 链接继续受原接口权限控制。
 
 ### 故障退避、试验上下文与修订

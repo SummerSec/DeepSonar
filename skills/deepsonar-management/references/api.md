@@ -94,7 +94,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | DELETE | /tasks/:canvasId | tasks:write | 删除任务 |
 | POST | /tasks/:canvasId/retry | jobs:control | 同画布重试（复用同一 canvas）；compose 在清空前重验冻结种子，失效时返回 `409 COMPOSE_SEEDS_STALE` 且不清空现有数据；当前 Hub RoleConfig/Credential 无法解析时返回 `409 SNAPSHOT_STALE` 且不清空 |
 | POST | /projects/:id/events | tasks:write | 外部事件 `{source, event_id, event_type, title?, content?, data?}`，`source+event_id` 幂等 |
-| GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布）；投影 `execution_state=pausing\|paused\|running`、`execution_active_count` 与 `pending_count` |
+| GET | /projects/:id/canvases | tasks:read | 画布列表（一次任务 = 一个画布）。默认及 `status=active` 跳过已收口的知识整理，`status=knowledge_history` 单独查看这批历史，`archived` 和 `all` 沿用画布状态。投影 `execution_state=pausing\|paused\|running`、`execution_active_count` 与 `pending_count` |
 | GET | /canvases/:id | tasks:read | 画布节点/边；`canvas` 含任务执行控制投影 |
 | GET | /canvases/:id/summary | tasks:read | 画布摘要 |
 | GET | /canvases/:id/delta | tasks:read | `?since=` 增量图数据 |

@@ -1143,7 +1143,7 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "默认及 status=active 将已收口的知识整理移入 status=knowledge_history。status=archived 与 status=all 沿用画布状态。每项投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
   { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",

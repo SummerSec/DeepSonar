@@ -40,6 +40,7 @@ const reasons: Record<string, string> = {
 };
 const reasonLabel = (value: string | null) => value ? reasons[value] ?? "工作无法继续，请查看关联执行记录" : "未提供原因，请查看关联执行记录";
 const date = (value: string) => new Date(value).toLocaleString("zh-CN");
+const feedbackPercent = new Intl.NumberFormat("zh-CN", { style: "percent", maximumFractionDigits: 1 });
 const button = "rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/[.06] focus-visible:outline focus-visible:outline-acc-400 disabled:opacity-40";
 const link = "text-acc-300 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-acc-400";
 const jobHref = (projectId: string, jobId: string) => `/jobs?${new URLSearchParams({ project: projectId, job: jobId })}`;
@@ -124,13 +125,19 @@ export function ProjectKnowledgeActivity({ projectId, refresh, onRefresh }: {
         <span>待采集来源 <strong className="text-zinc-200">{data.summary.pending_sources}</strong></span>
         <span>已跳过来源 <strong className="text-zinc-200">{data.summary.skipped_sources}</strong></span>
         <span>已生效 Memory <strong className="text-zinc-200">{data.summary.active_memory}</strong> / Skill <strong className="text-zinc-200">{data.summary.active_skills}</strong></span>
+      </div>
+      <div role="group" aria-label="知识反馈统计" className="flex flex-wrap gap-x-5 gap-y-2 text-xs leading-6 text-zinc-400">
         <span>本项目拉取 <strong className="text-zinc-200">{data.summary.usage_count}</strong></span>
-        <span>模型反馈 <strong className="text-zinc-200">{data.summary.feedback_count}</strong></span>
+        <span>反馈覆盖率 <strong className="text-zinc-200">{data.summary.usage_count === 0 ? "无样本"
+          : feedbackPercent.format(data.summary.feedback_count / data.summary.usage_count)}</strong></span>
+        <span>已记录的显式反馈 <strong className="text-zinc-200">{data.summary.feedback_count}</strong></span>
+        <span>尚无反馈（效果未知） <strong className="text-zinc-200">{data.summary.usage_count - data.summary.feedback_count}</strong></span>
       </div>
       <details className="mt-3 text-xs leading-6 text-zinc-500">
         <summary className="w-fit cursor-pointer focus-visible:outline focus-visible:outline-acc-400">统计口径与跳过原因</summary>
         <p className="mt-2">来源登记是可追溯入口；已纳入整理包含排队批次，不代表知识已生效。候选 {data.summary.draft_items} 项，需经过评测与审查才可生效。</p>
-        <p>拉取只统计本项目使用本项目知识的记录，不能证明实际采用。反馈是模型报告，其中报告成功 {data.summary.successful_feedback} 次，不代表效果已证明。</p>
+        <p>覆盖率为已记录显式反馈的拉取次数除以本项目拉取次数，仅统计本项目拉取本项目知识。反馈来自模型报告，其中报告成功 {data.summary.successful_feedback} 次，不代表效果已证明。</p>
+        <p>尚无反馈时，知识是否实际采用以及效果如何均未知。</p>
         <p>跳过来源不再自动重试。最近最多 10 条原因如下；重复来源只计一次，待采集按已登记来源排除已采集或已跳过的来源。</p>
         {data.skipped_sources.length === 0 ? <p>暂无跳过来源记录。</p> : <ul className="mt-2 divide-y divide-white/[.06]">
           {data.skipped_sources.map(source => <li key={source.job_id} className="flex flex-wrap gap-x-3 gap-y-1 py-2">

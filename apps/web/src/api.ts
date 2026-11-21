@@ -2455,7 +2455,7 @@ export const api = {
     ),
   setJobPriority: (jobId: string, priority: number) =>
     send<{ id: string; status: string; priority: number }>("PATCH", `/jobs/${jobId}/priority`, { priority }),
-  canvases: (projectId: string, opts?: { status?: "active" | "archived" | "all" }) =>
+  canvases: (projectId: string, opts?: { status?: "active" | "archived" | "all" | "knowledge_history" }) =>
     get<CanvasSummary[]>(
       `/projects/${projectId}/canvases${opts?.status ? `?status=${opts.status}` : ""}`,
     ),

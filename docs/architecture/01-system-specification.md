@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-20
+> 同步日期：2026-11-21
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -59,7 +59,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须支持任务启动、暂停、继续执行、重试、取消、归档和取消归档，并保留归档任务的 Canvas、Job、Evidence 与 Report 引用；`resume-session` 只能恢复仍可识别的 Job/Attempt 账本或创建受治理的新执行，不得宣称跨进程恢复 CLI/模型会话；归档不得默默物理删除历史真相。
 - **决策来源**：运维操作和审计需要可恢复的历史，取消必须传播到在途执行；跨进程 Session resume 没有当前实现证据，必须与任务级继续执行语义分开。
-- **实现状态**：部分达标；任务归档/取消归档和受限 `resume-session` 入口已实现并保留历史引用，但跨进程 CLI/模型会话恢复不是当前能力；显式硬删除端点仍需按本规范人工区分。#1002 P1-6 只为现有任务 retry 的节点引用与 Finding 候选级联外键增加完整前缀索引，不修改删除事务、外键或项目范围。
+- **实现状态**：部分达标；任务归档/取消归档和受限 `resume-session` 入口已实现并保留历史引用，但跨进程 CLI/模型会话恢复不是当前能力；显式硬删除端点仍需按本规范人工区分。#1002 P1-6 只为现有任务 retry 的节点引用与 Finding 候选级联外键增加完整前缀索引，不修改删除事务、外键或项目范围。#1192 的知识整理历史是任务列表的只读筛选，待处理的工作继续显示在常用列表。
 - **代码入口**：[项目任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Job 重跑集成测试](../../apps/scheduler/src/job-rerun.integration.test.ts)、[恢复集成测试](../../apps/scheduler/src/recovery-issue186.integration.test.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；人工分别验证 archive/unarchive 与 `resume-session`，并核对没有把 Session archive 当作跨进程 resume（入口，未在本任务执行）；#1002 P1-6 的节点引用/多 generation 候选级联索引前后计划与 buffer 对照、HTTP retry 回滚/成功/跨项目完整行隔离回归复用 recovery，基线重建复用 `pnpm ci:unit:migrations`，最终 SHA Actions 待验，不证明现场延迟。
 
@@ -392,6 +392,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **验证证据**：镜像身份、真实 RPC 场景、独立生产 guard Docker 正负例与版本/适配器回归见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；Gateway/Session 定向证据及其他根套件见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。本地 base 验收不替代 `pnpm ci:images` 的全镜像/平台结果及最终组合 CI。503 仅在内核证明未启动且零用量/effect `never_started` 持久结算后返回，请求次数不退还；settlement 失败及 ledger `unknown`/`pending` 保持 409 硬失败，Provider JSON/SSE/refusal 文案不构成 authority。
 
 ### FR-KNOW-001 项目知识的受治理生命周期
+
+#1193 在知识页显示显式反馈覆盖率和缺口，缺反馈的拉取保持效果未知。验证入口为 `pnpm ci:integration:project-knowledge` 与 `pnpm ci:unit:web-facts`。
 
 成功来源登记和历史资格预览只保留有界元数据，预览不创建 work/Job。本轮用户授权的自动项目批次由 [ADR 0023](adr/0023-project-knowledge-collection.md) 取代 [0021](adr/0021-knowledge-source-preview.md) 的项目批处理暂缓限制；不新增 schema 或整链 token 预算，旧 knowledge:auto work 仍禁用自动推进。本轮 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量及自动准入，扩展事务重验和只读状态投影。
 
