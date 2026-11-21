@@ -50,6 +50,7 @@ export async function readUpgradePlan(db: MigrationConnection, {reset_role_ident
       ...(identityRequiresReset && !reset_role_identity ? ["ROLE_CONFIG_IDENTITY_REVIEW_REQUIRED"] : []),
       ...(identityRequiresReset && reset_role_identity && plan.alreadyCurrent ? ["ROLE_CONFIG_IDENTITY_RESET_REQUIRES_REBUILD"] : []),
       ...(plan.unknownStructure ? ["UNKNOWN_SOURCE_STRUCTURE"] : []),
+      ...(plan.queueStateLossTables.length ? ["LEGACY_QUEUE_STATE_WOULD_BE_LOST"] : []),
       ...(plan.activeJobs.length ? ["ACTIVE_SOURCE_JOBS"] : []),
       ...(Number(effects[0]?.count) !== 0 ? ["UNSETTLED_SOURCE_EFFECTS"] : []),
     ];

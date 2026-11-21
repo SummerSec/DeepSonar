@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import postgres from "postgres";
-import { MIGRATE_LOCK_ID, runMigrations, type MigrationConnection } from "./migration-runner.js";
+import { MIGRATE_LOCK_ID, SCHEMA_FILE, runMigrations, type MigrationConnection } from "./migration-runner.js";
 import { readOwnedSequenceState } from "./owned-sequences.js";
-import { rebuildSchemaOnReservedSession } from "./schema-rebuild.js";
+import { planSchemaRebuild, rebuildSchemaOnReservedSession } from "./schema-rebuild.js";
 import { SCHEMA_VERSION } from "./schema-version.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -296,6 +299,74 @@ if (testDatabaseUrl) {
   test("#1002 credential deletion preserves exact schema68 token/ledger history across a backed-up rebuild", async () => {
     const { runCredentialSchemaRebuildFixture } = await import("./schema-rebuild-credential-fixture.js");
     await runCredentialSchemaRebuildFixture(testDatabaseUrl);
+  });
+}
+
+if (testDatabaseUrl) {
+  test("#1180 rebuild fails closed before dropping populated queue state, including with force", async () => {
+    const adminUrl = new URL(testDatabaseUrl);
+    adminUrl.pathname = "/postgres";
+    const admin = postgres(adminUrl.toString(), { max: 1 });
+    const target = await createDatabase(admin);
+    const db = postgres(target.url, { max: 2 });
+    const dir = mkdtempSync(join(tmpdir(), "deepsonar-queue-rebuild-"));
+    try {
+      const baseline = readFileSync(SCHEMA_FILE, "utf8");
+      const missingTable = join(dir, "without-queue-items.sql");
+      const missingColumn = join(dir, "without-pause-reason.sql");
+      writeFileSync(missingTable, baseline.replace(/\bproject_task_queue_items\b/g, "unused_queue_items"));
+      writeFileSync(missingColumn, baseline.replace("  pause_reason text,\n", ""));
+      await withReserved(db, (conn) => runMigrations(conn));
+
+      assert.deepEqual(
+        (await withReserved(db, (conn) => planSchemaRebuild(conn, { schemaFile: missingTable }))).queueStateLossTables,
+        [],
+        "an empty queue does not block",
+      );
+      const { jobId } = await seedHighIdHistory(db);
+      const [historical] = await db`SELECT project_id,canvas_id FROM jobs WHERE id=${jobId}`;
+      const queuedCanvas = randomUUID();
+      const pendingJob = randomUUID();
+      await db`INSERT INTO canvases (id,project_id,title)
+        VALUES (${queuedCanvas},${historical.project_id},'queued successor')`;
+      await db`INSERT INTO jobs (id,project_id,canvas_id,type,status,agent_snapshot_json)
+        VALUES (${pendingJob},${historical.project_id},${queuedCanvas},'explore','pending','{}'::jsonb)`;
+      await db`INSERT INTO project_task_queues (project_id,paused,pause_reason)
+        VALUES (${historical.project_id},true,'failed')`;
+      await db`INSERT INTO project_task_queue_items (project_id,canvas_id,state)
+        VALUES (${historical.project_id},${historical.canvas_id},'failed'),(${historical.project_id},${queuedCanvas},'queued')`;
+
+      const readState = async () => ({
+        queues: await db`SELECT project_id,paused,pause_reason FROM project_task_queues ORDER BY project_id`,
+        items: await db`SELECT id,canvas_id,state FROM project_task_queue_items ORDER BY id`,
+        jobs: await db`SELECT id,status FROM jobs ORDER BY id`,
+        events: await db`SELECT id,job_id FROM events ORDER BY id`,
+      });
+      const before = await readState();
+      const intact = await withReserved(db, (conn) => planSchemaRebuild(conn));
+      assert.deepEqual(intact.activeJobs, [], "pending work is not covered by the active-job gate");
+      assert.deepEqual(intact.queueStateLossTables, [], "the intact baseline preserves queue state");
+
+      for (const [schemaFile, table] of [
+        [missingTable, "project_task_queue_items"], [missingColumn, "project_task_queues"],
+      ]) {
+        const plan = await withReserved(db, (conn) => planSchemaRebuild(conn, { schemaFile }));
+        assert.deepEqual(plan.queueStateLossTables, [table]);
+        await assert.rejects(
+          rebuildSchemaOnReservedSession(
+            () => db.reserve() as unknown as Promise<MigrationConnection & { release: () => void }>,
+            { mode: "apply", schemaFile, force: true, dump: false, terminateScheduler: false },
+          ),
+          new RegExp(`LEGACY_QUEUE_STATE_WOULD_BE_LOST.*${table}`),
+        );
+        assert.deepEqual(await readState(), before, "source queue, jobs and evidence are untouched");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      await db.end();
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${target.name}"`);
+      await admin.end();
+    }
   });
 }
 

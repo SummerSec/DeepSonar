@@ -57,6 +57,7 @@ export type RebuildPlan = {
   alreadyCurrent: boolean;
   unknownStructure: boolean;
   activeJobs: Array<{ id: string; status: string; type: string }>;
+  queueStateLossTables: string[];
   droppedTables: string[];
   newTables: string[];
   tables: ColumnPlan[];
@@ -296,12 +297,27 @@ export async function planSchemaRebuild(
     });
   }
 
+  // Queue rows can determine whether a pending job is eligible, even with no
+  // active jobs. Do not infer eligibility or discard confirmation/history rows.
+  const queueStateLossTables: string[] = [];
+  for (const table of ["project_task_queues", "project_task_queue_items", "project_task_queue_yields"]) {
+    if (droppedTables.includes(table)) {
+      const [row] = await db.unsafe(
+        `SELECT EXISTS (SELECT 1 FROM public.${quoteIdent(table)}) AS populated`,
+      ) as { populated: boolean }[];
+      if (row?.populated) queueStateLossTables.push(table);
+    } else if (tables.some(entry => entry.table === table && entry.sourceRows > 0 && entry.dropped.length > 0)) {
+      queueStateLossTables.push(table);
+    }
+  }
+
   return {
     currentVersion,
     targetVersion,
     alreadyCurrent: currentVersion === targetVersion,
     unknownStructure: currentVersion === null && sourceTables.length > 0,
     activeJobs,
+    queueStateLossTables,
     droppedTables,
     newTables,
     tables,
@@ -523,6 +539,11 @@ export async function rebuildSchemaToLatest(
     ? ["explicit role identity reset: CLI preferences and project models will not be copied; reconfigure after rebuild"] : [];
   const plan = await planSchemaRebuild(db, options);
 
+  if (mode === "apply" && plan.queueStateLossTables.length > 0) {
+    throw new Error(
+      `LEGACY_QUEUE_STATE_WOULD_BE_LOST: refusing to rebuild without preserving ${plan.queueStateLossTables.join(", ")}`,
+    );
+  }
   if (plan.unknownStructure && !options.force) {
     throw new Error("database has an unknown structure; pass --force to rebuild from schema.sql without copying");
   }

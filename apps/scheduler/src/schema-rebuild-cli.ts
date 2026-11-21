@@ -104,6 +104,9 @@ Flags:
 
 function printPlan(plan: RebuildPlan): void {
   console.log(`current=v${plan.currentVersion ?? "unknown"} target=v${plan.targetVersion} alreadyCurrent=${plan.alreadyCurrent}`);
+  if (plan.queueStateLossTables.length > 0) {
+    console.log(`LEGACY_QUEUE_STATE_WOULD_BE_LOST: ${plan.queueStateLossTables.join(", ")}`);
+  }
   if (plan.droppedTables.length > 0) console.log(`dropped tables: ${plan.droppedTables.join(", ")}`);
   if (plan.newTables.length > 0) console.log(`new tables: ${plan.newTables.join(", ")}`);
   if (plan.activeJobs.length > 0) {

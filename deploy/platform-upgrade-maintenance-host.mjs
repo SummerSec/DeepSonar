@@ -285,7 +285,7 @@ FROM runtime_image_scans WHERE status IN ('claimed','running')`});
       const result = await manager.apply(state.receipts.backup, state.plan.plan_hash, {reset_role_identity: state.plan.reset_role_identity === true});
       if (!result.ok) {
         const reported = result.blocking_errors?.[0]?.code ?? result.plan?.blocking_errors?.[0]?.code;
-        const allowed = new Set(['APPROVED_PLAN_MISMATCH', 'ROLE_CONFIG_IDENTITY_REVIEW_REQUIRED', 'STRUCTURE_VERSION_ALIAS', 'UNKNOWN_SOURCE_STRUCTURE', 'ACTIVE_SOURCE_JOBS', 'UNSETTLED_SOURCE_EFFECTS', 'SOURCE_CLAIMS_NOT_PAUSED', 'CANDIDATE_PAUSE_LOST', 'VERIFIED_BACKUP_REQUIRED', 'CANDIDATE_SCHEMA_OPERATION_FAILED']);
+        const allowed = new Set(['APPROVED_PLAN_MISMATCH', 'ROLE_CONFIG_IDENTITY_REVIEW_REQUIRED', 'STRUCTURE_VERSION_ALIAS', 'UNKNOWN_SOURCE_STRUCTURE', 'ACTIVE_SOURCE_JOBS', 'LEGACY_QUEUE_STATE_WOULD_BE_LOST', 'UNSETTLED_SOURCE_EFFECTS', 'SOURCE_CLAIMS_NOT_PAUSED', 'CANDIDATE_PAUSE_LOST', 'VERIFIED_BACKUP_REQUIRED', 'CANDIDATE_SCHEMA_OPERATION_FAILED']);
         const code = allowed.has(reported) ? reported : 'CANDIDATE_SCHEMA_OPERATION_FAILED';
         throw Object.assign(new Error(code), {code});
       }

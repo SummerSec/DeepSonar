@@ -105,6 +105,8 @@ Compose 测试保证业务服务只加入 `deepsonar`、共享网关 socket 不�
 
 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md) 扩展原同 schema 路径：官方目标与配置预检先于暂停，排空后以独立维护身份关闭旧数据库运行身份，验证备份并创建候选库。目标 Scheduler/ImageAdmission 的 generation、版本、运行角色和数据库 preparing/active 状态必须一致。受管节点清单记录固定 SSH 主机身份与部署路径，并与登记 worker 集合及本地部署绑定；不是任意 SSH 主机的远程执行入口。节点准备和版本验证在激活前完成。
 
+候选基线若会丢弃已有记录的项目队列、条目或人工让位表（含字段），升级预检和重建 apply 以 `LEGACY_QUEUE_STATE_WOULD_BE_LOST` 失败关闭；当前保留队列的基线不因此被阻断。此检查保护暂停、顺序、失败确认和让位历史，不代替源库写入隔离，也不改任务权限或领取规则。见[升级操作说明](../ONE_CLICK_DEPLOYMENT.md#升级)。
+
 源库保全与候选目录需要额外存储。恢复 journal 绑定 Compose 内容、Docker 目标、固定镜像、plan hash 和 generation；秘密放独立私有文件，SQL/CLI连接参数经 stdin 传递。备份切点后的业务写入只应在激活代发生；激活后失败不再自动切旧库。显式回滚恢复领取及多节点编排已接线，最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，最终运行命令以 [部署说明](../../deploy/README.md) 为准。
 
 宿主 P2 自动入口默认关闭，独立受管策略限制维护窗口及同 schema 的补丁上升；每次启动或续做都需要固定信任根的官方 workflow 签名。调度模板只输出禁用文件，不替管理员安装或启用任务。现有维护状态机仍负责排空、写入隔离和激活回执；版本发现域不取得宿主执行权。配置与证据边界见 [自动升级说明](../../deploy/UPGRADE_AUTOMATION.md)，对应需求 IR-012。
