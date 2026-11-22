@@ -138,7 +138,11 @@ test("submit_plan and submit_plan_result MCP schemas stay single objects", () =>
   }
   assert.ok(ALL_PLATFORM_TOOLS.includes("submit_plan"));
   assert.ok(ALL_PLATFORM_TOOLS.includes("submit_plan_result"));
-  assert.deepEqual(PLATFORM_OPERATION_IDS, ALL_PLATFORM_TOOLS);
+  // #1219 迁移窗口：read_project_memory 是只在旧快照上生效的只读别名，
+  // 注册表包含它（否则旧 Job 会 404），但不进新配置的可选工具。
+  assert.deepEqual(PLATFORM_OPERATION_IDS.filter((id) => id !== "read_project_memory"), ALL_PLATFORM_TOOLS);
+  assert.equal(PLATFORM_OPERATION_IDS.includes("read_project_memory"), true);
+  assert.equal(ALL_PLATFORM_TOOLS.includes("read_project_memory"), false);
   assert.equal(eventRateLimitBucket("plan"), "standard");
   assert.equal(eventRateLimitBucket("plan_result"), "standard");
 });

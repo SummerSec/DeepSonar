@@ -182,7 +182,7 @@ test("graph_query MCP schema stays a single strict object and rejects canvas_id/
   assert.equal(GraphQueryPayload.safeParse({ kind: "edges", id: ROOT, limit: GRAPH_QUERY_LIMITS.edges }).success, true);
   assert.equal(GraphQueryPayload.safeParse({ kind: "edges", id: ROOT, limit: GRAPH_QUERY_LIMITS.edges + 1 }).success, false);
   assert.equal(GraphQueryPayload.safeParse({ kind: "index", limit: GRAPH_QUERY_LIMITS.index + 1 }).success, false);
-  assert.deepEqual(PLATFORM_OPERATION_IDS, ALL_PLATFORM_TOOLS);
+  assert.deepEqual(PLATFORM_OPERATION_IDS.filter((id) => id !== "read_project_memory"), ALL_PLATFORM_TOOLS);
   assert.ok(ALL_PLATFORM_TOOLS.includes("graph_query"));
 });
 

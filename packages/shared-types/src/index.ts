@@ -1428,12 +1428,11 @@ export const AckHumanMessagePayload = z.object({
 }).strict();
 export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
 
-// #1219 迁移窗口：旧只读别名不进平台工具目录（注册表、动态 OpenAPI、MCP 工具列表），
-// 只保留在 KnowledgeControlPayloadSchemas 里供运行期校验旧快照的调用。
-const { read_project_memory: _legacyReadProjectMemory, ...ActiveKnowledgePayloadSchemas } = KnowledgeControlPayloadSchemas;
-
 export const ControlToolPayloadSchemas = {
-  ...ActiveKnowledgePayloadSchemas,
+  // #1219 迁移窗口：旧只读别名保留在注册表里，否则旧快照的 Job 会拿到 404；
+  // 可见性由 Job 快照的 platform_tools 决定（operationIdsFromSnapshot），
+  // 新 Job 与角色可选工具只看 ALL_PLATFORM_TOOLS（已排除旧名）。
+  ...KnowledgeControlPayloadSchemas,
   list_available_roles: ListAvailableRolesPayload,
   list_available_runtime_images: ListAvailableRuntimeImagesPayload,
   list_available_agent_clis: ListAvailableAgentClisPayload,
