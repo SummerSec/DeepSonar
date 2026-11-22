@@ -57,6 +57,18 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
       [["agent-harness/runtime-manuals/other.md"], false], [["agent-harness/other.md"], false],
       [["skills/example/SKILL.md"], false], [["docs/evidence/result.md"], false],
       [["docs/data.json"], false], [["unknown.md"], false], [[".github/workflows/ci.yml"], false],
+      // #1221：根 DESIGN.md 与 docs/superpowers/plans/ 下的普通 Markdown 不必逐份加白名单。
+      [["DESIGN.md"], true],
+      [["DESIGN.md", "docs/superpowers/plans/2026-11-22-project-knowledge-library.md"], true],
+      [["docs/superpowers/plans/2026-12-01-new-design.md"], true],
+      [["docs/superpowers/plans/notes.txt"], false],
+      [["docs/superpowers/plans/sub/dir.md"], false],
+      [["docs/superpowers/plans/.hidden.md"], false],
+      [["docs/superpowers/plans/plan.md.bak"], false],
+      [["docs/superpowers/specs/new-spec.md"], false],
+      [["docs/superpowers/plans/说明.md"], false],
+      [["DESIGN.md", "apps/web/src/App.tsx"], false],
+      [["docs/superpowers/plans/2026-12-01-new-design.md", "packages/shared-types/src/x.ts"], false],
     ]) {
       git("reset", "--hard", base);
       for (const file of files) {

@@ -105,3 +105,41 @@ test("malformed NUL records are rejected instead of being interpreted as a safe 
   assert.throws(() => parseGitNameStatusZ(Buffer.from("M123\0docs/README.md\0", "utf8")), /malformed git diff status/);
   assert.equal(classifyRecords(null, pr).status, CLASSIFIER_STATUSES.FAILED);
 });
+
+test("#1221 root DESIGN.md and plain plan documents are safe docs, not a directory exemption", () => {
+  assert.equal(isDocsOnlyPath("DESIGN.md"), true);
+  assert.equal(isDocsOnlyPath("docs/superpowers/plans/2026-11-22-project-knowledge-library.md"), true);
+  for (const path of [
+    "docs/superpowers/plans/notes.txt",
+    "docs/superpowers/plans/sub/dir.md",
+    "docs/superpowers/plans/.hidden.md",
+    "docs/superpowers/plans/plan.md.bak",
+    "docs/superpowers/plans/说明.md",
+    "docs/superpowers/specs/new-spec.md",
+    "docs/superpowers/plans",
+  ]) {
+    assert.equal(isDocsOnlyPath(path), false, path);
+  }
+  // 新增与修改都是安全的说明性改动；删除/重命名/复制/类型变更在更早的分支就 fail closed。
+  assert.deepEqual(classifyRecords([
+    record("M", "DESIGN.md"),
+    record("A", "docs/superpowers/plans/2026-12-01-new-design.md"),
+  ], pr), {
+    mode: CLASSIFIER_MODES.DOCS_ONLY, status: CLASSIFIER_STATUSES.OK,
+    reason: "all_paths_allowlisted", changedCount: 2,
+  });
+  for (const records of [
+    [record("M", "DESIGN.md"), record("M", "apps/web/src/App.tsx")],
+    [record("A", "docs/superpowers/plans/2026-12-01-new-design.md"), record("M", "skills/audit/SKILL.md")],
+    [record("D", "docs/superpowers/plans/2026-12-01-new-design.md")],
+    [record("M", "docs/superpowers/plans/notes.txt")],
+  ]) {
+    assert.equal(classifyRecords(records, pr).mode, CLASSIFIER_MODES.FULL);
+  }
+  for (const status of ["D", "R100", "C100", "T"]) {
+    const paths = /^[RC]/u.test(status)
+      ? ["docs/superpowers/plans/2026-12-01-new-design.md", "docs/superpowers/plans/other.md"]
+      : ["docs/superpowers/plans/2026-12-01-new-design.md"];
+    assert.equal(classifyRecords([record(status, ...paths)], pr).mode, CLASSIFIER_MODES.FULL, status);
+  }
+});

@@ -24,8 +24,19 @@ export const CLASSIFIER_STATUSES = Object.freeze({
 // Keep this list explicit. A new documentation path must be reviewed before
 // it can suppress the full CI workflow. In particular, do not replace this
 // with a Markdown suffix rule, docs/**, or a suffix-only check.
+//
+// #1221 adds two reviewed exceptions on top of the list:
+//  - root `DESIGN.md` is documentation only; `docs-freshness` still runs in the
+//    docs lane and is what keeps its schema/version statements honest;
+//  - new or modified plain Markdown under `docs/superpowers/plans/` are design
+//    notes with no build, packaging or runtime consumer (verified by grep), so
+//    they do not need a per-file allowlist entry. The rule stays a *file name*
+//    rule (no nested directories, no leading dot, ASCII name, exactly `.md`),
+//    and every non A/M git status (delete, rename, copy, type change, unknown)
+//    still fails closed before this rule is consulted.
 export const DOCS_ONLY_PATHS = Object.freeze([
   "CHANGELOG.md",
+  "DESIGN.md",
   "LICENSE",
   "README.md",
   "THIRD_PARTY_NOTICES.md",
@@ -103,6 +114,15 @@ export const DOCS_ONLY_PATHS = Object.freeze([
 ]);
 
 const DOCS_ONLY_SET = new Set(DOCS_ONLY_PATHS);
+
+/**
+ * #1221：已评审的设计方案目录。只接受 `docs/superpowers/plans/` 下**直接**新增或修改的
+ * 普通 Markdown 文件名（ASCII 名称、必须 `.md` 结尾、无子目录、无前导点），避免变成
+ * `docs/**` 或后缀放行。删除/重命名/复制/类型变更在到达这里之前已 fail closed。
+ */
+const REVIEWED_DOC_DIRECTORIES = Object.freeze([
+  /^docs\/superpowers\/plans\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$/u,
+]);
 const ALWAYS_FULL_SEGMENTS = new Set(["code", "config", "evidence", "prompts", "skills", "workflows"]);
 
 function normalizePath(path) {
@@ -118,7 +138,8 @@ export function isDocsOnlyPath(path) {
   if (!normalized || normalized.startsWith("/") || normalized.includes("\0") || normalized.includes("\\")) return false;
   if (normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) return false;
   if (pathHasAlwaysFullSegment(normalized)) return false;
-  return DOCS_ONLY_SET.has(normalized);
+  if (DOCS_ONLY_SET.has(normalized)) return true;
+  return REVIEWED_DOC_DIRECTORIES.some((pattern) => pattern.test(normalized));
 }
 
 /**
