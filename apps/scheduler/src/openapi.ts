@@ -1492,7 +1492,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}",
     summary: "Job 详情（含事件）",
     description:
-      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。human_request 独立有界读取最近持久 human 事件，不受首批 50 条事件影响；无事件为 null，旧 Attempt 或终态的请求只作历史。execution_state.accepted_history_ref 引用持久接受事件；历史接受不授予当前等待、修正或恢复权限。provision_diagnostics 为清理前已持久化的 host 失败诊断，通过原 Attempt 的不可变 system-audit 引用按当前 Job/项目重新验证，仅返回固定阶段/状态/布尔信号及来源；不含 audit 元数据、env、SDK 原文或容器日志，不证明 no-start/用量结算。历史无引用不猜测或回填，条数上限见 provision-failure-evidence.ts。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。human_request 独立有界读取最近持久 human 事件，不受首批 50 条事件影响；无事件为 null，旧 Attempt 或终态的请求只作历史。execution_state.accepted_history_ref 引用持久接受事件；历史接受不授予当前等待、修正或恢复权限。provision_diagnostics 为清理前已持久化的 host 失败诊断，通过原 Attempt 的不可变 system-audit 引用按当前 Job/项目重新验证，仅返回固定阶段/状态/布尔信号及来源；不含 audit 元数据、env、SDK 原文或容器日志，不证明 no-start/用量结算。历史无引用不猜测或回填，条数上限见 provision-failure-evidence.ts。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。device_binding 只投影平台已记录的设备事实：需求是否冻结在快照或只写在画布、角色是否命中、Job 是否真的拿到过租约；没有连接结果记录时明确说明未记录，不把沙箱内探测失败当作设备不可用。",
     scope: "tasks:read",
     tags: ["Jobs"],
     responses: {
@@ -1500,6 +1500,19 @@ const OPS: Op[] = [
         type: "object",
         required: ["human_request", "human_continuation"],
         properties: {
+          device_binding: {
+            type: "object",
+            description: "#1211 设备绑定诊断：区分未声明需求、已声明但无租约、有租约但无连接结果。只读投影，不申请租约、不改调度判断；connection_result_recorded 为 false 时不得解释为连接失败。",
+            properties: {
+              state: { type: "string", enum: ["not_declared", "declared_no_lease", "lease_recorded_unverified"] },
+              reason: { type: "string" },
+              snapshot_requirement: { type: "object", nullable: true },
+              canvas_requirement: { type: "object", nullable: true },
+              role_matched: { type: "boolean" },
+              leases: { type: "array", maxItems: 32, items: { type: "object" } },
+              connection_result_recorded: { type: "boolean" },
+            },
+          },
           process_diagnostics: {
             type: "array", maxItems: 64,
             description: "精确绑定 Job/Attempt/Sandbox/Process/原 agent_run 的宿主审计。固定终止类别、实际宿主 kill caller、PTY DELETE 结果和已核验沙箱销毁结果，不含原始日志、命令、URL 或凭据。退出码未知保持 null，host_kill 不证明 OOM。失败或超时保留 unknown 与旧凭据撤销状态，无合法断点的自动整 Job 恢复尚未交付。",

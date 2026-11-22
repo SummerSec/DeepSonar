@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+#1211 的[设备绑定诊断](architecture/09-interface-specs.md#设备绑定诊断1211)在 `GET /jobs/:id` 增加只读 `device_binding`：区分「未声明设备需求」「已声明但无租约（含画布声明未冻结、角色不命中）」「有租约但无连接结果」，只投影平台已记录的事实，不把沙箱内探测失败当成设备不可用，也不申请或释放租约。回归见 `ci:unit:device-lease`，最终 SHA Actions 待验。
+
 #1206 的[Finding 重复候选与重复处置](architecture/09-interface-specs.md#finding-重复候选与重复处置1206)只增加读取侧能力：同项目跨 canvas 的候选查询（fingerprint 精确、location 双向前缀、同 canvas cluster）、`distinct_by_fingerprint` / `distinct_by_cluster` 去重口径与 `duplicate`+`duplicate_of` 处置；记录仍不可变，不合并、不改写 `emit_finding` 冲突语义，也不把 fingerprint 升为跨任务身份。在 schema 78 引入，复合外键与成对约束兜底；真实 PG 回归接 `ci:integration:verify-eligibility`，最终 SHA Actions 待验。
 
 #1199 的[任务发现状态显示与筛选](architecture/09-interface-specs.md#任务发现的状态显示与筛选1199)统一中文技术状态，按整个任务范围筛选后分页，切换条件自动清除旧游标并隔离迟到响应。人工「漏洞存在」受现有技术验证前置条件限制，界面显示禁用原因。回归接原 Web Actions，最终 SHA 结果另验。
@@ -25,7 +27,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 #1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，合法原 Job 的冻结恢复身份先于默认，满额时等待原账号，保留预算门；#1078 新 Job 按余量比例、真实在途数、历史及当前分配数、默认平局优先、稳定 ID 排序；三层容量、临时健康过滤、全满保留 pending 与无秘密冻结审计对齐现有 Dispatcher，5 秒合并唤醒不引入排队取消期限，跨 Provider 治理等价仍未交付，详见同一运行时视图；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-21
+> 同步日期：2026-11-22
 > **进度消费与保活（#1092）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)记录 chunk/RPC 的协作 I/O 让出和普通多行文本脱敏优化，保留完整进度、转义/畸形 OM 隐私与退出诊断。独立 Worker＋真实 Undici 的回归接既有 Actions，最终 head 见 PR #1093；无任务重跑或部署。
 > **可行动人工请求（2026-11-09）**：严格 guidance、完整 body_json、L0/L1 按需读取、waiting_human 当前 Scheduler 投影及同 Job 待办去重已同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](architecture/01-system-specification.md)、[接口/运行时视图](architecture/09-interface-specs.md#可行动人工请求2026-11-09)和[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。消息账本、恢复准入、ACK 和完成仍独立；最终 SHA Actions 待验，注意力收益未测量。
 > **Pi 请求错误诊断（#1083）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)与[运行时视图](architecture/06-runtime-view.md#pi-请求失败诊断与恢复分类1083)记录允许名单化错误阶段/cause 投影、分类与恢复许可分离及共享 DSH reader 边界。请求包装失败不新增 CLI 重启或未知效果重放；本轮最终 SHA Actions 待验，原失败根因未全部确定。
