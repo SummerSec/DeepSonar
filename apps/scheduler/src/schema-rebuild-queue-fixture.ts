@@ -54,7 +54,7 @@ CREATE TABLE project_task_queue_yields (
   CHECK ((reply_message_id IS NULL AND requeued_item_id IS NULL AND requeued_at IS NULL)
     OR (reply_message_id IS NOT NULL AND requeued_item_id IS NOT NULL AND requeued_at IS NOT NULL))
 );
-UPDATE schema_meta SET version=77`);
+UPDATE schema_meta SET version=78`);
     const cases = [
       { name: "manual", paused: true, state: "queued", job: "pending", expected: true },
       { name: "failure", paused: true, state: "queued", job: "pending", expected: true },
@@ -78,6 +78,15 @@ UPDATE schema_meta SET version=77`);
       await db`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
         VALUES(${project},${item.name},${item.state})`;
     }
+    const canonicalFinding = randomUUID();
+    await db`INSERT INTO findings(id,project_id,job_id,fingerprint,title)
+      SELECT ${canonicalFinding},project_id,id,'queue-rebuild-canonical','Canonical Finding'
+      FROM jobs WHERE canvas_id='ordinary'`;
+    await db`INSERT INTO findings(project_id,job_id,fingerprint,title,disposition,duplicate_of)
+      SELECT project_id,id,'queue-rebuild-duplicate','Duplicate Finding','duplicate',${canonicalFinding}
+      FROM jobs WHERE canvas_id='ordinary'`;
+    const findings = await db`SELECT to_jsonb(f) AS row FROM findings f ORDER BY id`;
+    assert.equal(findings.length, 2);
     const history = await db`SELECT to_jsonb(j) AS row FROM jobs j ORDER BY id`;
     await db`INSERT INTO audit_logs(actor_type,actor_id,action,result)
       VALUES('system','fixture','retirement.history','ok')`;
@@ -95,7 +104,7 @@ UPDATE schema_meta SET version=77`);
       else await db`ALTER TABLE project_task_queue_items RENAME TO unrecognized_queue_items`;
       await assert.rejects(rebuild(), /RETIRED_QUEUE_SOURCE_INVALID/);
       assert.deepEqual(await db`SELECT to_jsonb(j) AS row FROM jobs j ORDER BY id`, history);
-      assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0]!.version, 77);
+      assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0]!.version, 78);
       if (shape === "missing_column") await db`ALTER TABLE project_task_queues RENAME unrecognized_pause TO paused`;
       else await db`ALTER TABLE unrecognized_queue_items RENAME TO project_task_queue_items`;
     }
@@ -118,6 +127,7 @@ UPDATE schema_meta SET version=77`);
     const [tables] = await db`SELECT count(*)::int AS n FROM information_schema.tables
       WHERE table_schema='public' AND table_name LIKE 'project_task_queue%'`;
     assert.equal(tables!.n, 0);
+    assert.deepEqual(await db`SELECT to_jsonb(f) AS row FROM findings f ORDER BY id`, findings);
   } finally {
     await db.end();
     await admin.unsafe(`DROP DATABASE IF EXISTS "${name}"`);

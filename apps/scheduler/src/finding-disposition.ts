@@ -6,6 +6,8 @@ export const FINDING_DISPOSITIONS = [
   "confirmed_vuln",
   "rejected_fp",
   "resolved",
+  // 已提交同族重复（#1206 R4）：必须绑定 duplicate_of
+  "duplicate",
   "archived",
 ] as const;
 

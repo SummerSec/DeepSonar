@@ -28,6 +28,9 @@ export interface ProjectFindingsSummary {
   project_id: string;
   total: number;
   project_total: number;
+  /** 去重口径（#1206 R3）：按 fingerprint / research cluster 的独立漏洞数，不改变记录数 total。 */
+  distinct_by_fingerprint: number;
+  distinct_by_cluster: number;
   list_window: number;
   truncated: boolean;
   severity: CountBucket[];
@@ -59,6 +62,8 @@ export function buildProjectFindingsSummary(input: {
   projectId: string;
   total: number;
   projectTotal?: number;
+  distinctByFingerprint?: number;
+  distinctByCluster?: number;
   severity: Iterable<{ key: string; count: number }>;
   verifyStatus: Iterable<{ key: string; count: number }>;
   disposition: Iterable<{ key: string; count: number }>;
@@ -73,6 +78,8 @@ export function buildProjectFindingsSummary(input: {
     project_id: input.projectId,
     total,
     project_total: projectTotal,
+    distinct_by_fingerprint: Math.min(total, Math.max(0, Math.floor(input.distinctByFingerprint ?? total))),
+    distinct_by_cluster: Math.min(total, Math.max(0, Math.floor(input.distinctByCluster ?? total))),
     list_window: listWindow,
     truncated: projectTotal > listWindow,
     profiles: input.profiles ?? [],
@@ -99,10 +106,13 @@ export async function loadProjectFindingsSummary(
   // One statement/snapshot for all buckets, including during concurrent writes.
   const rows = await sql`
     WITH matching AS MATERIALIZED (
-      SELECT f.*, j.canvas_id, c.title AS canvas_title
+      SELECT f.*, j.canvas_id, c.title AS canvas_title,
+             r.dedupe_cluster_id
       FROM findings f
       JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
       JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
+      LEFT JOIN finding_research r
+        ON r.finding_id = f.id AND r.project_id = f.project_id AND r.canvas_id = j.canvas_id
       WHERE ${findingQueryPredicate(filters)}
     )
     SELECT 'severity' AS dimension, COALESCE(NULLIF(severity, ''), 'unset') AS key, '' AS title, COUNT(*)::int AS count FROM matching GROUP BY 2
@@ -110,6 +120,10 @@ export async function loadProjectFindingsSummary(
     UNION ALL SELECT 'disposition', disposition, '', COUNT(*)::int FROM matching GROUP BY 2
     UNION ALL SELECT 'profile', profile, '', COUNT(*)::int FROM matching GROUP BY 2
     UNION ALL SELECT 'canvas', canvas_id, canvas_title, COUNT(*)::int FROM matching GROUP BY 2, 3
+    UNION ALL SELECT 'distinct_fingerprint', '', '', COUNT(DISTINCT fingerprint)::int FROM matching
+    UNION ALL SELECT 'distinct_cluster', '', '',
+      (COUNT(DISTINCT dedupe_cluster_id) + COUNT(*) FILTER (WHERE dedupe_cluster_id IS NULL))::int
+      FROM matching
     UNION ALL SELECT 'project', '', '', COUNT(*)::int FROM findings f
       JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
       JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
@@ -121,6 +135,8 @@ export async function loadProjectFindingsSummary(
     projectId,
     total: severity.reduce((sum, row) => sum + row.count, 0),
     projectTotal: buckets("project")[0]?.count ?? 0,
+    distinctByFingerprint: buckets("distinct_fingerprint")[0]?.count ?? 0,
+    distinctByCluster: buckets("distinct_cluster")[0]?.count ?? 0,
     severity,
     verifyStatus: buckets("verify"),
     disposition: buckets("disposition"),

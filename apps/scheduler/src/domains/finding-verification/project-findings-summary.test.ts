@@ -17,6 +17,8 @@ test("project findings summary keeps a complete rollup even when the list window
       { key: "human_reproducing", count: 80 },
       { key: "accepted", count: 232 },
     ],
+    distinctByFingerprint: 100,
+    distinctByCluster: 91,
     canvases: [
       { id: "canvas-b", title: "B 任务", count: 300 },
       { id: "canvas-a", title: "A 任务", count: 212 },
@@ -25,6 +27,8 @@ test("project findings summary keeps a complete rollup even when the list window
   assert.equal(summary.total, FINDINGS_LIST_WINDOW + 12);
   assert.equal(summary.project_total, FINDINGS_LIST_WINDOW + 12);
   assert.equal(summary.list_window, FINDINGS_LIST_WINDOW);
+  assert.equal(summary.distinct_by_fingerprint, 100);
+  assert.equal(summary.distinct_by_cluster, 91);
   assert.equal(summary.truncated, true);
   assert.equal(summary.severity.find((item) => item.key === "high")?.count, 400);
   assert.equal(summary.disposition.find((item) => item.key === "human_reproducing")?.count, 80);
@@ -44,6 +48,8 @@ test("empty project findings summary fills known buckets with zeros", () => {
   assert.equal(summary.truncated, false);
   assert.equal(summary.total, 0);
   assert.equal(summary.project_total, 0);
+  assert.equal(summary.distinct_by_fingerprint, 0);
+  assert.equal(summary.distinct_by_cluster, 0);
   assert.deepEqual(fillCountBuckets(["open", "accepted"], []), [
     { key: "open", count: 0 },
     { key: "accepted", count: 0 },
@@ -58,6 +64,8 @@ test("finding filters are bounded multi-selects and search treats SQL wildcards 
   assert.deepEqual(filters.severity, ["high", "medium"]);
   assert.equal(filters.q, "%漏洞\\%\\_\\\\x%");
   assert.equal(parseFindingQuery({ q: "   " }).q, null);
+  assert.deepEqual(parseFindingQuery({ fingerprint: "0123456789abcdef,0123456789abcdef" }).fingerprint, ["0123456789abcdef"]);
+  assert.equal(parseFindingQuery({}).fingerprint, null);
   assert.equal(parseFindingQuery({ project_id: null }).project_id, null);
   for (const query of [{ canvas_id: "bad" }, { severity: ["high"] }, { q: "x".repeat(201) }, { severity: "high,,low" }]) {
     assert.throws(() => parseFindingQuery(query), /invalid query parameter/);

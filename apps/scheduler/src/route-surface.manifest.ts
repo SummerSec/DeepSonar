@@ -14,6 +14,7 @@ GET /findings/:id/program-eligibility
 GET /findings/:id/program-eligibility/reviews
 POST /findings/:id/program-eligibility/reviews
 GET /findings/:id/relations
+GET /findings/:id/duplicates
 GET /canvases/:id/finding-relations
 POST /findings/:id/identity-sources
 POST /findings/:id/identity-sources/:sourceId/revisions
@@ -275,6 +276,7 @@ GET /findings/{id}/program-eligibility
 GET /findings/{id}/program-eligibility/reviews
 POST /findings/{id}/program-eligibility/reviews
 GET /findings/{id}/relations
+GET /findings/{id}/duplicates
 GET /canvases/{id}/finding-relations
 POST /findings/{id}/identity-sources
 POST /findings/{id}/identity-sources/{sourceId}/revisions

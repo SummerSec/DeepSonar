@@ -922,7 +922,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/projects/{id}/findings/summary",
     summary: "项目风险聚合（不受 Finding 列表窗口截断）",
-    description: "与 Finding 列表共用筛选，按严重度、verify_status、disposition、profile 与来源任务计数。total 为匹配数；project_total 为项目全量。聚合在同一数据库快照计算。",
+    description: "与 Finding 列表共用筛选，按严重度、verify_status、disposition、profile 与来源任务计数。total 为记录数；project_total 为项目全量；distinct_by_fingerprint / distinct_by_cluster 为去重口径的独立漏洞数（不合并记录）。聚合在同一数据库快照计算。",
     scope: "findings:read",
     tags: ["Findings"],
     query: {
@@ -932,6 +932,7 @@ const OPS: Op[] = [
       category: { type: "string" },
       verify_status: { type: "string" },
       disposition: { type: "string" },
+      fingerprint: { type: "string" },
       q: { type: "string", maxLength: 200 },
     },
   },
@@ -1703,6 +1704,7 @@ const OPS: Op[] = [
       category: { type: "string" },
       verify_status: { type: "string" },
       disposition: { type: "string", description: `逗号分隔的处置状态：${FINDING_DISPOSITIONS.join(", ")}` },
+      fingerprint: { type: "string", description: "逗号分隔的 fingerprint 精确匹配（跨 Job 身份查询，不合并记录）" },
       q: { type: "string", maxLength: 200, description: "标题、位置、摘要、指纹的不区分大小写字面子串；%/_ 不作通配符" },
       limit: { type: "integer", minimum: 1, maximum: 50 },
       cursor: { type: "string" },
@@ -1736,6 +1738,18 @@ const OPS: Op[] = [
   },
   {
     method: "get",
+    path: "/findings/{id}/duplicates",
+    summary: "同项目跨 canvas 的重复候选（只读）",
+    description: "在同一 project 内跨 canvas 返回 fingerprint 精确匹配、location 前缀匹配（双向 starts_with）与同 canvas research cluster 成员的并集，每条标注 match_reason= fingerprint_equal | location_prefix | same_research_cluster。只读：不合并记录、不改写 verify_status/disposition，也不承诺自动判重。显式 project_id 与本记录项目不一致时返回 403 CROSS_PROJECT_DUPLICATE_QUERY；候选不返回证据正文或凭据。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: {
+      project_id: { type: "string", format: "uuid", description: "仅允许与本记录相同的项目；跨项目显式拒绝" },
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+  },
+  {
+    method: "get",
     path: "/findings/{id}/evidence-trace",
     summary: "Finding Fact↔Evidence 只读溯源（确认依据可复查）",
     description: "按 used_fact_ids 解析 canvas Fact 节点（非 artifact_evidence FK）；诊断缺失引用、错误类型、跨项目/画布、来源失败、修订不符；source_event 绑定真实当前成功 Attempt，精确 URI 以共享 8 MiB 预算重读保留字节，不以 manifest 摘要或后缀匹配冒充观测。facts.retained_bytes_verified 仅表示字节核验；runtime_claim_structured 表示 Agent 声明形状，execution_assurance 固定 not_attested，runtime_proof=false。replay.kind=evidence_integrity_check，不运行命令，也不改写 Verify、Plan 或提交资格。content_integrity_digest 为历史冻结摘要，与 Hub gate_fingerprint / evidence_signature 分离。不扩大 findings:read 权限。",
@@ -1746,7 +1760,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/findings/{id}/disposition",
     summary: "人工更新 Finding 处置态",
-    description: "disposition 为人工业务闭环；confirmed_vuln 仍要求 verify_status=confirmed，不得旁路技术确认。",
+    description: "disposition 为人工业务闭环；confirmed_vuln 仍要求 verify_status=confirmed，不得旁路技术确认。duplicate 必须同时提供 duplicate_of（同 project、存在、非自身），用来把「已提交同族重复」与平台 refuted/inconclusive 分开；非 duplicate 处置不接受 duplicate_of。",
     scope: "findings:write",
     tags: ["Findings"],
     body: {
@@ -1756,6 +1770,7 @@ const OPS: Op[] = [
       properties: {
         disposition: { type: "string", enum: [...FINDING_DISPOSITIONS] },
         note: { type: "string", maxLength: 2000 },
+        duplicate_of: { type: "string", format: "uuid", description: "仅 disposition=duplicate 时必填，必须同 project 且不是自身" },
       },
     },
   },
