@@ -625,10 +625,18 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
           attempt_no: attempt.attempt_no ?? null,
           status: String(attempt.status),
           error: (attempt.error as string | null) ?? null,
+          failure_reason: readAttemptFailureReason(attempt.outcome_json),
         })),
       }),
     };
   });
+
+  /** job_attempts.outcome_json.reason 是调度器分类后的终态原因；只取字符串，不猜其它形状。 */
+  function readAttemptFailureReason(outcome: unknown): string | null {
+    if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) return null;
+    const reason = (outcome as Record<string, unknown>).reason;
+    return typeof reason === "string" && reason ? reason : null;
+  }
 
   /** Keyset event pages keep the heavy timeline out of the Job detail request. */
   app.get("/jobs/:id/events", async (req, reply) => {
