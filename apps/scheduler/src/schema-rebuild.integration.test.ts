@@ -310,3 +310,10 @@ if (testDatabaseUrl) {
     await runRebuildAclFixture(testDatabaseUrl);
   });
 }
+
+if (testDatabaseUrl) {
+  test("#1180 queue retirement preserves stops, active ownership and historical rows", async () => {
+    const { runQueueRetirementFixture } = await import("./schema-rebuild-queue-fixture.js");
+    await runQueueRetirementFixture(testDatabaseUrl);
+  });
+}

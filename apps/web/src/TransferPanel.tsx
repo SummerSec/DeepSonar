@@ -4,10 +4,11 @@
  * - platform：平台配置（全局规则、角色、Skill 源、全局 RoleConfig、凭据元数据）
  */
 import { DownloadSimple, UploadSimple, ArrowsClockwise } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type DataExportRow, type ImportPreview } from "./api";
 import { HelpTip } from "./ui";
-import { inferToastKind, showToast } from "./toast";
+import { FeedbackNotice } from "./FeedbackNotice";
+import { useOperationFeedback } from "./use-operation-feedback";
 import {
   PROJECT_EXPORT_MODULES,
   PROJECT_PRESETS,
@@ -109,26 +110,30 @@ export function TransferPanel({
   );
   const [exports, setExports] = useState<DataExportRow[]>([]);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const scopeKey = `${isPlatform ? "platform" : "project"}:${projectId ?? ""}`;
+  const { message, kind, flash, clear } = useOperationFeedback(scopeKey);
+  const { message: loadError, kind: loadKind, flash: flashLoadError, clear: clearLoadError } = useOperationFeedback(scopeKey);
+  const loadRequestId = useRef(0);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [importId, setImportId] = useState<string | null>(null);
   const [importName, setImportName] = useState("");
 
-  const flash = (m: string) => {
-    setMsg(m);
-    showToast(m, inferToastKind(m));
-    setTimeout(() => setMsg(null), 4000);
-  };
-
   const reload = useCallback(() => {
+    const requestId = ++loadRequestId.current;
     const p = isPlatform ? api.listPlatformExports() : api.listExports(projectId!);
-    p.then(setExports).catch(() => setExports([]));
-  }, [isPlatform, projectId]);
+    p.then((rows) => {
+      if (requestId !== loadRequestId.current) return;
+      setExports(rows);
+      clearLoadError();
+    }).catch((error) => {
+      if (requestId === loadRequestId.current) flashLoadError(`导出记录加载失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    });
+  }, [isPlatform, projectId, clearLoadError, flashLoadError]);
 
   useEffect(() => {
     reload();
     const t = setInterval(reload, 3000);
-    return () => clearInterval(t);
+    return () => { clearInterval(t); loadRequestId.current += 1; };
   }, [reload]);
 
   const toggleSet = <T,>(current: Set<T>, id: T): Set<T> => {
@@ -144,7 +149,7 @@ export function TransferPanel({
       if (isPlatform) {
         const modules = PLATFORM_MODULES.map((m) => m.id).filter((id) => platformModules.has(id));
         if (modules.length === 0) {
-          flash("请至少选择一个导出模块");
+          flash("请至少选择一个导出模块", "error");
           return;
         }
         const allSelected = modules.length === PLATFORM_MODULES.length;
@@ -156,7 +161,7 @@ export function TransferPanel({
       } else {
         const body = buildProjectExportRequest(preset, projectModules);
         if (preset === "custom" && (body.modules?.length ?? 0) === 0) {
-          flash("请至少选择一个导出模块");
+          flash("请至少选择一个导出模块", "error");
           return;
         }
         await api.createExport(projectId!, body);
@@ -164,7 +169,7 @@ export function TransferPanel({
       flash("导出已开始");
       reload();
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e));
+      flash(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -182,7 +187,7 @@ export function TransferPanel({
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e));
+      flash(e instanceof Error ? e.message : String(e), "error");
     }
   };
 
@@ -199,12 +204,12 @@ export function TransferPanel({
       // 入口与包类型必须一致：项目数据只在项目模块，平台配置只在平台数据页
       if (isPlatform && !packIsPlatform) {
         await api.deleteImport(row.id).catch(() => {});
-        flash("这是项目数据包。请到对应项目 → 数据 页面导入。");
+        flash("这是项目数据包。请到对应项目 → 数据 页面导入。", "warn");
         return;
       }
       if (!isPlatform && packIsPlatform) {
         await api.deleteImport(row.id).catch(() => {});
-        flash("这是平台配置包。请到平台数据与调度。");
+        flash("这是平台配置包。请到平台数据与调度。", "warn");
         return;
       }
 
@@ -217,7 +222,7 @@ export function TransferPanel({
       }
       flash("预览就绪");
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e));
+      flash(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -235,7 +240,7 @@ export function TransferPanel({
       setPreview(null);
       setImportId(null);
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e));
+      flash(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -254,7 +259,7 @@ export function TransferPanel({
       setPreview(null);
       setImportId(null);
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e));
+      flash(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -272,7 +277,7 @@ export function TransferPanel({
       setPreview(null);
       setImportId(null);
     } catch (e) {
-      flash(e instanceof Error ? e.message : String(e));
+      flash(e instanceof Error ? e.message : String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -282,7 +287,8 @@ export function TransferPanel({
 
   return (
     <div className="flex flex-col gap-6">
-      {msg && <div className="font-mono text-[12px] text-acc-400">{msg}</div>}
+      <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
+      <FeedbackNotice message={loadError} kind={loadKind} onDismiss={clearLoadError} action={{ label: "重试", onClick: reload }} />
 
       <section>
         <div className="mb-2 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">

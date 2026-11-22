@@ -1,5 +1,7 @@
 # 项目任务串行队列实施计划
 
+> 状态：历史计划，已被 #1180 删除决定取代，不得继续按本计划实现队列。当前契约见[删除专题](../../PROJECT_TASK_QUEUE.md)与 [ADR 0026](../../architecture/adr/0026-remove-project-task-queue.md)。下文保留原始计划。
+
 > For agentic workers REQUIRED SUB-SKILL superpowers:subagent-driven-development。按下面独立交付项执行并审查。
 
 **Goal** 让同项目队列中的完整任务按 FIFO 串行执行。

@@ -5,7 +5,8 @@ import { isCurrentAgentCli } from "@deepsonar/shared-types";
 import { formatActiveConcurrencyQuota } from "../provider-account-concurrency";
 import { credentialSelectionPatch, defaultCredentialCandidates, defaultCredentialUnavailable } from "../project-provider-selection";
 import { HelpTip } from "../ui";
-import { showToast } from "../toast";
+import { useOperationFeedback } from "../use-operation-feedback";
+import { FeedbackNotice } from "../FeedbackNotice";
 import { SearchableSelect } from "../SearchableSelect";
 import { CREDENTIAL_ACCOUNT_HREF } from "../settings-tabs";
 import { modelIds } from "../provider-account-helpers";
@@ -77,6 +78,7 @@ export function ProjectCliProviderAllowlistPanel({
   defaultModelRef: string | null;
   onSaved: (settings?: ProjectSettings) => void;
 }) {
+  const { message, kind, flash, clear } = useOperationFeedback(projectId);
   const [clis, setClis] = useState<AgentCli[]>(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
   const [credIds, setCredIds] = useState<string[]>(enabledCredentialIds);
   const [credentialSelectionChanged, setCredentialSelectionChanged] = useState(false);
@@ -178,7 +180,7 @@ export function ProjectCliProviderAllowlistPanel({
       if (!result.ok) {
         setProbeError(`${credential.name || credential.provider}：连接测试失败${result.category ? `（${result.category}）` : ""}${result.detail ? `：${result.detail}` : ""}`);
       } else {
-        showToast(`${credential.name || credential.provider}：连接测试成功`, "ok");
+        flash(`${credential.name || credential.provider}：连接测试成功`, "ok");
       }
       onSaved();
     } catch (error) {
@@ -212,19 +214,19 @@ export function ProjectCliProviderAllowlistPanel({
   const save = async () => {
     if (saveRequest.current || probeRequest.current) return;
     if (clis.length === 0) {
-      showToast("至少启用一种 Agent CLI", "error");
+      flash("至少启用一种 Agent CLI", "error");
       return;
     }
     if (!credentialListLoaded) {
-      showToast("Provider 账号尚未加载成功，不能保存账号白名单或默认账号变更", "error");
+      flash("Provider 账号尚未加载成功，不能保存账号白名单或默认账号变更", "error");
       return;
     }
     if (unavailableDefault) {
-      showToast("请显式清除或更换不在可用范围内的默认账号", "error");
+      flash("请显式清除或更换不在可用范围内的默认账号", "error");
       return;
     }
     if (unavailableModel) {
-      showToast("请显式清除或更换默认账号中不可用的默认模型", "error");
+      flash("请显式清除或更换默认账号中不可用的默认模型", "error");
       return;
     }
     const request = {};
@@ -240,7 +242,7 @@ export function ProjectCliProviderAllowlistPanel({
           modelSelectionChanged, selectedDefaultModelRef }),
       });
       if (!isCurrent()) return;
-      showToast("已保存，下一 Job 生效", "ok");
+      flash("已保存，下一 Job 生效", "ok");
       setSaved(true);
       setCredIds(result.enabled_credential_ids);
       setSelectedDefaultCredentialId(result.default_credential_id);
@@ -251,7 +253,7 @@ export function ProjectCliProviderAllowlistPanel({
     } catch (error) {
       if (!isCurrent()) return;
       setFailed(true);
-      showToast(`保存失败：${error instanceof Error ? error.message : error}`, "error");
+      flash(`保存失败：${error instanceof Error ? error.message : error}`, "error");
     } finally {
       if (isCurrent()) { saveRequest.current = null; setBusy(false); }
     }
@@ -259,6 +261,7 @@ export function ProjectCliProviderAllowlistPanel({
 
   return (
     <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+      <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
       <div className="border-b border-white/[.055] px-4 py-3">
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
           <span>CLI / Provider 启用</span>

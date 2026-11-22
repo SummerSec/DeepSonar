@@ -17,7 +17,7 @@ const V64_COMMIT = "6a8ab4ad777df0c727b82b34834f43c99fbd7843";
 const CANDIDATE_TABLES = ["project_finding_candidate_scan", "project_finding_candidate_work", "project_finding_candidate_sources", "project_finding_candidate_edges"];
 const RELATION_TABLES = ["project_finding_identity_sources", "project_finding_identity_source_revisions", "project_finding_identity_mappings", "project_finding_relation_scan", "project_finding_relation_sources", "project_finding_relation_work", "project_finding_relations"];
 const QUALITY_TABLES = ["project_finding_quality_protocols", "project_finding_quality_records", "project_finding_quality_heads", "project_finding_quality_current", "project_finding_quality_work", "project_finding_quality_observations"];
-const NEW_TABLES = [...CANDIDATE_TABLES, ...RELATION_TABLES, ...QUALITY_TABLES, "project_task_queues", "project_task_queue_items", "project_task_queue_yields", "human_requests", "job_execution_clocks", "job_continuations"];
+const NEW_TABLES = [...CANDIDATE_TABLES, ...RELATION_TABLES, ...QUALITY_TABLES, "human_requests", "job_execution_clocks", "job_continuations"];
 const CANDIDATE_INDEXES = ["project_finding_candidate_work_due", "project_finding_candidate_edges_right"];
 
 function schemaV64(): string {
@@ -48,7 +48,9 @@ async function captureHistory(db: ReturnType<typeof postgres>): Promise<Record<s
       ? { execution_deadline_at: null, budget_owner_job_id: null, budget_execution_job_id: null, ...row.row }
           : table === 'projects'
             ? { dispatch_last_served: 0, dispatch_scan_priority: null, dispatch_scan_created_at: null, dispatch_scan_job_id: null, ...row.row }
-            : row.row);
+            : table === 'findings'
+              ? { duplicate_of: null, ...row.row }
+              : row.row);
   }
   return records;
 }

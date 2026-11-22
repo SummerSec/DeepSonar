@@ -1,4 +1,4 @@
-import type { ProjectTaskQueueYieldInput, FindingInconclusiveBody, FindingVerificationControl } from "@deepsonar/shared-types";
+import type { FindingInconclusiveBody, FindingVerificationControl } from "@deepsonar/shared-types";
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
 import type { PlatformClaimsStatus } from "./platform-claims";
@@ -222,28 +222,6 @@ export interface Project {
   max_concurrent_jobs_source?: "project" | "global";
 }
 
-export type ProjectTaskQueueItemState = "queued" | "active" | "yielded" | "succeeded" | "failed" | "cancelled";
-
-export interface ProjectTaskQueueItem {
-  id: string;
-  canvas_id: string;
-  title: string;
-  state: ProjectTaskQueueItemState;
-  created_at: string;
-  started_at: string | null;
-  ended_at: string | null;
-  block_reason: string | null;
-  yield_request?: { request_id: string; expected_revision: number } | null;
-}
-
-export interface ProjectTaskQueue {
-  project_id: string;
-  paused: boolean;
-  pause_reason: string | null;
-  items: ProjectTaskQueueItem[];
-  has_more: boolean;
-}
-
 export interface SharedAsset {
   id: string;
   scope_type: "platform" | "project" | "finding";
@@ -302,7 +280,6 @@ export interface CanvasData {
     title: string;
     target_json: Record<string, unknown>;
     project_id?: string | null;
-    queue_state?: ProjectTaskQueueItemState | null;
     change_revision?: string;
     change_floor_revision?: string;
   };
@@ -509,7 +486,7 @@ export type CanvasLifecycle = CanvasLifecycleRollup & {
   ended_at: string | null;
   /** 活动 Job 数量（pending 也算活动工作）。 */
   active_count: number;
-  /** Execution pause drain count; pending queue entries are projected separately. */
+  /** Execution pause drain count; pending Jobs are counted separately. */
   execution_active_count: number;
   pending_count: number;
   execution_state: TaskExecutionState;
@@ -537,7 +514,6 @@ export type CanvasSummary = CanvasLifecycleRollup & {
   execution_active_count: number;
   pending_count: number;
   execution_state: TaskExecutionState;
-  queue_state?: ProjectTaskQueueItemState | null;
   /** 当前根节点/报告阶段，避免列表从 last_job_status 推断任务终态。 */
   root_status: string | null;
   report_status: string | null;
@@ -749,6 +725,7 @@ export type FindingDisposition =
   | "confirmed_vuln"
   | "rejected_fp"
   | "resolved"
+  | "duplicate"
   | "archived";
 
 export interface FindingQueryFilters {
@@ -2350,17 +2327,6 @@ export const api = {
     send<Project>("POST", "/projects", p),
   updateProject: (id: string, p: { name?: string; description?: string; status?: "active" | "archived" }) =>
     send<Project>("PATCH", `/projects/${id}`, p),
-  yieldProjectTaskQueue: (projectId: string, input: ProjectTaskQueueYieldInput) =>
-    send<ProjectTaskQueue>("POST", `/projects/${projectId}/task-queue/yield`, input),
-  projectTaskQueue: (projectId: string, signal?: AbortSignal) =>
-    get<ProjectTaskQueue>(`/projects/${projectId}/task-queue`, signal),
-  setProjectTaskQueuePaused: (projectId: string, paused: boolean, failedHeadId?: string) =>
-    send<ProjectTaskQueue>("PATCH", `/projects/${projectId}/task-queue`, {
-      paused,
-      ...(failedHeadId ? { acknowledge_failed_head: failedHeadId } : {}),
-    }),
-  enqueueProjectTaskQueueItem: (projectId: string, canvasId: string) =>
-    send<ProjectTaskQueue>("POST", `/projects/${projectId}/task-queue/items`, { canvas_id: canvasId }),
   archiveProject: (id: string) =>
     send<{ id: string; status: string }>("POST", `/projects/${id}/archive`),
   /** 就地更新任务标题与内容；不改写已冻结 Job 快照 */
@@ -2395,8 +2361,6 @@ export const api = {
       scheduled_start_at?: string;
       /** 下一北京时间 08:00（Asia/Shanghai）开始。 */
       schedule_beijing_8am?: boolean;
-      /** 加入项目串行任务队列；省略时维持普通调度。 */
-      enqueue?: boolean;
       runtime_profile?: {
         model_ref?: string | null;
         reasoning_effort?: string | null;
@@ -2404,7 +2368,7 @@ export const api = {
       };
     },
   ) =>
-    send<{ canvas_id: string; job: { id: string; status: string }; scheduled_start_at?: string | null; enqueued: boolean } & import("./task-contract-editor").TaskContractFeedback>(
+    send<{ canvas_id: string; job: { id: string; status: string }; scheduled_start_at?: string | null } & import("./task-contract-editor").TaskContractFeedback>(
       "POST",
       `/projects/${projectId}/tasks`,
       t,

@@ -7,11 +7,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type EffectiveFindingProtocol, type FindingProtocolConfig, type FindingSummary, type Project } from "../api";
 import { useTaskCanvasList } from "./useTaskCanvasList";
+import { useOperationFeedback } from "../use-operation-feedback";
+import { FeedbackNotice } from "../FeedbackNotice";
 import { DatetimeLocalPicker } from "../DatetimeLocalPicker";
 import { FindingProtocolEditor } from "../FindingProtocolEditor";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { useConfirmDialog } from "../components/ConfirmDialog";
-import { ProjectTaskQueueEnqueueOption, ProjectTaskQueuePanel, projectTaskQueueCreatedMessage } from "../components/ProjectTaskQueuePanel";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import { formatBeijingTime, nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
@@ -30,14 +31,14 @@ const NETWORK_OPTIONS = [
   { value: "deny" as const, label: "禁止出网" },
 ];
 
-function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }: { projectId: string; initialSeedIds?: string[]; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
-  const [form, setForm] = useState<{ title: string; content: string; kind: "standard" | "compose"; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string; enqueue: boolean }>({
+function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }: { projectId: string; initialSeedIds?: string[]; onDone: (canvasId: string) => void; onCancel: () => void; flash: ReturnType<typeof useOperationFeedback>["flash"] }) {
+  const [form, setForm] = useState<{ title: string; content: string; kind: "standard" | "compose"; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string }>({
     title: initialSeedIds.length ? "围绕选中 Finding 继续深挖" : "",
     content: initialSeedIds.length ? "只围绕选中 Finding 做确认、补证或组合链，不扩大资产范围。" : "",
     kind: initialSeedIds.length ? "compose" : "standard",
     network: "project",
     schedule: "immediate",
-    startAtLocal: nextBeijing8amLocalValue(), enqueue: false,
+    startAtLocal: nextBeijing8amLocalValue(),
   });
   const [contractDraft, setContractDraft] = useState("");
   const [contractFeedback, setContractFeedback] = useState<TaskContractFeedback>({});
@@ -75,7 +76,9 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
         setSeedCandidates(eligible);
         setSelectedSeedIds((current) => new Set([...current].filter((id) => eligible.some((item) => item.id === id))));
       })
-      .catch((error) => flash(`加载可代入 Finding 失败：${error instanceof Error ? error.message : error}`))
+      .catch((error) => {
+        if (active) flash(`加载可代入 Finding 失败：${error instanceof Error ? error.message : error}`, "error");
+      })
       .finally(() => active && setSeedLoading(false));
     return () => { active = false; };
   }, [form.kind, projectId]);
@@ -117,20 +120,20 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
         onSubmit={async (e) => {
           e.preventDefault();
           if (submitting || createdCanvasId) return;
-          if (parsedContract.error) return flash(parsedContract.error);
+          if (parsedContract.error) return flash(parsedContract.error, "error");
           setContractFeedback({});
-          if (!form.title.trim()) return flash("请写明希望得到的结果");
-          if (!form.content.trim()) return flash("请补充必要背景或边界");
+          if (!form.title.trim()) return flash("请写明希望得到的结果", "error");
+          if (!form.content.trim()) return flash("请补充必要背景或边界", "error");
           if (form.kind === "compose" && selectedSeedIds.size === 0) {
-            return flash("组合续挖任务至少选择 1 条可代入 Finding");
+            return flash("组合续挖任务至少选择 1 条可代入 Finding", "error");
           }
-          if (selectedSeedIds.size > MAX_COMPOSE_SEEDS) return flash(`组合续挖任务最多选择 ${MAX_COMPOSE_SEEDS} 条 Finding`);
+          if (selectedSeedIds.size > MAX_COMPOSE_SEEDS) return flash(`组合续挖任务最多选择 ${MAX_COMPOSE_SEEDS} 条 Finding`, "error");
           let scheduledStartAt: string | undefined;
           if (form.schedule === "at") {
             const issue = scheduleTimeIssue(form.startAtLocal);
-            if (issue) return flash(issue);
+            if (issue) return flash(issue, "error");
             const iso = parseDatetimeLocalToIso(form.startAtLocal);
-            if (!iso) return flash("请选择合法的开始时间");
+            if (!iso) return flash("请选择合法的开始时间", "error");
             scheduledStartAt = iso;
           }
           setSubmitting(true);
@@ -139,20 +142,25 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
               ...(parsedContract.contract ? { task_contract: parsedContract.contract } : {}),
               title: form.title.trim(),
               content: form.content.trim(),
-              kind: form.kind, ...(form.enqueue ? { enqueue: true } : {}),
+              kind: form.kind,
               ...(form.kind === "compose" ? { seed_finding_ids: [...selectedSeedIds] } : {}),
               ...(form.network === "project" ? {} : { allow_egress: form.network === "allow" }),
               ...(findingProtocol ? { finding_protocol: findingProtocol } : {}),
               ...(scheduledStartAt ? { scheduled_start_at: scheduledStartAt } : {}),
             });
-            flash(projectTaskQueueCreatedMessage(form.enqueue, result.enqueued, result.scheduled_start_at ? formatBeijingTime(result.scheduled_start_at) ?? "计划时间" : null));
-            if (taskFeedbackItems(result).length || result.enqueued) {
-              if (taskFeedbackItems(result).length) setContractFeedback(result);
+            flash(
+              result.scheduled_start_at
+                ? `任务已创建，将于 ${formatBeijingTime(result.scheduled_start_at) ?? "计划时间"} 开始执行`
+                : "任务已创建，等待调度执行",
+              taskFeedbackItems(result).length > 0 ? "warn" : "ok",
+            );
+            if (taskFeedbackItems(result).length) {
+              setContractFeedback(result);
               setCreatedCanvasId(result.canvas_id);
             } else onDone(result.canvas_id);
           } catch (error) {
             if (error instanceof ApiRequestError) setContractFeedback(error.taskContractFeedback);
-            flash(`创建失败：${error instanceof Error ? error.message : error}`);
+            flash(`创建失败：${error instanceof Error ? error.message : error}`, "error");
           } finally {
             setSubmitting(false);
           }
@@ -419,7 +427,6 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
             )}
           </section>
 
-          <ProjectTaskQueueEnqueueOption checked={form.enqueue} onChange={(enqueue) => setForm({ ...form, enqueue })} disabled={submitting || Boolean(createdCanvasId)} />
           {effectiveFindingProtocol && (
             <FindingProtocolEditor
               value={findingProtocol}
@@ -470,10 +477,9 @@ export function TasksPage() {
   );
   const [project, setProject] = useState<Project | undefined>();
   const [filter, setFilter] = useState<Filter>("");
-  const [msg, setMsg] = useState<string | null>(null);
+  const { message, kind, flash, clear } = useOperationFeedback(projectId);
   const [creating, setCreating] = useState(initialSeedIds.length > 0);
   const [clock, setClock] = useState(() => Date.now());
-  const flash = (message: string) => { setMsg(message); setTimeout(() => setMsg(null), 3200); };
 
   const listStatus = filter === "archived" || filter === "knowledge_history" ? filter : "active";
   const listLabel = listStatus === "knowledge_history" ? "知识整理历史" : listStatus === "archived" ? "已归档" : "全部任务";
@@ -503,7 +509,7 @@ export function TasksPage() {
       endedAt: c.ended_at,
       startedAt: c.started_at,
       scheduledStartAt: readScheduledStartAt(c.target_json),
-      executionState: c.execution_state, queueState: c.queue_state,
+      executionState: c.execution_state,
       executionActiveCount: c.execution_active_count,
       pendingCount: c.pending_count,
       nowMs: clock,
@@ -521,7 +527,7 @@ export function TasksPage() {
     endedAt: canvas.ended_at,
     startedAt: canvas.started_at,
     scheduledStartAt: readScheduledStartAt(canvas.target_json),
-    executionState: canvas.execution_state, queueState: canvas.queue_state,
+    executionState: canvas.execution_state,
     executionActiveCount: canvas.execution_active_count,
     pendingCount: canvas.pending_count,
     nowMs: clock,
@@ -535,7 +541,7 @@ export function TasksPage() {
 
       {hasData && <div role="group" aria-label="任务列表统计" className="mb-5 flex flex-wrap gap-2"><span className="rounded-full bg-white/[.025] px-3 py-2 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]"><strong className="mr-2 text-zinc-300">{visibleCount}</strong>{listLabel}</span><span className="rounded-full bg-run-400/[.055] px-3 py-2 font-mono text-[9px] text-run-400 ring-1 ring-run-400/10"><strong className="mr-2">{activeCount}</strong>正在推进</span><span className="rounded-full bg-high-500/[.055] px-3 py-2 font-mono text-[9px] text-high-500 ring-1 ring-high-500/10"><strong className="mr-2">{findingCount}</strong>风险发现</span></div>}
       {error && <div role="alert" className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">{error}</div>}
-      {msg && <div role="status" className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15">{msg}</div>}<ProjectTaskQueuePanel projectId={projectId} key={projectId} />
+      <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
       {creating && <NewTaskForm projectId={projectId} initialSeedIds={initialSeedIds} flash={flash} onCancel={() => { setCreating(false); setSearchParams({}, { replace: true }); }} onDone={(canvasId) => navigate(`/projects/${projectId}/tasks/${canvasId}`)} />}
 
       {loading ? <div role="status" aria-label="正在加载任务列表"><PageSkeleton rows={3} /></div> : !hasData ? null : filtered.length === 0 ? <EmptyState title={listStatus === "knowledge_history" ? "暂无知识整理历史" : canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length || listStatus === "knowledge_history" ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && listStatus === "active" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
@@ -551,7 +557,7 @@ export function TasksPage() {
               endedAt: canvas.ended_at,
               startedAt: canvas.started_at,
               scheduledStartAt,
-              executionState: canvas.execution_state, queueState: canvas.queue_state,
+              executionState: canvas.execution_state,
               executionActiveCount: canvas.execution_active_count,
               pendingCount: canvas.pending_count,
               nowMs: clock,
@@ -686,12 +692,12 @@ export function TasksPage() {
                             pending_count: result.pending_count,
                           } : item));
                           if (result.execution_state === "pausing") {
-                            flash(`暂停中，尚有 ${result.active_count} 个 Job 安全收尾`);
+                            flash(`暂停中，尚有 ${result.active_count} 个 Job 安全收尾`, "warn");
                           } else {
                             flash(result.execution_state === "paused" ? "任务已暂停" : "任务已开始");
                           }
                         } catch (e) {
-                          flash(`任务控制失败：${e instanceof Error ? e.message : e}`);
+                          flash(`任务控制失败：${e instanceof Error ? e.message : e}`, "error");
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-amber-300 transition-colors hover:bg-amber-500/[.08] hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
@@ -710,7 +716,7 @@ export function TasksPage() {
                           await api.cancelJob(canvas.last_job_id!);
                           flash("已提交取消请求");
                         } catch (e) {
-                          flash(`取消失败：${e instanceof Error ? e.message : e}`);
+                          flash(`取消失败：${e instanceof Error ? e.message : e}`, "error");
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
@@ -729,7 +735,7 @@ export function TasksPage() {
                           else if (r.action === "already_running") flash(r.message ?? "任务已在执行");
                           else flash("已提交启动请求");
                         } catch (e) {
-                          flash(`立即开始失败：${e instanceof Error ? e.message : e}`);
+                          flash(`立即开始失败：${e instanceof Error ? e.message : e}`, "error");
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-violet-300 transition-colors hover:bg-violet-500/[.08] hover:text-violet-200"
@@ -752,7 +758,7 @@ export function TasksPage() {
                           else if (r.action === "start_now") flash(r.message ?? "已立即开始");
                           else flash("没有中断 Worker；已唤醒 Hub 继续决策");
                         } catch (e) {
-                          flash(`继续执行失败：${e instanceof Error ? e.message : e}`);
+                          flash(`继续执行失败：${e instanceof Error ? e.message : e}`, "error");
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
@@ -777,7 +783,7 @@ export function TasksPage() {
                           await api.retryTask(canvas.id);
                           flash("已清空历史并重新开始执行");
                         } catch (e) {
-                          flash(composeRetryErrorMessage(e));
+                          flash(composeRetryErrorMessage(e), "error");
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"
@@ -805,7 +811,7 @@ export function TasksPage() {
                               : list.filter((c) => c.id !== canvas.id),
                           );
                         } catch (e) {
-                          flash(`归档失败：${e instanceof Error ? e.message : e}`);
+                          flash(`归档失败：${e instanceof Error ? e.message : e}`, "error");
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
@@ -827,7 +833,7 @@ export function TasksPage() {
                               : list.map((c) => (c.id === canvas.id ? { ...c, status: "active" as const, archived_at: null } : c)),
                           );
                         } catch (e) {
-                          flash(`取消归档失败：${e instanceof Error ? e.message : e}`);
+                          flash(`取消归档失败：${e instanceof Error ? e.message : e}`, "error");
                         }
                       }}
                       className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-white/5 hover:text-zinc-200"
@@ -850,7 +856,7 @@ export function TasksPage() {
                         flash("任务已永久删除");
                         setCanvases((list) => list.filter((c) => c.id !== canvas.id));
                       } catch (e) {
-                        flash(`删除失败：${e instanceof Error ? e.message : e}`);
+                        flash(`删除失败：${e instanceof Error ? e.message : e}`, "error");
                       }
                     }}
                     className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-1 text-[9px] text-zinc-600 transition-colors hover:bg-red-500/[.07] hover:text-red-300"

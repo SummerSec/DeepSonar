@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useAuth } from "./auth";
 import { api } from "./api";
-import { showToast } from "./toast";
+import { FeedbackNotice } from "./FeedbackNotice";
+import { useOperationFeedback } from "./use-operation-feedback";
 
 const inputCls =
   "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[13px] text-zinc-200 outline-none focus:border-acc-500";
@@ -13,8 +14,7 @@ export function AccountPanel() {
   const [passwordForm, setPasswordForm] = useState({ current: "", next: "", confirm: "" });
   const [usernameForm, setUsernameForm] = useState({ current: "", next: user?.username ?? "" });
   const [busy, setBusy] = useState<"password" | "username" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const { message, kind, flash, clear } = useOperationFeedback(user?.id);
 
   const applySession = async (token: string) => {
     setToken(token);
@@ -23,13 +23,11 @@ export function AccountPanel() {
 
   const changePassword = async () => {
     if (passwordForm.next !== passwordForm.confirm) {
-      setError("两次输入的新密码不一致");
-      showToast("两次输入的新密码不一致", "error");
+      flash("两次输入的新密码不一致", "error");
       return;
     }
     setBusy("password");
-    setError(null);
-    setMessage(null);
+    clear();
     try {
       const result = await api.changePassword({
         current_password: passwordForm.current,
@@ -37,12 +35,10 @@ export function AccountPanel() {
       });
       await applySession(result.token);
       setPasswordForm({ current: "", next: "", confirm: "" });
-      setMessage("密码已修改，旧会话已失效");
-      showToast("密码已修改，旧会话已失效");
+      flash("密码已修改，旧会话已失效");
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      setError(detail);
-      showToast(detail, "error");
+      flash(detail, "error");
     } finally {
       setBusy(null);
     }
@@ -50,8 +46,7 @@ export function AccountPanel() {
 
   const changeUsername = async () => {
     setBusy("username");
-    setError(null);
-    setMessage(null);
+    clear();
     try {
       const result = await api.changeUsername({
         current_password: usernameForm.current,
@@ -59,12 +54,10 @@ export function AccountPanel() {
       });
       await applySession(result.token);
       setUsernameForm({ current: "", next: result.user.username });
-      setMessage("登录名已修改，旧会话已失效");
-      showToast("登录名已修改，旧会话已失效");
+      flash("登录名已修改，旧会话已失效");
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
-      setError(detail);
-      showToast(detail, "error");
+      flash(detail, "error");
     } finally {
       setBusy(null);
     }
@@ -88,8 +81,7 @@ export function AccountPanel() {
         </p>
       </section>
 
-      {message && <div className="font-mono text-[12px] text-acc-400">{message}</div>}
-      {error && <div role="alert" className="text-[12px] text-red-300">{error}</div>}
+      <FeedbackNotice message={message} kind={kind} onDismiss={clear} />
 
       <section className="rounded-[18px] bg-white/[.022] p-4 ring-1 ring-white/[.06]">
         <div className="mb-3 font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">修改登录名</div>

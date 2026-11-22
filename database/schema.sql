@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 77);
+INSERT INTO schema_meta (id, version) VALUES ('global', 79);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -63,30 +63,6 @@ CREATE UNIQUE INDEX canvases_trigger_uniq
   ON canvases (project_id, trigger_source, trigger_event_id)
   WHERE trigger_event_id IS NOT NULL;
 CREATE INDEX canvases_project_idx ON canvases (project_id, status, created_at DESC);
-
-CREATE TABLE project_task_queues (
-  project_id uuid PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
-  paused boolean NOT NULL DEFAULT false,
-  pause_reason text,
-  reconciled_at timestamptz NOT NULL DEFAULT now(),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE project_task_queue_items (
-  id bigserial PRIMARY KEY,
-  project_id uuid NOT NULL REFERENCES project_task_queues(project_id) ON DELETE CASCADE,
-  canvas_id text NOT NULL UNIQUE,
-  state text NOT NULL DEFAULT 'queued',
-  created_at timestamptz NOT NULL DEFAULT now(),
-  started_at timestamptz,
-  ended_at timestamptz,
-  CONSTRAINT project_task_queue_canvas_fk FOREIGN KEY (project_id, canvas_id)
-    REFERENCES canvases(project_id, id) ON DELETE CASCADE,
-  CONSTRAINT project_task_queue_state_check CHECK (state IN ('queued', 'active', 'yielded', 'succeeded', 'failed', 'cancelled'))
-);
-CREATE UNIQUE INDEX project_task_queue_active_uniq ON project_task_queue_items(project_id) WHERE state = 'active';
-CREATE INDEX project_task_queue_order_idx ON project_task_queue_items(project_id, state, id);
 
 CREATE TABLE jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -288,23 +264,6 @@ CREATE INDEX human_requests_pending_idx ON human_requests(status,created_at) WHE
 CREATE INDEX human_requests_job_idx ON human_requests(job_id,created_at DESC);
 CREATE INDEX human_requests_expiry_idx ON human_requests(checkpoint_expires_at) WHERE checkpoint_status <> 'blocked';
 
--- Durable operator decision and reply consumption, independent of mutable FIFO position.
-CREATE TABLE project_task_queue_yields (
-  mutation_id uuid PRIMARY KEY,
-  project_id uuid NOT NULL REFERENCES project_task_queues(project_id) ON DELETE CASCADE,
-  canvas_id text NOT NULL,
-  source_item_id bigint NOT NULL,
-  request_id uuid NOT NULL UNIQUE REFERENCES human_requests(id) ON DELETE CASCADE,
-  request_revision integer NOT NULL CHECK (request_revision >= 0),
-  reply_message_id uuid,
-  requeued_item_id bigint,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  requeued_at timestamptz,
-  FOREIGN KEY (project_id,canvas_id) REFERENCES canvases(project_id,id) ON DELETE CASCADE,
-  CHECK ((reply_message_id IS NULL AND requeued_item_id IS NULL AND requeued_at IS NULL)
-    OR (reply_message_id IS NOT NULL AND requeued_item_id IS NOT NULL AND requeued_at IS NOT NULL))
-);
-
 -- Closing a Job never leaves an open management request, even when it has no
 -- active Attempt after resource reclamation. Historical payloads stay immutable.
 CREATE FUNCTION close_job_human_requests() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -460,6 +419,8 @@ CREATE TABLE findings (
   disposition_note text,
   disposition_by text,
   disposition_at timestamptz,
+  -- 重复处置目标（#1206 R4）：仅当 disposition='duplicate' 时非空，且必须同 project
+  duplicate_of uuid,
   raw_json jsonb NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -470,12 +431,14 @@ CREATE TABLE findings (
   scoring_json jsonb NOT NULL DEFAULT '{}',
   CONSTRAINT findings_job_id_fingerprint_key UNIQUE (job_id, fingerprint),
   CONSTRAINT findings_source_digest_check CHECK (source_digest IS NULL OR source_digest ~ '^v1:[a-f0-9]{64}$'),
+  CONSTRAINT findings_duplicate_of_self_check CHECK (duplicate_of IS NULL OR duplicate_of <> id),
+  CONSTRAINT findings_duplicate_disposition_check CHECK ((disposition = 'duplicate') = (duplicate_of IS NOT NULL)),
   CONSTRAINT findings_severity_check CHECK (severity IS NULL OR severity IN ('low', 'medium', 'high', 'critical')),
   CONSTRAINT findings_verify_status_check CHECK (
     verify_status IN ('pending', 'verifying', 'confirmed', 'false_positive', 'needs_human', 'refuted', 'inconclusive')
   ),
   CONSTRAINT findings_disposition_check CHECK (
-    disposition IN ('open', 'accepted', 'human_reproducing', 'confirmed_vuln', 'rejected_fp', 'resolved', 'archived')
+    disposition IN ('open', 'accepted', 'human_reproducing', 'confirmed_vuln', 'rejected_fp', 'resolved', 'duplicate', 'archived')
   )
 );
 -- Rebuildable C projection. Generation work is durable; no relationship truth lives here.
@@ -509,6 +472,10 @@ CREATE TABLE project_finding_features (
 );
 CREATE INDEX project_finding_features_project ON project_finding_features(project_id, generation, finding_id);
 CREATE UNIQUE INDEX findings_project_scan_idx ON findings(project_id, id);
+-- 重复处置目标同 project 由复合外键保证，避免只在路由层校验（#1206 R4）
+ALTER TABLE findings ADD CONSTRAINT findings_duplicate_of_same_project_fk
+  FOREIGN KEY (project_id, duplicate_of) REFERENCES findings(project_id, id);
+CREATE INDEX findings_project_fingerprint_idx ON findings (project_id, fingerprint);
 
 -- Rebuildable lexical candidates only; source Finding/Verify state remains authoritative.
 CREATE TABLE project_finding_candidate_scan (

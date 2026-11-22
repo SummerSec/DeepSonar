@@ -23,7 +23,7 @@ export const VERIFY_VERDICTS = ["confirmed", "rework", "needs_human", "refuted"]
 
 export const HUMAN_JOB_STATUS = "waiting_human" as const;
 
-export const CLOSED_DISPOSITIONS = ["rejected_fp", "resolved", "archived"] as const;
+export const CLOSED_DISPOSITIONS = ["rejected_fp", "resolved", "duplicate", "archived"] as const;
 export const OPEN_DISPOSITIONS = ["open", "accepted", "human_reproducing"] as const;
 export const HIGH_RISK_SEVERITIES = ["critical", "high"] as const;
 
@@ -161,6 +161,15 @@ export const FINDING_STATE_MATRIX: readonly FindingStateRow[] = [
     writer: "PATCH /findings/:id/disposition",
     meaning: "业务已修复/关闭",
     report: "已闭环",
+    terminal: true,
+  },
+  {
+    dimension: "disposition",
+    value: "duplicate",
+    owner: "Human",
+    writer: "PATCH /findings/:id/disposition（必须带 duplicate_of）",
+    meaning: "业务判定与已提交/已收敛的同族记录重复；不改写 verify_status，也不并入 refuted/inconclusive",
+    report: "单列重复桶，不按新漏洞计数",
     terminal: true,
   },
   {

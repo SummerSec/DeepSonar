@@ -114,7 +114,20 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 
 任务/profile 选项从未筛选的授权汇总取得，不以当前页推断。URL 保存筛选、游标、详情与交付视图；查询失败隐藏旧列表、计数和详情，重试仍保留 URL。记录展示源 `updated_at`，不虚构异步计算状态。证据内容、任务详情和报告仍由各自 scope 校验，列表权限不扩大证据读取；普通 Job 无新增查询通道。
 
-本切片不提供猜测资产/版本筛选、关联边或数据完整性承诺。来源提前去重修复、权威特征覆盖率与样本质量、查询规模性能需分别验收；字面文本检索不是语义同一性判断。既有默认无分页 API 窗口仍供其他调用方使用，项目页面不再依赖该窗口。
+本切片不提供猜测资产/版本筛选、关联边或数据完整性承诺；同项目跨 canvas 重复候选见[重复候选与重复处置](#finding-重复候选与重复处置1206)。来源提前去重修复、权威特征覆盖率与样本质量、查询规模性能需分别验收；字面文本检索不是语义同一性判断。既有默认无分页 API 窗口仍供其他调用方使用，项目页面不再依赖该窗口。
+
+### Finding 重复候选与重复处置（#1206）
+
+记录仍是不可变历史真相：重复只体现在查询与计数口径，不合并、不改写 `emit_finding` 冲突语义，也不把 `fingerprint` 升为跨任务问题身份。
+
+| 方法和路径 | scope | 接口边界 |
+| --- | --- | --- |
+| `GET /findings/:id/duplicates` | `findings:read` | 同项目跨 canvas 三类候选并集：`fingerprint` 精确、`location` 双向 `starts_with` 前缀、同 canvas research cluster；逐条给出 `match_reason`。只读，不返回证据正文或凭据；显式 `project_id` 与本记录不同时返回 403 `CROSS_PROJECT_DUPLICATE_QUERY`，`limit` 1–200 |
+| `GET /findings`（`fingerprint` 过滤） | `findings:read` | 逗号分隔精确匹配，用于跨 Job 同值查询；仍受项目 scope 与游标页约束 |
+| `PATCH /findings/:id/disposition`（`duplicate`） | `findings:write` | `disposition=duplicate` 必须提供同项目、存在、非自身的 `duplicate_of`；目标不在当前项目可见范围时返回 400 `DUPLICATE_TARGET_NOT_FOUND`；非 duplicate 携带 `duplicate_of` 返回 400 `DUPLICATE_TARGET_NOT_ALLOWED`；`confirmed_vuln` 仍要求 `verify_status=confirmed` |
+| `GET /projects/:id/findings/summary` | `findings:read` | 记录数之外返回 `distinct_by_fingerprint` / `distinct_by_cluster`（筛选命中的每组计一次，未分组按记录计）；`duplicate` 在 disposition 桶中单列，不与 `refuted`/`inconclusive` 混算 |
+
+数据库侧由复合外键 `(project_id, duplicate_of) → findings(project_id, id)` 与成对约束 `duplicate ⟺ duplicate_of NOT NULL` 兜底；`duplicate_of` 指向自身由 CHECK 拒绝。
 
 ### Finding 评论的停止目标拒绝（#1002）
 
@@ -327,9 +340,9 @@ Model Gateway 支持原始方法/相对路径/query、未知端到端头及原�
 
 Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_configuration_invalid`，`retryable=false`，RepairFeedback 为 `permanent_failure`；`expected` 保留受控 reason 与 `platform_administrator` owner，下一步要求平台修复后重新准入，不授予 Agent 扩额或自动重试权。仅映射已知配额异常；其他 DB、schema、resolver 错误不降级为确定无效果。
 
-## 项目任务队列管理（#1018）
+## 删除项目任务队列契约（#1180）
 
-创建任务可用 enqueue 原子入队。GET /projects/{id}/task-queue 使用 tasks:read，PATCH 同路径和 POST /projects/{id}/task-queue/items 使用 jobs:control，并校验项目范围。新控制 body 严格拒绝未知字段。失败/取消后恢复必须提交 acknowledge_failed_head 指向明确确认的当前条目，过期身份或未知效果返回稳定 409。队列、Canvas 与 Job 读取为有界诊断，详细字段见 OpenAPI 与[队列专题](../PROJECT_TASK_QUEUE.md)。
+队列读取、暂停/继续、追加和显式让位 API 已全部删除，不保留别名或兼容响应。创建请求的入队选项、任务/画布列表和详情的队列专属投影、共享类型、OpenAPI、权限及路由清单同步删除；旧字段不得获得兼容成功响应。UI 与管理 Skill 不再调用旧入口。普通创建、定时与任务自身暂停/取消/重试保留原契约，详情及历史仍沿既有权限读取。见[删除专题](../PROJECT_TASK_QUEUE.md)，最终 SHA Actions 待验。
 
 ## 任务会话收尾（#1197）
 
@@ -351,9 +364,9 @@ Control的evaluation_plan增加每例显式task_inputs，平台校验引用已�
 
 #1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
 
-## 人工等待显式让位入口（#1074）
+## 人工等待回复与普通续做（#1180）
 
-POST /projects/{id}/task-queue/yield 使用 jobs:control 与项目范围，输入取共享 ProjectTaskQueueYieldInput 严格契约。mutation_id 绑定 expected_item_id、request_id 与 expected_revision，同编号内容冲突 409。响应沿原有界队列投影，新增 yielded 和 yield_request。Web 队列提供显式按钮及暂存分组。回复仍走既有消息 API，保存后原子排队尾，202 只证明回复保存，执行等待原准入。具体限制与注意力成本见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+显式让位入口与队列分组已删除。回复沿既有消息 API 持久保存，202 只证明保存；原检查点、任务暂停/取消、授权、退出/效果/预算准入决定唯一后继，不等待其它任务整体完成。升级保全为任务暂停的 waiting_human 仍只保存回复，不绕过任务执行门。见[人工续做](../HUMAN_CONTINUATION.md)，最终 SHA Actions 待验。
 
 ## 不限配额接口（#1123）
 

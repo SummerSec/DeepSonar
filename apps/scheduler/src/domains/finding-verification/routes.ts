@@ -94,7 +94,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       SELECT f.id, f.project_id, f.job_id, f.node_id, f.fingerprint, f.title, f.severity,
              f.profile, f.category, f.tags_json, f.evidence_refs_json, f.scoring_json,
              to_char(f.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at,
-             f.location, f.summary, f.verify_status, f.disposition, f.disposition_note,
+             f.location, f.summary, f.verify_status, f.disposition, f.duplicate_of, f.disposition_note,
              f.disposition_by, f.disposition_at, f.created_at, f.updated_at,
              p.name AS project_name, j.canvas_id, c.title AS canvas_title,
              r.dedupe_cluster_id, r.canonical_finding_id, r.is_canonical, r.dedupe_reason,
@@ -679,6 +679,73 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       subject_revision: state.subject_revision ?? null,
       confirm_trace,
       fact_evidence_trace,
+    };
+  });
+  /**
+   * 跨 canvas 重复候选（#1206 R1）：只读，不合并、不改写任何 finding。
+   * 同 project 内按 fingerprint 精确匹配与 location 前缀匹配取并集，
+   * 另附同 canvas research cluster 成员；只标注命中原因，不承诺自动判重。
+   */
+  app.get("/findings/:id/duplicates", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isUuid(id)) return reply.code(400).send({ error: "invalid finding id", error_code: "INVALID_ID" });
+    const q = req.query as Record<string, string | undefined>;
+    const [source] = await sql`
+      SELECT id, project_id, fingerprint, location FROM findings WHERE id = ${id}`;
+    if (!source) return reply.code(404).send({ error: "finding not found", error_code: "NOT_FOUND" });
+    // 去重需求不放宽数据边界：显式跨 project 查询必须拒绝。
+    const requestedProject = q.project_id?.trim();
+    if (requestedProject && requestedProject !== String(source.project_id)) {
+      return reply.code(403).send({
+        error: "duplicate candidates are limited to the finding project",
+        error_code: "CROSS_PROJECT_DUPLICATE_QUERY",
+        project_id: source.project_id,
+      });
+    }
+    const rawLimit = Number(q.limit ?? 50);
+    const limit = Number.isFinite(rawLimit) ? Math.min(200, Math.max(1, Math.trunc(rawLimit))) : 50;
+    const location = typeof source.location === "string" && source.location.trim() ? source.location.trim() : null;
+    const items = await sql`
+      WITH source AS (
+        SELECT ${id}::uuid AS id,
+               ${source.project_id}::uuid AS project_id,
+               ${source.fingerprint}::text AS fingerprint,
+               ${location}::text AS location
+      ), source_cluster AS (
+        SELECT r.dedupe_cluster_id FROM finding_research r, source s WHERE r.finding_id = s.id
+      )
+      SELECT f.id, f.project_id, f.job_id, f.fingerprint, f.title, f.severity, f.location, f.summary,
+             f.verify_status, f.disposition, f.duplicate_of,
+             to_char(f.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at,
+             j.canvas_id, c.title AS canvas_title,
+             r.dedupe_cluster_id, r.canonical_finding_id, r.is_canonical, r.dedupe_reason,
+             CASE
+               WHEN f.fingerprint = s.fingerprint THEN 'fingerprint_equal'
+               WHEN s.location IS NOT NULL AND f.location IS NOT NULL
+                 AND (starts_with(f.location, s.location) OR starts_with(s.location, f.location))
+                 THEN 'location_prefix'
+               ELSE 'same_research_cluster'
+             END AS match_reason
+      FROM findings f
+      CROSS JOIN source s
+      JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
+      JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
+      LEFT JOIN finding_research r ON r.finding_id = f.id
+      WHERE f.project_id = s.project_id AND f.id <> s.id
+        AND (
+          f.fingerprint = s.fingerprint
+          OR (s.location IS NOT NULL AND f.location IS NOT NULL
+              AND (starts_with(f.location, s.location) OR starts_with(s.location, f.location)))
+          OR (r.dedupe_cluster_id IS NOT NULL AND r.dedupe_cluster_id IN (SELECT dedupe_cluster_id FROM source_cluster))
+        )
+      ORDER BY (f.fingerprint = s.fingerprint) DESC, f.created_at DESC, f.id DESC
+      LIMIT ${limit}`;
+    return {
+      finding_id: source.id,
+      project_id: source.project_id,
+      match_reasons: ["fingerprint_equal", "location_prefix", "same_research_cluster"],
+      limit,
+      items,
     };
   });
 }
