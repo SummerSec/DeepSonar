@@ -136,7 +136,10 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
       const [originalRequest] = await sql`SELECT payload_json FROM human_requests WHERE id=${f.requestId}`;
       // 对已有 active_since 做偏移，而不是用 clock_timestamp()-2s 覆盖：覆盖会丢掉该 Job
       // 已累计的执行时间，使 remaining 只减少「2s 减去已跑时长」，在不同机器上抖动（CI 曾因此红灯）。
-      await sql`UPDATE job_execution_clocks SET active_since=COALESCE(active_since,clock_timestamp())-interval '2 seconds' WHERE job_id=${f.jobId}`;
+      // 不给 NULL 合成时钟：start(f, first) 之后必须已登记活动时钟，缺失要让用例直接暴露。
+      const shiftedClock = await sql`UPDATE job_execution_clocks SET active_since=active_since-interval '2 seconds'
+        WHERE job_id=${f.jobId} AND active_since IS NOT NULL RETURNING job_id`;
+      assert.equal(shiftedClock.length, 1, "续做启动前必须已登记非空 active_since");
       await ingestEvent(first.jobId, { v: 1, event_id: secondRequest, type: "human", payload: originalRequest.payload_json });
       await sealHumanCheckpoint({ jobId: first.jobId, attemptId: owner.attemptId, host: f.host, excludedPaths: [], secrets: [], processBaseline: [] });
       await destroyAndSettleHumanWaitRun(sql, { destroy: async () => {} }, { jobId: first.jobId, attemptId: owner.attemptId, sandboxId: owner.sandbox });
