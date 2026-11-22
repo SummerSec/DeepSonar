@@ -1502,7 +1502,7 @@ const OPS: Op[] = [
         properties: {
           device_binding: {
             type: "object",
-            description: "#1211 设备绑定诊断：区分未声明需求、已声明但无租约、有租约但无连接结果。只读投影，不申请租约、不改调度判断；connection_result_recorded 为 false 时不得解释为连接失败。",
+            description: "#1211 设备绑定诊断：区分未声明需求、已声明但无租约、有租约但无连接结果，并按 Attempt 分档（最多 20 个 Attempt、32 条租约，超出显式截断）。只读投影，不申请租约、不改调度判断；connection_result_recorded 为 false 时不得解释为连接失败。",
             properties: {
               state: { type: "string", enum: ["not_declared", "declared_no_lease", "lease_recorded_unverified"] },
               reason: { type: "string" },
@@ -1510,6 +1510,20 @@ const OPS: Op[] = [
               canvas_requirement: { type: "object", nullable: true },
               role_matched: { type: "boolean" },
               leases: { type: "array", maxItems: 32, items: { type: "object" } },
+              lease_count: { type: "integer", minimum: 0 },
+              leases_truncated: { type: "boolean" },
+              attempts: {
+                type: "array", maxItems: 20,
+                description: "最近 20 个 Attempt 的独立分档（按 attempt_no 倒序）：顶层 state 跟随最新 Attempt，重试不会掩盖此前的租约失败。",
+                items: { type: "object", properties: {
+                  attempt_id: { type: "string", format: "uuid" },
+                  attempt_no: { type: "integer", nullable: true },
+                  state: { type: "string", enum: ["not_declared", "declared_no_lease", "lease_recorded_unverified"] },
+                  reason: { type: "string" },
+                  leases: { type: "array", maxItems: 32, items: { type: "object" } },
+                } },
+              },
+              attempts_truncated: { type: "boolean" },
               connection_result_recorded: { type: "boolean" },
             },
           },

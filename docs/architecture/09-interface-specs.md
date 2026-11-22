@@ -51,7 +51,7 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 ### 设备绑定诊断（#1211）
 
-`GET /jobs/:id` 增加只读 `device_binding`，沿用 `tasks:read` 与项目/Job scope，只投影平台已经记录的事实：需求是否冻结在 Job 快照（执行期唯一权威）、是否只写在画布 `target_json`、Job 角色是否命中 `roles`、以及该 Job 是否真的拿到过租约（含设备 key、rig、授予/到期/释放时间与释放原因）。分档固定为 `not_declared`（任务与画布都没有声明需求，调度器不会申请租约）、`declared_no_lease`（已声明但无租约记录；区分画布声明未冻结与角色不命中）、`lease_recorded_unverified`（有租约但无连接结果）。`connection_result_recorded` 当前恒为 `false`：设备连接结果还没有受治理的写入口，因此投影只说明「未记录」，绝不把沙箱内 `127.0.0.1:5555` 一类探测失败表述为「设备不可用」或「连接失败」。该投影不申请/释放租约、不改调度资格与重试链，也不读取 broker 凭据；设备列表里显示可用不等于某个 Job 已绑定设备。回归见 [binding-diagnostics.test.ts](../../apps/scheduler/src/domains/device/binding-diagnostics.test.ts)（已接 `pnpm ci:unit:device-lease`），最终 SHA Actions 待验。
+`GET /jobs/:id` 增加只读 `device_binding`，沿用 `tasks:read` 与项目/Job scope，只投影平台已经记录的事实：需求是否冻结在 Job 快照（执行期唯一权威）、是否只写在画布 `target_json`、Job 角色是否命中 `roles`、以及该 Job 是否真的拿到过租约（含设备 key、rig、授予/到期/释放时间与释放原因）。分档固定为 `not_declared`（任务与画布都没有声明需求，调度器不会申请租约）、`declared_no_lease`（已声明但无租约记录；区分画布声明未冻结与角色不命中）、`lease_recorded_unverified`（有租约但无连接结果）。分档按 Attempt 独立给出（`attempts`，最多 20 个，按 `attempt_no` 倒序），顶层 `state` 跟随最新 Attempt，因此重试不会被此前的历史合并掩盖；租约列表最多 32 条并携带 `attempt_id`，超出时 `lease_count` 保留真实总数且 `leases_truncated` / `attempts_truncated` 为 true。`connection_result_recorded` 当前恒为 `false`：设备连接结果还没有受治理的写入口，因此投影只说明「未记录」，绝不把沙箱内 `127.0.0.1:5555` 一类探测失败表述为「设备不可用」或「连接失败」。该投影不申请/释放租约、不改调度资格与重试链，也不读取 broker 凭据；设备列表里显示可用不等于某个 Job 已绑定设备。回归见 [binding-diagnostics.test.ts](../../apps/scheduler/src/domains/device/binding-diagnostics.test.ts)（已接 `pnpm ci:unit:device-lease`），最终 SHA Actions 待验。
 
 ### 管理 Skill 的当前契约（#996）
 

@@ -66,6 +66,7 @@ test("#1211 有租约记录但无连接结果时只报未验证", () => {
     roleName: "test",
     leases: [
       {
+        attempt_id: "attempt-1",
         state: "released",
         device_key: "local-sim-01",
         rig_id: "local-sim",
@@ -86,6 +87,7 @@ test("#1211 有租约记录但无连接结果时只报未验证", () => {
 test("#1211 租约行投影保留时间与释放原因", () => {
   const projected = projectLeaseRows([
     {
+      attempt_id: "attempt-1",
       state: "active",
       device_key: null,
       rig_id: null,
@@ -97,6 +99,7 @@ test("#1211 租约行投影保留时间与释放原因", () => {
   ]);
   assert.deepEqual(projected, [
     {
+      attempt_id: "attempt-1",
       state: "active",
       device_key: null,
       rig_id: null,
@@ -106,4 +109,62 @@ test("#1211 租约行投影保留时间与释放原因", () => {
       release_reason: null,
     },
   ]);
+});
+test("#1211 重试时顶层跟随最新 Attempt，历史失败不被合并掩盖", () => {
+  const result = deriveDeviceBinding({
+    snapshot: snapshotWith(requirement),
+    canvasTarget: {},
+    roleName: "test",
+    attempts: [
+      { attempt_id: "attempt-2", attempt_no: 2 },
+      { attempt_id: "attempt-1", attempt_no: 1 },
+    ],
+    leases: [
+      {
+        attempt_id: "attempt-2",
+        state: "released",
+        device_key: "local-sim-01",
+        rig_id: "local-sim",
+        granted_at: "2026-11-22T11:00:00.000Z",
+        expires_at: "2026-11-22T11:30:00.000Z",
+        released_at: "2026-11-22T11:05:00.000Z",
+        release_reason: "attempt_terminal",
+      },
+    ],
+  });
+  assert.equal(result.state, "lease_recorded_unverified");
+  assert.equal(result.attempts.length, 2);
+  assert.deepEqual(result.attempts.map((a) => [a.attempt_id, a.state]), [
+    ["attempt-2", "lease_recorded_unverified"],
+    ["attempt-1", "declared_no_lease"],
+  ]);
+  assert.match(result.attempts[1]!.reason, /租约申请未发生或被拒绝/);
+});
+
+test("#1211 租约与 Attempt 列表都有上限并显式报告截断", () => {
+  const many = Array.from({ length: 40 }, (_, index) => ({
+    attempt_id: `attempt-${index}`,
+    state: "released",
+    device_key: "local-sim-01",
+    rig_id: "local-sim",
+    granted_at: null,
+    expires_at: null,
+    released_at: null,
+    release_reason: "attempt_terminal",
+  }));
+  const result = deriveDeviceBinding({
+    snapshot: snapshotWith(requirement),
+    canvasTarget: {},
+    roleName: "test",
+    leases: many,
+    attempts: Array.from({ length: 30 }, (_, index) => ({ attempt_id: `attempt-${index}`, attempt_no: 30 - index })),
+    leaseCount: 120,
+    attemptCount: 45,
+  });
+  assert.equal(result.leases.length, 32);
+  assert.equal(result.lease_count, 120);
+  assert.equal(result.leases_truncated, true);
+  assert.equal(result.attempts.length, 20);
+  assert.equal(result.attempts_truncated, true);
+  assert.equal(result.state, "lease_recorded_unverified");
 });

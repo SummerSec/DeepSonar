@@ -66,13 +66,22 @@ if (testDatabaseUrl) {
       const declaredJobId = await insertJob(declaredCanvasId, { name: "test" });
       const leasedJobId = await insertJob(leasedCanvasId, { name: "test", device_requirement: requirement });
 
+      // 重试：第 1 次 Attempt 没有租约，第 2 次才有；顶层必须跟随最新 Attempt。
+      const firstAttemptId = randomUUID();
+      const secondAttemptId = randomUUID();
+      await sql`
+        INSERT INTO job_attempts (id, job_id, attempt_no, status, finished_at)
+        VALUES (${firstAttemptId}, ${leasedJobId}, 1, 'failed', now())`;
+      await sql`
+        INSERT INTO job_attempts (id, job_id, attempt_no, status)
+        VALUES (${secondAttemptId}, ${leasedJobId}, 2, 'active')`;
       const deviceId = randomUUID();
       await sql`
         INSERT INTO devices (id, project_id, key, transport, rig_id, status)
         VALUES (${deviceId}, ${projectId}, 'local-sim-01', 'hdc', 'local-sim', 'idle')`;
       await sql`
-        INSERT INTO device_leases (device_id, job_id, project_id, state, granted_at, released_at, release_reason)
-        VALUES (${deviceId}, ${leasedJobId}, ${projectId}, 'released', now(), now(), 'attempt_terminal')`;
+        INSERT INTO device_leases (device_id, job_id, attempt_id, project_id, state, granted_at, released_at, release_reason)
+        VALUES (${deviceId}, ${leasedJobId}, ${secondAttemptId}, ${projectId}, 'released', now(), now(), 'attempt_terminal')`;
 
       const token = generateToken();
       await sql`
@@ -110,6 +119,14 @@ if (testDatabaseUrl) {
       const leases = leased.leases as Array<Record<string, unknown>>;
       assert.equal(leases.length, 1);
       assert.equal(leases[0]?.device_key, "local-sim-01");
+      assert.equal(leases[0]?.attempt_id, secondAttemptId);
+      assert.equal(leased.lease_count, 1);
+      assert.equal(leased.leases_truncated, false);
+      const attempts = leased.attempts as Array<Record<string, unknown>>;
+      assert.deepEqual(attempts.map((a) => [a.attempt_no, a.state]), [
+        [2, "lease_recorded_unverified"],
+        [1, "declared_no_lease"],
+      ]);
       assert.equal(leases[0]?.state, "released");
       assert.equal(leases[0]?.release_reason, "attempt_terminal");
     } finally {
