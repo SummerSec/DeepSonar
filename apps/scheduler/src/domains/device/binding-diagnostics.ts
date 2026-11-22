@@ -11,7 +11,15 @@ const DEVICE_FAILURE_REASONS = new Set<string>(Object.values(DEVICE_LEASE_ERROR_
  * job_attempts.status 的终态集合（与 schema 的 job_attempts_status_check 一致）。
  * 只有 active 不算终态；unknown 也算终态（执行上下文已丢失，不是「还在申请」）。
  */
-const TERMINAL_ATTEMPT_STATUSES = new Set(["failed", "cancelled", "timeout", "orphan", "interrupted", "unknown"]);
+const TERMINAL_ATTEMPT_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timeout",
+  "orphan",
+  "interrupted",
+  "unknown",
+]);
 
 export function isTerminalAttemptStatus(status: string): boolean {
   return TERMINAL_ATTEMPT_STATUSES.has(status);
@@ -114,6 +122,13 @@ function readCanvasRequirement(target: unknown): DeviceRequirement | null {
   return parsed.success ? parsed.data : null;
 }
 
+/** 只对 allowlist 内的设备失败码给固定描述，其余字段不进入文案。 */
+function describeDeviceFailure(code: string): string {
+  if (code === DEVICE_LEASE_ERROR_CODES.notAvailable) return "device_not_available（设备或 broker 暂不可用）";
+  if (code === DEVICE_LEASE_ERROR_CODES.notAuthorized) return "device_not_authorized（未授权，不可重试）";
+  return code;
+}
+
 function describeRequirement(requirement: DeviceRequirement) {
   return {
     roles: [...requirement.roles],
@@ -178,7 +193,7 @@ function classifyAttempt(
     return {
       state: "acquire_failed",
       reason:
-        `该 Attempt 的终态原因是设备失败码 ${attempt.failure_reason}，且没有租约行：` +
+        `该 Attempt 的终态原因是设备失败码 ${describeDeviceFailure(attempt.failure_reason)}，且没有租约行：` +
         "这是平台上已记录的租约申请失败；错误原文见本请求 attempts[].error，不在诊断里复读。",
     };
   }
@@ -188,8 +203,9 @@ function classifyAttempt(
     return {
       state: "lease_unrecorded",
       reason:
-        `该 Attempt 已结束（status=${attempt.status}，原因 ${attempt.failure_reason ?? "未记录"}）但没有租约行，` +
-        "平台也没有设备失败码；无法判断它是否走到租约申请，provision 的共享资产/卷/凭据准备失败同样会停在这里。",
+        `该 Attempt 已结束（status=${attempt.status}）但没有租约行，平台也没有设备失败码；` +
+        "无法判断它是否走到租约申请，provision 的共享资产/卷/凭据准备失败同样会停在这里。" +
+        "终态原因不在此复读，原文见本请求 attempts[].error / 调度器分类记录。",
     };
   }
   if (attempt) {
