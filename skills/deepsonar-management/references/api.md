@@ -499,7 +499,8 @@ AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当�
 | --- | --- | --- | --- |
 | GET | /projects/:id/knowledge | projects:read | 目录：`?kind=&status=&query=&limit=&offset=`（`limit+1` 探测 `next_offset`）；只列元数据与 active 版本 hash |
 | GET | /projects/:id/knowledge/backfill | projects:read | 只读历史来源、资格及收尾节点状态，默认10、最多20条 |
-| GET | /projects/:id/knowledge/closeout/:rootId | projects:read | 按任务根节点读取收尾，正文还要求来源与修订目标读取权限 |
+| GET | /projects/:id/knowledge/closeout/:rootId | projects:read | 按任务根节点读取候选与评测摘要，详情还要求来源与修订目标读取权限 |
+| POST | /projects/:id/knowledge/closeout/:rootId/evaluate | projects:write | 以 candidate_ref 送评单条画布候选，同一候选复用原工作，还需 projects:read 和 tasks:read。评测结果留在原节点 |
 | GET | /projects/:id/knowledge/activity | projects:read | 积累/复用摘要与分页 work：`?limit=10&offset=0`，含来源登记/纳入/跳过、生效 Memory/Skill、usage/模型反馈、阻塞原因；来源正文不返回，反馈不表示质量认证 |
 | GET | /projects/:id/knowledge/:itemId | projects:read | 条目详情（含 active 版本指针）；不存在 `404 KNOWLEDGE_ITEM_NOT_FOUND` |
 | GET | /projects/:id/knowledge/:itemId/versions | projects:read | 版本历史分页（`limit/offset`），含 `content_sha256`、来源、`revoked_at/reason` |

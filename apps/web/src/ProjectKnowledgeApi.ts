@@ -51,7 +51,15 @@ type Page<T> = { items: T[]; next_offset: number | null };
 
 export type KnowledgeCloseoutStatus = "suggestions_available" | "no_new" | "not_submitted" | "restricted";
 
+export interface KnowledgeCloseoutEvaluation {
+  work_ref: string;
+  status: "queued" | "running" | "passed" | "failed" | "blocked" | "cancelled";
+  reason?: string;
+}
+
 export interface KnowledgeCloseoutSuggestion {
+  candidate_ref: string;
+  evaluation?: KnowledgeCloseoutEvaluation;
   kind: "memory" | "skill";
   title: string;
   scope: string;
@@ -62,6 +70,8 @@ export interface KnowledgeCloseoutSuggestion {
 
 export interface KnowledgeCloseout {
   status: KnowledgeCloseoutStatus;
+  can_evaluate?: boolean;
+  evaluation_source_unavailable?: boolean;
   items?: KnowledgeCloseoutSuggestion[];
   next_offset: number | null;
 }
@@ -131,6 +141,9 @@ async function request<T>(path: string, method = "GET", body?: unknown, readOpti
 const base = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/knowledge`;
 
 export const projectKnowledgeApi = {
+  evaluateCloseout: (projectId: string, rootId: string, candidateRef: string) =>
+    request<{ work_ref: string }>(`${base(projectId)}/closeout/${encodeURIComponent(rootId)}/evaluate`,
+      "POST", { candidate_ref: candidateRef }),
   closeout: (projectId: string, rootId: string, offset: number, signal?: AbortSignal) =>
     request<KnowledgeCloseout>(`${base(projectId)}/closeout/${encodeURIComponent(rootId)}?limit=10&offset=${offset}`,
       "GET", undefined, { cache: "no-store", signal }),

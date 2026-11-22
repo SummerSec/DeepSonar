@@ -1,4 +1,5 @@
 import { KNOWLEDGE_LIMITS } from "@deepsonar/shared-types";
+import { isCloseoutEvaluation } from "./closeout-evaluation-key.js";
 import type { sql } from "../../db.js";
 
 type Db = typeof sql;
@@ -25,8 +26,9 @@ export async function onKnowledgeJobTerminal(tx: Db, job: Job, status: Terminal)
   if (job.project_id && String(job.project_id) !== String(assignment.project_id)) throw new Error("knowledge_terminal_project_mismatch");
   if (job.canvas_id && String(job.canvas_id) !== String(assignment.canvas_id)) throw new Error("knowledge_terminal_canvas_mismatch");
   const workId = String(assignment.work_id);
-  const [work] = await tx`SELECT id,state,stage,active_job_id,run_seconds,revision_count FROM project_knowledge_work WHERE id=${workId} FOR UPDATE`;
+  const [work] = await tx`SELECT id,state,stage,active_job_id,run_seconds,revision_count,trigger_key FROM project_knowledge_work WHERE id=${workId} FOR UPDATE`;
   if (!work || ["completed", "blocked", "cancelled"].includes(String(work.state))) return true;
+  const evaluationOnly = isCloseoutEvaluation(work.trigger_key);
   const seconds = elapsedSeconds(job);
   const runSeconds = Number(work.run_seconds) + seconds;
   if (String(work.active_job_id ?? "") !== jobId) return true;
@@ -46,7 +48,7 @@ export async function onKnowledgeJobTerminal(tx: Db, job: Job, status: Terminal)
         WHERE id=${String(assignment.proposal_id)} AND state IN ('evaluating','review_pending')`;
     }
     const reason = status === "orphan" ? "unknown_external_effect" : "job_" + status;
-    if (assignment.stage === "trial" && status !== "orphan" && runSeconds < KNOWLEDGE_LIMITS.seconds && Number(work.revision_count) < 2) {
+    if (!evaluationOnly && assignment.stage === "trial" && status !== "orphan" && runSeconds < KNOWLEDGE_LIMITS.seconds && Number(work.revision_count) < 2) {
       await tx`UPDATE project_knowledge_work SET state='pending',stage='maker',active_job_id=NULL,
         claim_expires_at=NULL,next_attempt_at=now(),run_seconds=${runSeconds},
         reason=${reason},updated_at=now() WHERE id=${workId}`;
@@ -80,7 +82,7 @@ export async function onKnowledgeJobTerminal(tx: Db, job: Job, status: Terminal)
     if (!evidence) {
       if (assignment.proposal_id) await tx`UPDATE project_knowledge_proposals SET state='needs_eval'
         WHERE id=${String(assignment.proposal_id)} AND state='evaluating'`;
-      if (Number(work.revision_count) < 2) {
+      if (!evaluationOnly && Number(work.revision_count) < 2) {
         await tx`UPDATE project_knowledge_work SET state='pending',stage='maker',active_job_id=NULL,
           claim_expires_at=NULL,next_attempt_at=now(),run_seconds=${runSeconds},
           reason='trial_missing_evidence',updated_at=now() WHERE id=${workId}`;
@@ -110,11 +112,17 @@ export async function onKnowledgeJobTerminal(tx: Db, job: Job, status: Terminal)
   if (assignment.stage === "evaluator" || assignment.stage === "reviewer") {
     const kind = assignment.stage === "evaluator" ? "behavior" : "review";
     const [evaluation] = await tx`SELECT id FROM project_knowledge_evaluations
-      WHERE proposal_id=${String(assignment.proposal_id)} AND actor_job_id=${jobId} AND kind=${kind} LIMIT 1`;
+      WHERE proposal_id=${String(assignment.proposal_id)} AND actor_job_id=${jobId} AND kind=${kind}
+        AND actor_attempt_id=${String(latestAttempt.id)} LIMIT 1`;
     if (!evaluation) {
       const reason = kind === "behavior" ? "evaluator_missing_record" : "reviewer_missing_record";
       await tx`UPDATE project_knowledge_work SET state='blocked',active_job_id=NULL,run_seconds=${runSeconds},
         reason=${reason},updated_at=now() WHERE id=${workId}`;
+      return true;
+    }
+    if (evaluationOnly && assignment.stage === "evaluator" && work.stage === "settle") {
+      await tx`UPDATE project_knowledge_work SET state='completed',active_job_id=NULL,claim_expires_at=NULL,
+        run_seconds=${runSeconds},reason='closeout_evaluation_finished',updated_at=now() WHERE id=${workId}`;
       return true;
     }
     const [proposal] = await tx`SELECT state FROM project_knowledge_proposals WHERE id=${String(assignment.proposal_id)}`;
