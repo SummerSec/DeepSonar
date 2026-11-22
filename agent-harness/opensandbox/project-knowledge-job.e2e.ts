@@ -131,7 +131,7 @@ try {
       expanded_modules: [], missing_modules: [], module_content_hash: "", skill_revisions: [],
       config_files: [file("knowledge-job-actor.py", actor), file("knowledge-job-input.json", JSON.stringify(config))],
       settings_config_json: {}, pi_extensions: [], role_description: "Real project knowledge smoke", instructions_markdown: null,
-      context_window_tokens: 200000, platform_tools: ["search_skills", "pull_skill", "search_project_knowledge", "read_project_memory",
+      context_window_tokens: 200000, platform_tools: ["search_skills", "pull_skill", "search_project_knowledge", "read_project_knowledge",
         "emit_progress", "mark_job_done"], cli_capabilities: admitted.frozen, cli_capability_pack: admitted.pack,
       project_knowledge_catalog: catalog, job_skill_catalog: jobSkillCatalog,
       network_policy: { allow_egress: false }, sandbox_limits: { cpu: 2, memoryMiB: 4096, pidsLimit: 512, capDropAll: true, noNewPrivileges: true },

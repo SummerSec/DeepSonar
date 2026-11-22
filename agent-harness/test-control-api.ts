@@ -149,7 +149,7 @@ const restrictedTools = resolvePlatformTools("explore", "role", {
 assert.deepEqual(restrictedTools, [
   "request_project_knowledge",
   "search_project_knowledge",
-  "read_project_memory",
+  "read_project_knowledge",
   "read_knowledge_input",
   "propose_project_knowledge",
   "submit_knowledge_evaluation",

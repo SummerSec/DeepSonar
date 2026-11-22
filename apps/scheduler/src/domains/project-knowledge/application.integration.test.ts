@@ -364,7 +364,7 @@ test("frozen memory remains readable after ordinary change but version revoke st
     setSharedAssetBlobStoreForTests(new LocalBlobStore(folder));
     try {
       const maker = await seedKnowledgeJob(db, undefined, []);
-      const reader = await seedKnowledgeJob(db, maker.projectId, ["search_project_knowledge", "read_project_memory"]);
+      const reader = await seedKnowledgeJob(db, maker.projectId, ["search_project_knowledge", "read_project_knowledge"]);
       const content = { kind: "memory", logical_key: "fixture/read", title: "Frozen memory", keywords: ["frozen"], content: "verified snapshot" };
       const blob = await writeKnowledgeBlob(db as never, content);
       await registerKnowledgeBlob(db as never, blob.hash, blob.bytes);
@@ -375,11 +375,11 @@ test("frozen memory remains readable after ordinary change but version revoke st
       await db`UPDATE project_knowledge_items SET status='active',active_version_id=${version!.id},generation=1 WHERE id=${item!.id}`;
       const entries = [{ item_id: item!.id, owner_project_id: maker.projectId, version_id: version!.id,
         version: 1, kind: "memory", hash: blob.hash, title: "Frozen memory", logical_key: "fixture/read", keywords: ["frozen"] }];
-      await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_memory"],
+      await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_knowledge"],
         project_knowledge_catalog: { entries, hash: sha256(canonical(entries)) } })} WHERE id=${reader.jobId}`;
       const app = createProjectKnowledgeApplication({ db, governanceHash: H });
       const context = { jobId: reader.jobId, projectId: reader.projectId, canvasId: reader.canvasId,
-        operationId: "read_project_memory", input: { item_ref: item!.id, version: 1, expected_hash: blob.hash },
+        operationId: "read_project_knowledge", input: { item_ref: item!.id, version: 1, expected_hash: blob.hash },
         eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null };
       const read = await app.invoke(context);
       assert.equal(read.content, "verified snapshot");

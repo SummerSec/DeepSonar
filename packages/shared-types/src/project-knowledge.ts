@@ -85,7 +85,7 @@ export const SearchProjectKnowledgePayload = z.object({
   kind: ProjectKnowledgeKind.optional(), query: z.string().max(200).optional(), keywords: z.array(text(80)).max(10).optional(),
   cursor: text(1000).optional(), limit: z.number().int().min(1).max(KNOWLEDGE_LIMITS.page).default(10),
 }).strict();
-export const ReadProjectMemoryPayload = z.object({ item_ref: uuid, version: z.number().int().positive(), expected_hash: hash }).strict();
+export const ReadProjectKnowledgePayload = z.object({ item_ref: uuid, version: z.number().int().positive(), expected_hash: hash }).strict();
 export const ReadKnowledgeInputPayload = z.object({ work_ref: uuid, input_ref: text(240), expected_hash: hash, cursor: text(1000).optional() }).strict();
 export const ProposeProjectKnowledgePayload = z.object({
   work_ref: uuid, action: KnowledgeAction, revision: z.number().int().min(1).max(3), parent_proposal_ref: uuid.optional(),
@@ -142,7 +142,7 @@ export const KnowledgeControlPayloadSchemas = {
   record_skill_choice: RecordSkillChoicePayload,
   request_project_knowledge: RequestProjectKnowledgePayload,
   search_project_knowledge: SearchProjectKnowledgePayload,
-  read_project_memory: ReadProjectMemoryPayload,
+  read_project_knowledge: ReadProjectKnowledgePayload,
   read_knowledge_input: ReadKnowledgeInputPayload,
   propose_project_knowledge: ProposeProjectKnowledgePayload,
   submit_knowledge_evaluation: SubmitKnowledgeEvaluationPayload,
@@ -160,7 +160,7 @@ export const KnowledgeMutationPayload = z.object({ operation: z.enum(KNOWLEDGE_M
 export type KnowledgeOperation = keyof typeof KnowledgeControlPayloadSchemas;
 export type RequestProjectKnowledgePayload = z.infer<typeof RequestProjectKnowledgePayload>;
 export type SearchProjectKnowledgePayload = z.infer<typeof SearchProjectKnowledgePayload>;
-export type ReadProjectMemoryPayload = z.infer<typeof ReadProjectMemoryPayload>;
+export type ReadProjectKnowledgePayload = z.infer<typeof ReadProjectKnowledgePayload>;
 export type ReadKnowledgeInputPayload = z.infer<typeof ReadKnowledgeInputPayload>;
 export type ProposeProjectKnowledgePayload = z.infer<typeof ProposeProjectKnowledgePayload>;
 export type SubmitKnowledgeEvaluationPayload = z.infer<typeof SubmitKnowledgeEvaluationPayload>;

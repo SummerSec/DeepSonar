@@ -62,7 +62,7 @@ const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description:
   list_shared_assets: { title: "查询共享资产", description: "列出本 Job 冻结的只读资产目录；用 mount_path 直接读取，无单独下载工具（Scheduler 预挂载，含 S3）。" },
   request_project_knowledge: { title: "请求沉淀项目知识", description: "用已验证的来源引用请求受治理的知识工作流，不直接创建或激活版本。" },
   search_project_knowledge: { title: "搜索项目知识", description: "只搜索本 Job 冻结且当前未撤销的项目知识目录。" },
-  read_project_memory: { title: "读取项目记忆", description: "按冻结的版本和内容哈希读取本项目记忆。" },
+  read_project_knowledge: { title: "读取项目知识", description: "按冻结的版本和内容哈希读取本项目知识条目的核心短文。" },
   read_knowledge_input: { title: "读取知识输入", description: "按当前知识工作流的有界输入清单读取来源材料。" },
   propose_project_knowledge: { title: "提案项目知识", description: "提交带基线引用和来源的候选提案，由平台审查与结算。" },
   submit_knowledge_evaluation: { title: "提交知识评测", description: "提交隔离试验的结构化评测结果及证据引用。" },

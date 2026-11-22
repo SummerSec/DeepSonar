@@ -75,7 +75,7 @@ async function readOnly(db: KnowledgeDb, actor: KnowledgeActor, operation: Knowl
     return { receipt_ref: rows[0].id, receipt_operation: rows[0].operation, input_digest: rows[0].input_digest, result: rows[0].result_json };
   }
   const catalog = catalogFor(actor);
-  if (operation === "read_project_memory") {
+  if (operation === "read_project_knowledge") {
     const entry = catalog.entries.find((item) => item.kind === "memory" && item.item_id === input.item_ref && item.version === input.version && item.hash === input.expected_hash && item.owner_project_id === actor.projectId);
     if (!entry) return reject("KNOWLEDGE_SCOPE_DENIED", "Memory version is absent from this Job snapshot");
     if (!(await visibleEntry(db, actor, entry))) return reject("KNOWLEDGE_REVOKED", "Memory version is revoked");

@@ -512,7 +512,7 @@ AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当�
 | GET | /projects/:id/knowledge/receipts | projects:read | 按 `job_id` 查该 Job 的持久操作回执（`?job_id=&limit=&offset=`） |
 | GET | /projects/:id/knowledge/receipts/:receiptId | projects:read | 回执详情；只允许所属项目读取，不为查回执延长执行 token |
 
-Agent 侧对应受治理 operation 是 `request_project_knowledge` / `search_project_knowledge` / `read_project_memory` / `pull_skill` 等（见专题），**不是**这些 HTTP 管理接口。
+Agent 侧对应受治理 operation 是 `request_project_knowledge` / `search_project_knowledge` / `read_project_knowledge` / `pull_skill` 等（见专题），**不是**这些 HTTP 管理接口。
 
 ### Readiness / preflight（#35/#36）
 
