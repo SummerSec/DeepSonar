@@ -433,6 +433,8 @@ if (!testDatabaseUrl) {
         }
       }
       await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
+      const { runMultiCanvasDispatchFixture } = await import("./dispatch-multi-canvas.fixture.test.js");
+      await runMultiCanvasDispatchFixture(sql, claimPendingJobs, credentialId);
       const { runDispatchFairnessFixture } = await import("./dispatch-fairness.fixture.js");
       await runDispatchFairnessFixture(sql, claimPendingJobs, credentialId);
 

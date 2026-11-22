@@ -7,7 +7,7 @@
 #1118 的[持久跨项目公平领取](06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
-> 同步日期：2026-11-20
+> 同步日期：2026-11-21
 
 #1082 的[最终用量与安全形态诊断](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
 
@@ -164,12 +164,12 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 
 2026-11-01 集成证据：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 在最终 PR 检查全绿后合并至 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`；该主线的六个适用 Actions 工作流全绿，包含真实 schema67 重建和备份恢复，本轮工程 issue 已收口。较早 schema66/SDK-only 和本地记录只作历史，不能覆盖后续修复。OpenHarmony Fuzz 在正式 Release 的新构建失败，当前修复映射 FR-IMG-001/002、07 部署视图及既有 ADR 0006，增加匹配工具链与 fresh/reuse 双原生架构行为证据；[发布专题](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)区分有限诊断、最终修复 SHA 验收和正式发行。v0.6.3 尚未正式发布，v0.6.2 保持不可变；独立质量、Host 证书/晋升/公开强关系建议按本轮决定暂缓，不把工程全绿写成质量通过。
 
-#1018 的[项目任务队列](../PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
+#1180 的[删除项目任务队列](../PROJECT_TASK_QUEUE.md)同步 FR-TASK-008、运行时/数据/接口/信任边界、追溯及数据库说明。schema 79 保全旧暂停意图到任务执行门，保留普通调度、并发、定时、暂停/取消、人工续做和历史；最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
 知识来源登记与历史只读预览的历史收敛见[ADR 0021](adr/0021-knowledge-source-preview.md)；[0023](adr/0023-project-knowledge-collection.md) 取代其中批处理暂缓限制。2026-11-16 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 进一步替代 0023 的来源数量及自动准入，扩展事务重验和 collection 只读投影；旧 ADR 决定段保留，历史预览只读、旧 knowledge:auto 不自动推进、无 schema/整链 token 预算变化。FR-KNOW-001 与 NFR-UX-001、06/08/09/10 和 trace 同步项目积累、24 小时间隔、连续两自动批次无 active/retired 提案产出停发、持久历史跨重启推导及显式成功恢复；collector 选项目/锁内重验、wake 和 activity 共用数据库规则，32 候选仍守 19 inputs+governor，放不下者保留。本轮反馈评审修正追加到 0024：record_knowledge_feedback 仅返回 {usage_ref,state:"recorded"}，不含 work_ref、不另启 work；成功 Job 反馈经普通来源登记及 collector 冻结精确反馈/target 基线/evidence refs，自动门与原 Job 权限不得绕过；显式 request_project_knowledge 保持原契约，source/usage/生效分层。知识页沿原入口展示状态和下次时间，无新通知、配置、恢复按钮或轮询，注意力成本见[专题](../PROJECT_KNOWLEDGE.md#注意力成本)。旧任务/审计/预算、最小 Job 预算拦截及独立评测保持；本轮最终 SHA Actions 待验，不部署、不重跑历史生产任务，真实模型与注意力收益未验证，历史证据见[专题记录](../PROJECT_KNOWLEDGE.md#验证与运维)。
 
-#1074 的[队列显式让位](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)同步 FR-TASK-008、FR-CTRL-006 及运行时/数据/API 视图。schema 75 新增 yielded 与持久请求/回复消费，最终 SHA Actions 另验。
+#1180 以 [ADR 0026](adr/0026-remove-project-task-queue.md) 取代 ADR 0019 及 ADR 0022 的 FIFO 占位/让位部分，旧决定与实施计划保留历史；人工续做本身及原权限/预算/效果门继续生效，最终 SHA Actions 待验。
 
 IR-013 的[候选库回收](../../deploy/GENERATION_GC.md)映射规格、追溯、部署和安全视图，默认预览、显式执行、同升级锁和 OID 对账已接线，最终 SHA Actions 待验。
 

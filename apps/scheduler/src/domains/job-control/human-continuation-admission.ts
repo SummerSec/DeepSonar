@@ -1,4 +1,3 @@
-import { canClaimQueuedTask } from "../project-task/task-queue-store.js";
 import type { sql } from "../../db.js";
 import { HumanCheckpointManifest } from "./human-checkpoint-files.js";
 import { humanSnapshotDigest } from "./human-continuation-store.js";
@@ -35,16 +34,5 @@ export async function humanContinuationAdmission(db:typeof sql,job:Record<string
     ||(message.delivery_status==='planned'&&message.delivery_started_at)) return deny("HUMAN_CONTINUATION_DELIVERY_UNRESOLVED");
   const remainingMs=await remainingHumanExecutionMs(db,String(job.id));
   if(remainingMs===null||remainingMs<=0) return deny("EXECUTION_TIME_EXHAUSTED");
-  const [queue] = await db`SELECT i.state,q.paused,y.reply_message_id,y.requeued_item_id,i.id
-    FROM project_task_queue_items i JOIN project_task_queues q ON q.project_id=i.project_id
-    LEFT JOIN project_task_queue_yields y ON y.request_id=${requestId}
-    WHERE i.canvas_id=${String(job.canvas_id)} AND i.project_id=${String(job.project_id)}`;
-  if (queue && queue.state !== "active" && (queue.state !== "queued" || queue.paused
-    || queue.reply_message_id !== request.reply_message_id || String(queue.requeued_item_id) !== String(queue.id))) {
-    return deny("HUMAN_CONTINUATION_WAITING_TURN");
-  }
-  if (!await canClaimQueuedTask(db, String(job.project_id), String(job.canvas_id))) {
-    return deny("HUMAN_CONTINUATION_WAITING_TURN");
-  }
   return {request,remainingMs,blocker:null};
 }

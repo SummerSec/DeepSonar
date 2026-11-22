@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-#1206 的[Finding 重复候选与重复处置](architecture/09-interface-specs.md#finding-重复候选与重复处置1206)只增加读取侧能力：同项目跨 canvas 的候选查询（fingerprint 精确、location 双向前缀、同 canvas cluster）、`distinct_by_fingerprint` / `distinct_by_cluster` 去重口径与 `duplicate`+`duplicate_of` 处置；记录仍不可变，不合并、不改写 `emit_finding` 冲突语义，也不把 fingerprint 升为跨任务身份。schema 升至 78，复合外键与成对约束兜底；真实 PG 回归接 `ci:integration:verify-eligibility`，最终 SHA Actions 待验。
+#1206 的[Finding 重复候选与重复处置](architecture/09-interface-specs.md#finding-重复候选与重复处置1206)只增加读取侧能力：同项目跨 canvas 的候选查询（fingerprint 精确、location 双向前缀、同 canvas cluster）、`distinct_by_fingerprint` / `distinct_by_cluster` 去重口径与 `duplicate`+`duplicate_of` 处置；记录仍不可变，不合并、不改写 `emit_finding` 冲突语义，也不把 fingerprint 升为跨任务身份。在 schema 78 引入，复合外键与成对约束兜底；真实 PG 回归接 `ci:integration:verify-eligibility`，最终 SHA Actions 待验。
 
 #1199 的[任务发现状态显示与筛选](architecture/09-interface-specs.md#任务发现的状态显示与筛选1199)统一中文技术状态，按整个任务范围筛选后分页，切换条件自动清除旧游标并隔离迟到响应。人工「漏洞存在」受现有技术验证前置条件限制，界面显示禁用原因。回归接原 Web Actions，最终 SHA 结果另验。
 
@@ -16,7 +16,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 
 #1088 的 [OpenSandbox PTY 退出诊断](AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)区分有效退出帧、WebSocket 中断与宿主主动终止，经原 Evidence 通路保留有界脱敏关闭码和错误原因；不新增重连或任务重跑权限。最终 SHA Actions 待验，历史现场底层原因仍未知。
 
-#1074 的[人工断点续做](HUMAN_CONTINUATION.md)覆盖持久请求、有限封存与资源回收、晚回复保存和受治理的新执行；受限原生导入、历史 failed 显式新 Job、原预算链和 FIFO 让位已组合接线，支持范围见专题。最终 SHA Actions 待验。
+#1074 的[人工断点续做](HUMAN_CONTINUATION.md)覆盖持久请求、有限封存与资源回收、晚回复保存和受治理的新执行；受限原生导入、历史 failed 显式新 Job、原预算链保留，FIFO 占位/让位依赖已按 #1180 删除，支持范围见专题。最终 SHA Actions 待验。
 
 业务文件清单 v2 仅恢复所有者读写及原所有者执行能力（0600/0700），上传前校验路径、上传后核验内容与权限，失败阻断启动。
 
@@ -304,7 +304,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 - Chrome Fuzz ARM 构建层优化（#961 P2/P3）：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `${BASE_IMAGE}`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。指纹新增 `ci_src_tag`（`src-ci-<fp>`）与 `release_src_tag`（`src-release-<fp>`）：CI 四个 workflow 只读写前者，`release.yml` 只读写后者，历史 `src-<fp>` 已无消费方，避免 PR 产物让发布跳过真实构建。契约回归见 `agent-harness/image-cache-trust.test.mjs`。真实冷/热/失效三组样本仍待线上累积，本文不宣称提速比例。
 - [Pi RPC 大载荷链路（#944 / #990）](PI_RPC_PAYLOAD_LIMITS.md)：帧/分片/预览/重试阈值以专题的核对基线和代码为准。#990 的全部大预览归档关联、索引先于引用、Attempt 已用额度恢复和按源 hash/JSON Pointer 完整回读已接线，最终 SHA Actions 待验；发送侧分片、冻结 knobs、真实 Pi 80 MiB E2E 与容量/质量观测仍未交付。不自动加载大正文，`prompt` 仍不重传。
 
-#1018 的[项目任务队列](PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
+#1180 的[删除项目任务队列](PROJECT_TASK_QUEUE.md)同步 FR-TASK-008、运行时/数据/接口/信任边界、追溯及数据库说明。schema 79 保全旧暂停意图到任务执行门，保留普通调度、并发、定时、暂停/取消、人工续做和历史；最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
 项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈见[专题](PROJECT_KNOWLEDGE.md)。2026-11-16 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量与自动准入规则：4 来源或等待 24 小时、自动间隔 24 小时，扫描 32 候选但仍限 19 inputs+可选 governor，放不下者保留。连续两自动批次无 active/retired 提案产出停发，从持久 work/proposal 历史跨重启推导；显式成功整理可恢复，时间/hash 变化不清零。本轮评审补充：record_knowledge_feedback 仅持久反馈并返回 {usage_ref,state:"recorded"}，无 work_ref、不另启 work；成功 Job 的已接受反馈经普通来源登记/collector 冻结精确反馈/target 基线及 evidence refs，同受自动门与原权限约束，显式 request_project_knowledge 保持原契约。collector 事务重验、wake 和 activity 共用准入规则；原知识页以新增 collection 展示状态与下次时间，不新增通知、设置、恢复按钮或轮询。来源、旧任务/预算、最小 Job 预算拦截和完整独立评测不变，历史预览仍只读，旧 knowledge:auto 仍不自动推进；无 schema 或整链 token 预算变化。最终 SHA Actions 待验，本机不运行测试/build/typecheck，不部署或重跑历史生产任务；历史验收见[专题记录](PROJECT_KNOWLEDGE.md#验证与运维)，真实模型与注意力收益未验证。
@@ -313,7 +313,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 
 > **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，按消息回滚失败输出并保留此前成功文本，空响应判断与去重不跨消息；保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。
 
-#1074 的[项目队列显式人工让位](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)已接 UI/API、持久决定与回复原子回队尾，默认保留席位，首片限定单一人工等待。最终 SHA Actions 另验。
+#1180 以 [ADR 0026](architecture/adr/0026-remove-project-task-queue.md) 取代 ADR 0019 及 ADR 0022 的 FIFO 占位/让位部分，旧决定与实施计划保留历史；人工续做本身及原权限/预算/效果门继续生效，最终 SHA Actions 待验。
 
 #1124 的[显式历史候选库回收](../deploy/GENERATION_GC.md)说明两 shell 入口、恢复保留集、权限与 OID 证明、宿主 receipt 和 Actions 隔离 PG 验收边界。
 

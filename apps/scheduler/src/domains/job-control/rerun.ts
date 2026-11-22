@@ -1,6 +1,5 @@
 import { lockContinuationBudget } from "./continuation-budget.js";
 
-import { markQueuedTaskClaimed } from "../project-task/task-queue-store.js";
 import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
 import { humanContinuationAdmission } from "./human-continuation-admission.js";
 import { pauseHumanExecutionClock } from "./human-continuation-clock.js";
@@ -519,7 +518,6 @@ export async function requeueJob(
     if (!transitioned) throw new RecoveryTransitionError(jobId, status, provenance);
     await tx`UPDATE jobs SET execution_deadline_at=NULL WHERE id=${jobId}`;
     if(continuation?.request) {
-      await markQueuedTaskClaimed(tx, String(job.project_id), String(job.canvas_id));
       const [latest]=await tx`SELECT id,attempt_no FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no DESC LIMIT 1`;
       const generationId=randomUUID();
       const [{next}]=await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${jobId}`;

@@ -1,6 +1,5 @@
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
 import { lockContinuationBudget } from "../job-control/continuation-budget.js";
-import { requeueYieldedHumanReply } from "../project-task/task-queue-yield.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { maybeTriggerHub } from "../../core.js";
@@ -282,7 +281,6 @@ export async function createHumanMessage(input: {
     if(request) {
       await tx`UPDATE human_requests SET status=CASE WHEN status='closed' THEN 'closed' ELSE 'answered' END,revision=revision+1,reply_message_id=${input.id},answered_at=clock_timestamp()
         WHERE id=${String(request.id)} AND status IN ('open','closed')`;
-      if (request.status !== "closed") await requeueYieldedHumanReply(tx as unknown as typeof sql, String(request.id));
       await tx`UPDATE canvas_nodes SET status='answered',updated_at=now() WHERE job_id=${String(targetJob.id)}
         AND node_type='human' AND body_json->>'message_id' IS NULL AND status='open'`;
     } else if (String(targetJob.status) === "waiting_human") {

@@ -232,10 +232,6 @@ POST /projects/:id/events
 POST /projects/:id/exports
 POST /projects/:id/shared-assets
 POST /projects/:id/tasks
-GET /projects/:id/task-queue
-PATCH /projects/:id/task-queue
-POST /projects/:id/task-queue/items
-POST /projects/:id/task-queue/yield
 POST /runtime-images/:id([0-9a-fA-F-]{36})/adopt-local
 POST /runtime-images/:id([0-9a-fA-F-]{36})/detect-local
 POST /runtime-images/:id/official-digest
@@ -485,10 +481,6 @@ POST /projects/{id}/events
 POST /projects/{id}/exports
 POST /projects/{id}/shared-assets
 POST /projects/{id}/tasks
-GET /projects/{id}/task-queue
-PATCH /projects/{id}/task-queue
-POST /projects/{id}/task-queue/items
-POST /projects/{id}/task-queue/yield
 POST /runtime-image-versions/{id}/rescan
 POST /runtime-image-versions/{id}/status
 POST /runtime-images/import

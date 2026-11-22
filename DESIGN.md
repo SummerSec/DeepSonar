@@ -5,7 +5,7 @@
 #1118 的[持久跨项目公平领取](docs/architecture/06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-20
+> 同步日期：2026-11-21
 
 #1082 的[最终用量与安全形态诊断](docs/MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
@@ -474,7 +474,7 @@ v0.6.3 集成核对（2026-11-01）：[#831](https://github.com/SummerSec/DeepSo
 
 ## 14. 仓库地图与事实入口
 
-项目提供可选持久 FIFO 任务队列（#1018，schema 72）。完整任务按统一 claim 锁串行取得执行资格，当前任务内部 Job 继续按既有预算和并发执行。等待人工、任务暂停和未决效果保留占位，失败/取消的继续需要确认当前队首身份；治理恢复后完整成功按成功策略推进。队列暂停只阻止后续任务，硬重试原子重建队尾位置且保留暂停；独立 Finding 报告再生成不创建任务新代际。任务页集中显示占位、顺序和原因，减少手动观察并逐个启动的操作。实现与最终 Actions 验收分开记录，详见[项目任务队列](docs/PROJECT_TASK_QUEUE.md)。
+#1180 已完整删除项目任务队列，任务统一使用既有 Scheduler 及全局/项目/Provider/凭据/模型/Agent CLI 并发。保留普通创建、定时、任务自身暂停/取消、重试、报告、人工续做和历史；不再等待另一任务整体完成或人工回复，不保留队列 UI/API/字段/存储/资格及兼容分支。schema 79 受控重建保全旧暂停意图，原运行不重复领取、冻结历史不改写。细则见[删除专题](docs/PROJECT_TASK_QUEUE.md)和 [ADR 0026](docs/architecture/adr/0026-remove-project-task-queue.md)，最终 SHA Actions 待验。
 
 | 路径 | 职责 |
 | --- | --- |
@@ -519,7 +519,7 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 
 成功任务终态只登记知识来源元数据，后续 Dispatcher 按项目积累：至少 4 个未处理来源或最老来源等待满 24 小时，且自动批次间隔至少 24 小时。按 [ADR 0024](docs/architecture/adr/0024-project-knowledge-batching-admission.md) 扫描最多 32 个候选来源，保持 19 个原始 inputs 及可选 governor，放不下者留给后续，不因队首较大终止装箱。连续 2 个自动批次无 active/retired 提案产出即停发；计数与成功显式整理后的恢复从持久 work/proposal 历史跨重启推导，时间或治理 hash 变化不清零。collector、项目行锁事务重验、durable wake 与 activity 共用准入规则，繁忙或停发不生成立即过期的采集 wake。原 CAS/权限/Attempt/未知效果校验、来源审计、旧任务、累计预算与最小 Job 预算拦截、隔离及完整 6×2 独立试验/审查保留；不重建旧批次重置预算。本轮评审修正 record_knowledge_feedback 为仅持久反馈，返回 {usage_ref,state:"recorded"}，无 work_ref、无新 work；成功 Job 的已接受反馈经普通来源登记/collector 冻结精确反馈、target 基线与 evidence refs，仍受上述自动门和原 Job 整理权限约束。显式 request_project_knowledge 保留原授权、来源、预算及幂等语义，不被自动策略替代；反馈/usage、来源、采集与生效继续分层。知识页从 activity 新增的 collection 展示积累、冷却、执行中、停发和下次时间，无新通知、配置、恢复按钮或轮询。该字段是只读投影，模型反馈不代表收益认证。知识页按项目内拉取记录展示显式反馈覆盖率，缺反馈表示效果未知。任务工作台可单独查看已收口的知识整理历史，保留画布及其证据。0024 仅取代 0023 的来源数量与自动准入并扩展重验/投影，历史预览只读、旧 knowledge:auto 不自动推进、无 schema 或整链 token 预算变化。当前为本轮目标契约与共享工作树整合，最终 SHA Actions 待验；不部署、不重跑历史生产任务，不宣称真实模型或注意力收益。细则及历史验收见[项目知识](docs/PROJECT_KNOWLEDGE.md)。
 
-#1074 的人工等待可通过项目队列显式暂存让位，回复在保存事务中回队尾，轮到后沿原续做门创建唯一后继。默认仍保留占位。schema 75 的决定与回复消费持久幂等，当前限定唯一人工等待，详见[队列专题](docs/PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。最终 SHA Actions 另验。
+#1180 已删除人工等待的 FIFO 占位和显式让位；回复仍先持久保存，按原检查点、权限、任务暂停、效果与预算门创建唯一后继。旧暂停队列中的已封存 waiting_human 在重建时保全为任务暂停，不能因回复自动恢复。详见[人工续做](docs/HUMAN_CONTINUATION.md)，最终 SHA Actions 待验。
 
 #1124 B 的[历史候选库回收](deploy/GENERATION_GC.md)提供默认预览和显式审批执行，复用升级锁，保留当前库、最近真实恢复源及未决引用，以 marker/cluster/OID/ACL 证明删除归属。宿主 receipt 与当前库审计支持丢失响应对账，最终 SHA Actions 待验。
 

@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 78);
+INSERT INTO schema_meta (id, version) VALUES ('global', 79);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -63,30 +63,6 @@ CREATE UNIQUE INDEX canvases_trigger_uniq
   ON canvases (project_id, trigger_source, trigger_event_id)
   WHERE trigger_event_id IS NOT NULL;
 CREATE INDEX canvases_project_idx ON canvases (project_id, status, created_at DESC);
-
-CREATE TABLE project_task_queues (
-  project_id uuid PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
-  paused boolean NOT NULL DEFAULT false,
-  pause_reason text,
-  reconciled_at timestamptz NOT NULL DEFAULT now(),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE project_task_queue_items (
-  id bigserial PRIMARY KEY,
-  project_id uuid NOT NULL REFERENCES project_task_queues(project_id) ON DELETE CASCADE,
-  canvas_id text NOT NULL UNIQUE,
-  state text NOT NULL DEFAULT 'queued',
-  created_at timestamptz NOT NULL DEFAULT now(),
-  started_at timestamptz,
-  ended_at timestamptz,
-  CONSTRAINT project_task_queue_canvas_fk FOREIGN KEY (project_id, canvas_id)
-    REFERENCES canvases(project_id, id) ON DELETE CASCADE,
-  CONSTRAINT project_task_queue_state_check CHECK (state IN ('queued', 'active', 'yielded', 'succeeded', 'failed', 'cancelled'))
-);
-CREATE UNIQUE INDEX project_task_queue_active_uniq ON project_task_queue_items(project_id) WHERE state = 'active';
-CREATE INDEX project_task_queue_order_idx ON project_task_queue_items(project_id, state, id);
 
 CREATE TABLE jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -287,23 +263,6 @@ CREATE TABLE human_requests (
 CREATE INDEX human_requests_pending_idx ON human_requests(status,created_at) WHERE resumed_at IS NULL;
 CREATE INDEX human_requests_job_idx ON human_requests(job_id,created_at DESC);
 CREATE INDEX human_requests_expiry_idx ON human_requests(checkpoint_expires_at) WHERE checkpoint_status <> 'blocked';
-
--- Durable operator decision and reply consumption, independent of mutable FIFO position.
-CREATE TABLE project_task_queue_yields (
-  mutation_id uuid PRIMARY KEY,
-  project_id uuid NOT NULL REFERENCES project_task_queues(project_id) ON DELETE CASCADE,
-  canvas_id text NOT NULL,
-  source_item_id bigint NOT NULL,
-  request_id uuid NOT NULL UNIQUE REFERENCES human_requests(id) ON DELETE CASCADE,
-  request_revision integer NOT NULL CHECK (request_revision >= 0),
-  reply_message_id uuid,
-  requeued_item_id bigint,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  requeued_at timestamptz,
-  FOREIGN KEY (project_id,canvas_id) REFERENCES canvases(project_id,id) ON DELETE CASCADE,
-  CHECK ((reply_message_id IS NULL AND requeued_item_id IS NULL AND requeued_at IS NULL)
-    OR (reply_message_id IS NOT NULL AND requeued_item_id IS NOT NULL AND requeued_at IS NOT NULL))
-);
 
 -- Closing a Job never leaves an open management request, even when it has no
 -- active Attempt after resource reclamation. Historical payloads stay immutable.

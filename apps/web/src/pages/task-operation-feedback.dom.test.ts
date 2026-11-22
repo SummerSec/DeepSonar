@@ -40,7 +40,6 @@ async function setup(context: TestContext) {
   context.mock.method(dom.window, "setInterval", () => ++nextTimer);
   context.mock.method(dom.window, "clearInterval", () => {});
   context.mock.method(api, "projects", async () => []);
-  // As in tasks-page-list.dom.test.ts, keep the independent project queue inactive.
   context.mock.method(api, "authStatus", async () => ({ auth_required: true, has_users: true, bootstrap_available: false, default_admin_credentials_active: false, session_ttl_days: 1 }));
   context.mock.method(api, "canvases", async () => [{ ...canvas }]);
   const { createRoot } = await import("react-dom/client");
