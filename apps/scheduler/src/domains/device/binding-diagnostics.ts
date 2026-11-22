@@ -1,5 +1,11 @@
 import type { DeviceRequirement } from "@deepsonar/shared-types";
-import { DeviceRequirement as DeviceRequirementSchema } from "@deepsonar/shared-types";
+import {
+  DEVICE_LEASE_ERROR_CODES,
+  DeviceRequirement as DeviceRequirementSchema,
+} from "@deepsonar/shared-types";
+
+/** Dispatcher 只在真实设备失败路径写入这两个稳定失败码（见 classifyDispatcherFailure）。 */
+const DEVICE_FAILURE_REASONS = new Set<string>(Object.values(DEVICE_LEASE_ERROR_CODES));
 
 /**
  * #1211：设备绑定诊断。
@@ -23,8 +29,10 @@ export type DeviceBindingState =
   | "not_applying"
   /** Attempt 已存在（无错误记录）但没有租约：租约申请正在进行或尚未写结果。 */
   | "attempted_no_lease"
-  /** Attempt 带错误/终态失败且没有租约：平台上已记录的一次申请失败路径。 */
+  /** Attempt 的终态原因就是设备失败码（device_not_available / device_not_authorized）且没有租约。 */
   | "acquire_failed"
+  /** Attempt 已结束且没有租约，但平台没有记录它是否走到设备申请（共享资产/卷/凭据等 provision 步骤也可能在此失败）。 */
+  | "lease_unrecorded"
   /** 有租约记录，但平台没有该 Job/Attempt 的连接结果记录。 */
   | "lease_recorded_unverified";
 
@@ -86,6 +94,8 @@ export interface DeviceBindingAttemptRow {
   attempt_no: number | null;
   status: string;
   error: string | null;
+  /** job_attempts.outcome_json.reason：调度器分类后的终态原因，设备失败码才代表真的调用过 broker。 */
+  failure_reason: string | null;
 }
 
 function readCanvasRequirement(target: unknown): DeviceRequirement | null {
@@ -154,12 +164,21 @@ function classifyAttempt(
         `，租约状态 ${latest?.state ?? "未知"}；平台没有这个 Attempt 的设备连接结果，沙箱内探测失败不能证明宿主机设备不可用。`,
     };
   }
-  if (attempt && (attempt.error !== null || attempt.status === "failed" || attempt.status === "timeout")) {
+  if (attempt && attempt.failure_reason && DEVICE_FAILURE_REASONS.has(attempt.failure_reason)) {
     return {
       state: "acquire_failed",
       reason:
-        "该 Attempt 已结束/带错误记录但没有租约行：申请失败或其它 provision 失败都停在这里；" +
-        "原因原文见本请求 attempts[].error，不在诊断里复读。",
+        `该 Attempt 的终态原因是设备失败码 ${attempt.failure_reason}，且没有租约行：` +
+        "这是平台上已记录的租约申请失败；错误原文见本请求 attempts[].error，不在诊断里复读。",
+    };
+  }
+  if (attempt && (attempt.error !== null || attempt.status === "failed" || attempt.status === "timeout")) {
+    // 不能从「Attempt 失败」反推调用过 broker：共享资产、卷与凭据准备都发生在租约申请之前。
+    return {
+      state: "lease_unrecorded",
+      reason:
+        `该 Attempt 已结束（原因 ${attempt.failure_reason ?? "未记录"}）但没有租约行，平台也没有设备失败码；` +
+        "无法判断它是否走到租约申请，provision 的共享资产/卷/凭据准备失败同样会停在这里。",
     };
   }
   if (attempt) {
@@ -292,7 +311,13 @@ export async function readDeviceBindingDiagnostics(
     canvasTarget: unknown;
     roleName: string;
     /** 会话里已加载的 Attempt（id/序号/状态/错误），避免重复查询并保证与 Job 详情同源。 */
-    attempts: ReadonlyArray<{ id: string; attempt_no: number | null; status: string; error: string | null }>;
+    attempts: ReadonlyArray<{
+      id: string;
+      attempt_no: number | null;
+      status: string;
+      error: string | null;
+      failure_reason: string | null;
+    }>;
   },
 ): Promise<DeviceBindingDiagnostics> {
   const [rows, [counts]] = await Promise.all([
@@ -317,6 +342,7 @@ export async function readDeviceBindingDiagnostics(
       attempt_no: attempt.attempt_no,
       status: attempt.status,
       error: attempt.error,
+      failure_reason: attempt.failure_reason,
     }))
     .slice(0, DEVICE_BINDING_ATTEMPT_CAP);
   // 分档判定按 Attempt 计数：全量 GROUP BY，不受 32 条显示窗口取舍影响。

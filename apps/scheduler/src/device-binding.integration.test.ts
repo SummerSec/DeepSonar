@@ -65,6 +65,13 @@ if (testDatabaseUrl) {
       const plainJobId = await insertJob(plainCanvasId, { name: "test" });
       const declaredJobId = await insertJob(declaredCanvasId, { name: "test" });
       const leasedJobId = await insertJob(leasedCanvasId, { name: "test", device_requirement: requirement });
+      const provisionFailedJobId = await insertJob(leasedCanvasId, { name: "test", device_requirement: requirement });
+      const provisionAttemptId = randomUUID();
+      await sql`
+        INSERT INTO job_attempts (id, job_id, attempt_no, status, error, outcome_json, finished_at)
+        VALUES (${provisionAttemptId}, ${provisionFailedJobId}, 1, 'failed', 'materializeSharedAssetBlob failed',
+                ${sql.json({ reason: "exception" } as never)}, now())`;
+
       const unattemptedJobId = randomUUID();
       await sql`
         INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
@@ -74,8 +81,9 @@ if (testDatabaseUrl) {
       const firstAttemptId = randomUUID();
       const secondAttemptId = randomUUID();
       await sql`
-        INSERT INTO job_attempts (id, job_id, attempt_no, status, error, finished_at)
-        VALUES (${firstAttemptId}, ${leasedJobId}, 1, 'failed', 'device broker 拒绝：没有可用设备', now())`;
+        INSERT INTO job_attempts (id, job_id, attempt_no, status, error, outcome_json, finished_at)
+        VALUES (${firstAttemptId}, ${leasedJobId}, 1, 'failed', 'device broker 拒绝：没有可用设备',
+                ${sql.json({ reason: "device_not_available" } as never)}, now())`;
       await sql`
         INSERT INTO job_attempts (id, job_id, attempt_no, status)
         VALUES (${secondAttemptId}, ${leasedJobId}, 2, 'active')`;
@@ -117,6 +125,11 @@ if (testDatabaseUrl) {
       assert.equal(declared.snapshot_requirement, null);
       assert.deepEqual(declared.canvas_requirement, { roles: ["test"], transport: "hdc", rig_id: "local-sim" });
       assert.match(String(declared.reason), /Job 快照没有冻结该需求/);
+
+      const provisionFailed = await read(provisionFailedJobId);
+      assert.equal(provisionFailed.state, "lease_unrecorded");
+      assert.doesNotMatch(String(provisionFailed.reason), /租约申请失败/);
+      assert.match(String(provisionFailed.reason), /无法判断它是否走到租约申请/);
 
       const unattempted = await read(unattemptedJobId);
       assert.equal(unattempted.state, "not_attempted");
