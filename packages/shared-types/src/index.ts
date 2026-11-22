@@ -1755,6 +1755,22 @@ export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): Plat
   return ["mark_job_done", "ack_human_message"];
 }
 
+/**
+ * #1219 迁移窗口：知识读取的旧名还留在已保存的角色配置里。
+ * 新名没有单独设置时沿用旧名的显式决定，避免升级后把「已关掉读取」的角色默认打开。
+ */
+const LEGACY_PLATFORM_TOOL_DECISIONS: Readonly<Record<string, string>> = {
+  read_project_knowledge: "read_project_memory",
+};
+
+function platformToolDecision(name: PlatformToolName, config: PlatformToolConfig): boolean | undefined {
+  const own = config[name];
+  if (own !== undefined) return own;
+  const legacy = LEGACY_PLATFORM_TOOL_DECISIONS[name];
+  const inherited = legacy ? (config as Record<string, boolean | undefined>)[legacy] : undefined;
+  return inherited;
+}
+
 /** Ordinary optional tools default on; experimental knowledge tools require explicit opt-in. */
 export function resolvePlatformTools(
   roleName: string,
@@ -1764,7 +1780,7 @@ export function resolvePlatformTools(
   const required = new Set(requiredPlatformTools(roleKind));
   return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name)
     || (name === "suggest_project_skills" || name === "record_skill_choice" || name === TASK_KNOWLEDGE_SUGGESTION_OPERATION
-      ? config[name] === true : config[name] !== false));
+      ? platformToolDecision(name, config) === true : platformToolDecision(name, config) !== false));
 }
 
 /**

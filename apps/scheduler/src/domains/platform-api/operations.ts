@@ -19,6 +19,8 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   request_project_knowledge: { summary: "Request bounded project knowledge work", description: "Freeze authorized current-Job sources and enqueue durable governance work.", readOnly: false, eventType: "knowledge" },
   search_project_knowledge: { summary: "Search the frozen authorized knowledge catalog", description: "Return only Job-frozen metadata intersected with current revocations, before pagination.", readOnly: true, eventType: null },
   read_project_knowledge: { summary: "Read one frozen Memory version", description: "Read exact hash and version in this project's Job snapshot.", readOnly: true, eventType: null },
+  // #1219 迁移窗口：旧名的只读别名，沿用同一摘要与只读语义（只在旧快照的 Job 上出现）。
+  read_project_memory: { summary: "Read one frozen Memory version (legacy alias)", description: "Legacy read-only alias kept for Jobs whose frozen snapshot already allowed it; it resolves to read_project_knowledge with the same project, version and revocation checks. New Jobs and role configs use read_project_knowledge.", readOnly: true, eventType: null },
   read_knowledge_input: { summary: "Read an assigned governance input", description: "Read only the frozen manifest for the current work and stage.", readOnly: true, eventType: null },
   propose_project_knowledge: { summary: "Propose a knowledge change", description: "Assigned maker only. Creates immutable candidate content and a durable receipt.", readOnly: false, eventType: "knowledge" },
   submit_knowledge_evaluation: { summary: "Submit isolated trial evaluation", description: "Assigned evaluator only; results bind exact case, arm, Job, Attempt and evidence.", readOnly: false, eventType: "knowledge" },
