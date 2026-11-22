@@ -1502,7 +1502,7 @@ const OPS: Op[] = [
         properties: {
           device_binding: {
             type: "object",
-            description: "#1211 设备绑定诊断：区分未声明需求、申请未发生、角色无需设备、已申请但未记录租约、设备失败码导致的申请失败、非设备 provision 失败的可疑未记录、有租约但无连接结果，并按 Attempt 分档（最多 20 个 Attempt、32 条租约，超出显式截断）。acquire_failed 只认 job_attempts.outcome_json.reason 里的设备失败码，不从「Attempt 失败」反推调用过 broker。只读投影，不申请租约、不改调度判断；connection_result_recorded 为 false 时不得解释为连接失败。",
+            description: "#1211 设备绑定诊断：区分未声明需求、申请未发生、角色无需设备、已申请但未记录租约、设备失败码导致的申请失败、非设备 provision 失败的可疑未记录、有租约但无连接结果，并按 Attempt 分档（最多 20 个 Attempt、32 条租约，超出显式截断）。acquire_failed 只认 job_attempts.outcome_json.reason 里的设备失败码，不从「Attempt 失败」反推调用过 broker；lease_unrecorded 覆盖 failed/timeout/orphan/cancelled/interrupted/unknown 与带错误记录的无租约终态。只读投影，不申请租约、不改调度判断；connection_result_recorded 为 false 时不得解释为连接失败。",
             properties: {
               state: { type: "string", enum: ["not_declared", "not_attempted", "not_applying", "attempted_no_lease", "acquire_failed", "lease_unrecorded", "lease_recorded_unverified"] },
               reason: { type: "string" },

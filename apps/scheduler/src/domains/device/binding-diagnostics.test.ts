@@ -277,3 +277,24 @@ test("#1211 设备未授权与不可用都归入 acquire_failed，其它终态�
   });
   assert.equal(other.state, "lease_unrecorded");
 });
+
+test("#1211 终态边界：cancelled / orphan / interrupted / unknown 都不冒充「还在申请」", () => {
+  for (const status of ["cancelled", "orphan", "interrupted", "unknown"]) {
+    const result = deriveDeviceBinding({
+      snapshot: snapshotWith(requirement),
+      canvasTarget: {},
+      roleName: "test",
+      attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status, error: null, failure_reason: null }],
+    });
+    assert.equal(result.state, "lease_unrecorded", status);
+    assert.match(result.reason, new RegExp(`status=${status}`));
+    assert.doesNotMatch(result.reason, /租约申请失败/);
+  }
+  const active = deriveDeviceBinding({
+    snapshot: snapshotWith(requirement),
+    canvasTarget: {},
+    roleName: "test",
+    attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status: "active", error: null, failure_reason: null }],
+  });
+  assert.equal(active.state, "attempted_no_lease");
+});

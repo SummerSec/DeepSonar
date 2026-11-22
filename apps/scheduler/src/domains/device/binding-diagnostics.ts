@@ -8,6 +8,16 @@ import {
 const DEVICE_FAILURE_REASONS = new Set<string>(Object.values(DEVICE_LEASE_ERROR_CODES));
 
 /**
+ * job_attempts.status 的终态集合（与 schema 的 job_attempts_status_check 一致）。
+ * 只有 active 不算终态；unknown 也算终态（执行上下文已丢失，不是「还在申请」）。
+ */
+const TERMINAL_ATTEMPT_STATUSES = new Set(["failed", "cancelled", "timeout", "orphan", "interrupted", "unknown"]);
+
+export function isTerminalAttemptStatus(status: string): boolean {
+  return TERMINAL_ATTEMPT_STATUSES.has(status);
+}
+
+/**
  * #1211：设备绑定诊断。
  *
  * 现场一次「任务说没有可用模拟器」的排查里，真正的事实是 Job 快照与画布都没有
@@ -172,13 +182,14 @@ function classifyAttempt(
         "这是平台上已记录的租约申请失败；错误原文见本请求 attempts[].error，不在诊断里复读。",
     };
   }
-  if (attempt && (attempt.error !== null || attempt.status === "failed" || attempt.status === "timeout")) {
-    // 不能从「Attempt 失败」反推调用过 broker：共享资产、卷与凭据准备都发生在租约申请之前。
+  if (attempt && (attempt.error !== null || isTerminalAttemptStatus(attempt.status))) {
+    // 不能从「Attempt 结束」反推调用过 broker：共享资产、卷与凭据准备都发生在租约申请之前。
+    // 终态覆盖 failed/timeout/orphan/cancelled/interrupted/unknown，避免只有 failed 与 timeout 才收口。
     return {
       state: "lease_unrecorded",
       reason:
-        `该 Attempt 已结束（原因 ${attempt.failure_reason ?? "未记录"}）但没有租约行，平台也没有设备失败码；` +
-        "无法判断它是否走到租约申请，provision 的共享资产/卷/凭据准备失败同样会停在这里。",
+        `该 Attempt 已结束（status=${attempt.status}，原因 ${attempt.failure_reason ?? "未记录"}）但没有租约行，` +
+        "平台也没有设备失败码；无法判断它是否走到租约申请，provision 的共享资产/卷/凭据准备失败同样会停在这里。",
     };
   }
   if (attempt) {
