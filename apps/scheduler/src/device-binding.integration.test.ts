@@ -112,7 +112,8 @@ if (testDatabaseUrl) {
       assert.doesNotMatch(String(plain.reason), /连接失败|设备不可用/);
 
       const declared = await read(declaredJobId);
-      assert.equal(declared.state, "declared_no_lease");
+      // 画布声明了需求但快照未冻结、且还没有 Attempt：属于「申请未发生」，不是申请失败。
+      assert.equal(declared.state, "not_attempted");
       assert.equal(declared.snapshot_requirement, null);
       assert.deepEqual(declared.canvas_requirement, { roles: ["test"], transport: "hdc", rig_id: "local-sim" });
       assert.match(String(declared.reason), /Job 快照没有冻结该需求/);
