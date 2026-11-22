@@ -23,7 +23,7 @@ export function FindingLocation({ location }: { location: string }) {
           className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[10px] text-zinc-500 ring-1 ring-white/[.07] hover:text-zinc-200">
           <Copy size={12} /> 复制
         </button>
-        <span role="status" className="max-w-24 text-right empty:hidden">{message}</span>
+        <span role="status" className="max-w-24 text-right empty:sr-only">{message}</span>
       </div>
     </div>
   );

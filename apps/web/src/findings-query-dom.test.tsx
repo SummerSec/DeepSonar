@@ -204,13 +204,16 @@ test("copying a Finding location preserves all paths and reports clipboard denia
     const clipboard = { writeText: async (text: string) => { written.push(text); } };
     Object.defineProperty(navigator, "clipboard", { value: clipboard });
     await act(async () => env.root.render(<FindingLocation location={location} />));
+    const status = env.container.querySelector('[role="status"]')!;
+    assert.equal(status.textContent, "");
+    assert.ok(status.classList.contains("empty:sr-only"));
     const button = env.container.querySelector<HTMLButtonElement>('button[aria-label="复制代码位置"]')!;
     await act(async () => button.click());
     assert.deepEqual(written, [location]);
-    assert.equal(env.container.querySelector('[role="status"]')?.textContent, "已复制");
+    assert.equal(status.textContent, "已复制");
     clipboard.writeText = async () => { throw new Error("denied"); };
     await act(async () => button.click());
-    assert.match(env.container.querySelector('[role="status"]')?.textContent ?? "", /复制失败/);
+    assert.match(status.textContent ?? "", /复制失败/);
   } finally {
     await env.cleanup();
   }
