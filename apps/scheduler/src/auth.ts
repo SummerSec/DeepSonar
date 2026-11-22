@@ -198,6 +198,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "POST /findings/:id/identity-mappings/remap": "admin",
   "POST /findings/:id/identity-mappings/revoke": "admin",
   "GET /findings/:id/evidence-trace": "findings:read",
+  "GET /findings/:id/duplicates": "findings:read",
   "GET /findings/:id/program-eligibility": "findings:read",
   "GET /findings/:id/program-eligibility/reviews": "findings:read",
   "POST /findings/:id/program-eligibility/reviews": "findings:write",
