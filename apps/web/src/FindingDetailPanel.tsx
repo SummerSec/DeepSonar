@@ -21,6 +21,7 @@ import {
   type FindingLink,
   type FindingReport,
 } from "./api";
+import { FindingLocation } from "./FindingLocation";
 import { MarkdownView } from "./MarkdownView";
 import { FindingVerificationClose } from "./FindingVerificationClose";
 import { FindingDispositionEditor } from "./FindingDispositionEditor";
@@ -468,12 +469,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                     ) : (
                       <p className="text-[13px] text-zinc-600">无描述内容。</p>
                     )}
-                    {f.location && (
-                      <div className="theme-input-surface mt-4 break-all rounded-lg border px-3 py-2 font-mono text-[11px] text-zinc-400">
-                        <span className="text-zinc-600">location </span>
-                        {f.location}
-                      </div>
-                    )}
+                    {f.location?.trim() && <FindingLocation key={f.location} location={f.location} />}
                   </div>
                 </section>
 

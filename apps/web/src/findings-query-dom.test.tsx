@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { api, type FindingDetail, type FindingSummary, type PageEnvelope, type ProjectFindingsSummary } from "./api";
 import { FindingDetailPanel } from "./FindingDetailPanel";
+import { FindingLocation } from "./FindingLocation";
 import { FindingDispositionEditor } from "./FindingDispositionEditor";
 import { FINDING_VERIFY_OPTIONS } from "./finding-verification";
 import { ConfirmDialogProvider } from "./components/ConfirmDialog";
@@ -40,7 +41,7 @@ function setup() {
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
   const globals = globalThis as unknown as Record<string, unknown>;
   const replacements: Record<string, unknown> = {
-    window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    window: dom.window, navigator: dom.window.navigator, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
     Element: dom.window.Element, Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true,
   };
   const previous = new Map(Object.keys(replacements).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
@@ -190,6 +191,29 @@ test("task queries filter on the server, reset pages and ignore late responses a
     await render({ enabled: false });
     await act(async () => env.requests[6].pending.resolve(page("old-task")));
     assert.deepEqual(latest!.rows, []);
+  } finally {
+    await env.cleanup();
+  }
+});
+
+test("copying a Finding location preserves all paths and reports clipboard denial", async () => {
+  const env = setup();
+  const written: string[] = [];
+  const location = "src/first.ts:18;\n  src/second.ts:24";
+  try {
+    const clipboard = { writeText: async (text: string) => { written.push(text); } };
+    Object.defineProperty(navigator, "clipboard", { value: clipboard });
+    await act(async () => env.root.render(<FindingLocation location={location} />));
+    const status = env.container.querySelector('[role="status"]')!;
+    assert.equal(status.textContent, "");
+    assert.ok(status.classList.contains("empty:sr-only"));
+    const button = env.container.querySelector<HTMLButtonElement>('button[aria-label="复制代码位置"]')!;
+    await act(async () => button.click());
+    assert.deepEqual(written, [location]);
+    assert.equal(status.textContent, "已复制");
+    clipboard.writeText = async () => { throw new Error("denied"); };
+    await act(async () => button.click());
+    assert.match(status.textContent ?? "", /复制失败/);
   } finally {
     await env.cleanup();
   }
