@@ -107,11 +107,12 @@ export async function loadProjectFindingsSummary(
   const rows = await sql`
     WITH matching AS MATERIALIZED (
       SELECT f.*, j.canvas_id, c.title AS canvas_title,
-             r.finding_id AS finding_id, r.is_canonical AS is_canonical
+             r.dedupe_cluster_id
       FROM findings f
       JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
       JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
-      LEFT JOIN finding_research r ON r.finding_id = f.id
+      LEFT JOIN finding_research r
+        ON r.finding_id = f.id AND r.project_id = f.project_id AND r.canvas_id = j.canvas_id
       WHERE ${findingQueryPredicate(filters)}
     )
     SELECT 'severity' AS dimension, COALESCE(NULLIF(severity, ''), 'unset') AS key, '' AS title, COUNT(*)::int AS count FROM matching GROUP BY 2
@@ -120,8 +121,9 @@ export async function loadProjectFindingsSummary(
     UNION ALL SELECT 'profile', profile, '', COUNT(*)::int FROM matching GROUP BY 2
     UNION ALL SELECT 'canvas', canvas_id, canvas_title, COUNT(*)::int FROM matching GROUP BY 2, 3
     UNION ALL SELECT 'distinct_fingerprint', '', '', COUNT(DISTINCT fingerprint)::int FROM matching
-    UNION ALL SELECT 'distinct_cluster', '', '', COUNT(*)::int FROM matching
-      WHERE finding_id IS NULL OR is_canonical
+    UNION ALL SELECT 'distinct_cluster', '', '',
+      (COUNT(DISTINCT dedupe_cluster_id) + COUNT(*) FILTER (WHERE dedupe_cluster_id IS NULL))::int
+      FROM matching
     UNION ALL SELECT 'project', '', '', COUNT(*)::int FROM findings f
       JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
       JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id

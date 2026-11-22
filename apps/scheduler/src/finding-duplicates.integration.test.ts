@@ -121,8 +121,11 @@ if (!testDatabaseUrl) {
       assert.equal(selfTarget.statusCode, 400, selfTarget.payload);
       assert.equal(selfTarget.json().error_code, "DUPLICATE_TARGET_SELF");
       const foreignTarget = await dispose(f2, { disposition: "duplicate", duplicate_of: f4 });
-      assert.equal(foreignTarget.statusCode, 409, foreignTarget.payload);
-      assert.equal(foreignTarget.json().error_code, "DUPLICATE_TARGET_PROJECT_MISMATCH");
+      const unknownTarget = await dispose(f2, { disposition: "duplicate", duplicate_of: randomUUID() });
+      assert.equal(unknownTarget.statusCode, 400, unknownTarget.payload);
+      assert.equal(unknownTarget.json().error_code, "DUPLICATE_TARGET_NOT_FOUND");
+      assert.equal(foreignTarget.statusCode, unknownTarget.statusCode, foreignTarget.payload);
+      assert.deepEqual(foreignTarget.json(), unknownTarget.json());
       const notAllowed = await dispose(f3, { disposition: "accepted", duplicate_of: f1 });
       assert.equal(notAllowed.statusCode, 400, notAllowed.payload);
       assert.equal(notAllowed.json().error_code, "DUPLICATE_TARGET_NOT_ALLOWED");
@@ -152,6 +155,23 @@ if (!testDatabaseUrl) {
       assert.equal(summaryBody.distinct_by_cluster, 3, "没有 research 行时按记录计入 cluster 口径");
       const duplicateBucket = summaryBody.disposition.find((bucket) => bucket.key === "duplicate")?.count ?? 0;
       assert.equal(duplicateBucket, 1, "duplicate 单列一桶");
+
+      const clusterId = randomUUID();
+      await sql`INSERT INTO finding_dedupe_clusters (id, canvas_id, project_id, canonical_finding_id)
+        VALUES (${clusterId}, ${canvasB}, ${projectId}, ${f3})`;
+      await sql`INSERT INTO finding_research
+        (finding_id, project_id, canvas_id, dedupe_cluster_id, canonical_finding_id, is_canonical)
+        VALUES (${f3}, ${projectId}, ${canvasB}, ${clusterId}, ${f3}, true),
+               (${f2}, ${projectId}, ${canvasB}, ${clusterId}, ${f3}, false)`;
+      const clustered = await app.inject({ method: "GET", url: `/projects/${projectId}/findings/summary`, headers });
+      assert.equal(clustered.statusCode, 200, clustered.payload);
+      assert.equal(clustered.json().distinct_by_cluster, 2, "同组主记录和成员只计一次");
+      const memberOnly = await app.inject({
+        method: "GET", url: `/projects/${projectId}/findings/summary?disposition=duplicate`, headers,
+      });
+      assert.equal(memberOnly.statusCode, 200, memberOnly.payload);
+      assert.equal(memberOnly.json().total, 1);
+      assert.equal(memberOnly.json().distinct_by_cluster, 1, "仅成员匹配时仍计入该组");
 
       const filtered = await app.inject({ method: "GET", url: `/findings?fingerprint=${shared}`, headers });
       assert.equal(filtered.statusCode, 200, filtered.payload);

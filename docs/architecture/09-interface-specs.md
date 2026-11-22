@@ -124,8 +124,8 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 | --- | --- | --- |
 | `GET /findings/:id/duplicates` | `findings:read` | 同项目跨 canvas 三类候选并集：`fingerprint` 精确、`location` 双向 `starts_with` 前缀、同 canvas research cluster；逐条给出 `match_reason`。只读，不返回证据正文或凭据；显式 `project_id` 与本记录不同时返回 403 `CROSS_PROJECT_DUPLICATE_QUERY`，`limit` 1–200 |
 | `GET /findings`（`fingerprint` 过滤） | `findings:read` | 逗号分隔精确匹配，用于跨 Job 同值查询；仍受项目 scope 与游标页约束 |
-| `PATCH /findings/:id/disposition`（`duplicate`） | `findings:write` | `disposition=duplicate` 必须提供同项目、存在、非自身的 `duplicate_of`；非 duplicate 携带 `duplicate_of` 返回 400 `DUPLICATE_TARGET_NOT_ALLOWED`；`confirmed_vuln` 仍要求 `verify_status=confirmed` |
-| `GET /projects/:id/findings/summary` | `findings:read` | 记录数之外返回 `distinct_by_fingerprint` / `distinct_by_cluster`（无 research 行按记录计）；`duplicate` 在 disposition 桶中单列，不与 `refuted`/`inconclusive` 混算 |
+| `PATCH /findings/:id/disposition`（`duplicate`） | `findings:write` | `disposition=duplicate` 必须提供同项目、存在、非自身的 `duplicate_of`；目标不在当前项目可见范围时返回 400 `DUPLICATE_TARGET_NOT_FOUND`；非 duplicate 携带 `duplicate_of` 返回 400 `DUPLICATE_TARGET_NOT_ALLOWED`；`confirmed_vuln` 仍要求 `verify_status=confirmed` |
+| `GET /projects/:id/findings/summary` | `findings:read` | 记录数之外返回 `distinct_by_fingerprint` / `distinct_by_cluster`（筛选命中的每组计一次，未分组按记录计）；`duplicate` 在 disposition 桶中单列，不与 `refuted`/`inconclusive` 混算 |
 
 数据库侧由复合外键 `(project_id, duplicate_of) → findings(project_id, id)` 与成对约束 `duplicate ⟺ duplicate_of NOT NULL` 兜底；`duplicate_of` 指向自身由 CHECK 拒绝。
 

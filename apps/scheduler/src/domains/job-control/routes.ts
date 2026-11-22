@@ -360,15 +360,10 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       if (body.duplicate_of === id) {
         return reply.code(400).send({ error_code: "DUPLICATE_TARGET_SELF", error: "duplicate_of 不能指向自身" });
       }
-      const [target] = await sql`SELECT id, project_id FROM findings WHERE id = ${body.duplicate_of}`;
+      const [target] = await sql`
+        SELECT id FROM findings WHERE id = ${body.duplicate_of} AND project_id = ${cur.project_id}`;
       if (!target) {
-        return reply.code(400).send({ error_code: "DUPLICATE_TARGET_NOT_FOUND", error: "duplicate_of 目标不存在" });
-      }
-      if (String(target.project_id) !== String(cur.project_id)) {
-        return reply.code(409).send({
-          error_code: "DUPLICATE_TARGET_PROJECT_MISMATCH",
-          error: "duplicate_of 目标必须与本记录同 project",
-        });
+        return reply.code(400).send({ error_code: "DUPLICATE_TARGET_NOT_FOUND", error: "当前项目中没有该 duplicate_of 目标" });
       }
       duplicateTarget = body.duplicate_of;
     } else if (body.duplicate_of) {
