@@ -6,6 +6,7 @@ import { SnapshotUnresolvableError } from "../role-runtime-snapshot/index.js";
 import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
 import {
   currentSnapshotUnresolvableBody,
+  describeHumanContinuationBlocker,
   frozenRuntimeImageOverride,
   governedSnapshotIdentity,
   isSnapshotUnresolvableError,
@@ -194,4 +195,14 @@ test("legacy provider binding and business configuration drift require explicit 
   }), ["gateway_provider_binding_fingerprint"]);
   assert.deepEqual(snapshotIdentityDrift(current, structuredClone(current)), []);
   assert.equal(Object.hasOwn(base, "gateway_provider_binding"), false, "comparison never backfills historical snapshots");
+});
+
+test("#1223 续做准入的阻挡原因有可操作说明，且不把断点不可用说成「请回复」", () => {
+  assert.match(describeHumanContinuationBlocker("HUMAN_CHECKPOINT_SECRET_DETECTED"), /取消该任务或新建任务/);
+  assert.doesNotMatch(describeHumanContinuationBlocker("HUMAN_CHECKPOINT_SECRET_DETECTED"), /请回复/);
+  assert.match(describeHumanContinuationBlocker("HUMAN_CHECKPOINT_EXPIRED"), /断点已过期/);
+  assert.match(describeHumanContinuationBlocker("HUMAN_CHECKPOINT_NOT_READY"), /稍后重试/);
+  assert.match(describeHumanContinuationBlocker("EXECUTION_TIME_EXHAUSTED"), /预算已耗尽/);
+  assert.match(describeHumanContinuationBlocker("HUMAN_REPLY_REQUIRED"), /须通过当前续做准入/);
+  assert.match(describeHumanContinuationBlocker("SOMETHING_NEW"), /查看任务详情/);
 });

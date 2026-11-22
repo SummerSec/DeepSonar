@@ -328,6 +328,22 @@ export async function requeueTargetAuthorizationBlockers(tx: typeof sql, job: Re
  * and retains the old snapshot; rerun-current atomically installs the newly
  * resolved snapshot before exposing pending to Dispatcher.
  */
+/** #1223：把续做准入的阻挡原因翻成可操作说明，不再统一说「请回复」。 */
+export function describeHumanContinuationBlocker(code:string):string {
+  if(code==="HUMAN_CHECKPOINT_SECRET_DETECTED") return "断点封存时检测到受管密钥，旧现场不可恢复；已回复也不可续做，请取消该任务或新建任务（平台不会放宽凭据保护）。";
+  if(code==="HUMAN_CHECKPOINT_EXPIRED") return "断点已过期，旧现场不可恢复；请取消该任务或新建任务。";
+  if(code==="HUMAN_CHECKPOINT_NOT_READY") return "断点尚未就绪（进程退出或资源释放尚未确认）；稍后重试，或取消该任务。";
+  if(code==="HUMAN_CHECKPOINT_OWNER_CHANGED") return "断点归属已变化（当前 Attempt 不是回复对应的执行身份）；请取消该任务或新建任务。";
+  if(code==="HUMAN_CHECKPOINT_IDENTITY_CHANGED") return "断点身份与当前 Job/项目快照不一致；请取消该任务或新建任务。";
+  if(code==="HUMAN_CONTINUATION_DELIVERY_UNRESOLVED") return "人工回复消息仍在投递中；等投递结束后重试。";
+  if(code==="HUMAN_CONTINUATION_USAGE_UNKNOWN") return "存在未结清的模型用量；结清后重试。";
+  if(code==="HUMAN_CONTINUATION_RESOURCES_PENDING") return "设备租约等资源尚未释放；释放后重试。";
+  if(code==="EXECUTION_TIME_EXHAUSTED") return "执行时间预算已耗尽；请取消该任务或新建任务。";
+  if(code==="HUMAN_REPLY_REQUIRED") return "人工回复和可校验断点均须通过当前续做准入。";
+  if(code==="HUMAN_REQUEST_NOT_CURRENT") return "当前没有可续做的人工请求（可能已被回复或已关闭）。";
+  return "续做准入未通过；请查看任务详情的人工请求与断点状态。";
+}
+
 export async function requeueJob(
   jobId: string,
   mode: "resume-frozen" | "rerun-current",
@@ -425,14 +441,26 @@ export async function requeueJob(
             : "回复已保存，正在等待调度器从原现场继续。" };
       }
     }
+    // #1223：waiting_human 的恢复入口必须读取当前人工请求的断点状态。旧实现只在
+    // failed/timeout/orphan 时查续做记录，于是 waiting_human 的 blocker 永远落成
+    // HUMAN_REPLY_REQUIRED，把「断点不可用（如 HUMAN_CHECKPOINT_SECRET_DETECTED）」伪装成
+    // 「还没回复」，前台与后台泵互锁。这里统一查当前请求再走准入，返回真实原因。
+    const [currentWaitingRequest]=status==='waiting_human'&&!humanRequestId
+      ?await tx`SELECT id FROM human_requests WHERE job_id=${jobId} AND status IN ('open','answered')
+          AND resumed_at IS NULL ORDER BY revision DESC,created_at DESC,id DESC LIMIT 1`:[];
     const [previousContinuation]=!humanRequestId&&['failed','timeout','orphan'].includes(status)
       ?await tx`SELECT id FROM human_requests WHERE job_id=${jobId} AND resumed_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1`:[];
-    const continuationId=humanRequestId??previousContinuation?.id;
+    const continuationId=humanRequestId??currentWaitingRequest?.id??previousContinuation?.id;
     const continuation=continuationId?await humanContinuationAdmission(tx,job,String(continuationId),!humanRequestId):null;
     if(continuation&&mode==='rerun-current') return {kind:'not_resumable' as const,status,provenance,
       error_code:'HUMAN_CONTINUATION_REQUIRES_FROZEN',reason:'已封存续做只接受原冻结快照；更换配置须另建任务。'};
-    if(continuation?.blocker||(status==='waiting_human'&&!humanRequestId)) return {
-      kind:"not_resumable" as const,status,provenance,error_code:continuation?.blocker??"HUMAN_REPLY_REQUIRED",
+    if(continuation?.blocker) return {
+      kind:"not_resumable" as const,status,provenance,error_code:continuation.blocker,
+      reason:describeHumanContinuationBlocker(continuation.blocker),
+    };
+    // waiting_human 必须持有通过准入的当前续做，否则不放行（与原语义一致，但不再伪造原因）。
+    if(status==='waiting_human'&&!continuation) return {
+      kind:"not_resumable" as const,status,provenance,error_code:"HUMAN_REPLY_REQUIRED",
       reason:"人工回复和可校验断点均须通过当前续做准入。",
     };
 

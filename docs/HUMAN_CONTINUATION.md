@@ -87,6 +87,14 @@ structured 模式恢复验证后的业务文件、原问题、用户回复和有
 
 多轮等待同时恢复同一预算链累计已 ACK 的文字回复、请求引用和 ACK 摘要，按消息保存顺序写入当前请求 inbox 下只读的 `acknowledged-history.json`，启动提示提供读取路径。该历史最多 256 条、序列化后最多 1 MiB，准入扫描与执行前重核均检查上限，超过时返回 `HUMAN_CHECKPOINT_HISTORY_LIMIT` 并保留已保存的新回复。历史不包含尚未 ACK 或投递未知的消息，不产生新的投递或 ACK，不替代当前授权核验。正文从持久消息账本恢复，避免仅恢复较早轮次附件却遗漏文字决定。
 
+### 断点不可用时的恢复语义（#1223）
+
+`waiting_human` 的 `POST /jobs/:id/resume` 与 `POST /jobs/:id/rerun-current` 必须读取**当前**人工请求（`status IN ('open','answered') AND resumed_at IS NULL`）的断点状态再走续做准入。历史实现只在 `failed/timeout/orphan` 查续做记录，于是 `waiting_human` 的 blocker 永远落成 `HUMAN_REPLY_REQUIRED`，把「断点已不可用」伪装成「还没回复」，前台与后台泵互锁。现在返回真实阻断原因（如 `HUMAN_CHECKPOINT_SECRET_DETECTED`、`HUMAN_CHECKPOINT_EXPIRED`、`HUMAN_CHECKPOINT_OWNER_CHANGED`）并附可操作说明（取消该任务或新建任务、稍后重试、结清用量等）；未回复时仍是 `HUMAN_REPLY_REQUIRED`，不放宽准入条件。
+
+断点不可用时的受治理出口仍是取消或新建任务：本切片不自动把 Job 转成终态、也不放宽凭据保护，避免在无人确认的情况下丢弃已保存的人工回复。
+
+密钥检出（`HUMAN_CHECKPOINT_SECRET_DETECTED`）不再把短串当凭据：参与文件比对的受管密钥要求长度 ≥ 8、字符多样性达标且不在通用词表（`true`/`false`/`test`/`1`/`null` 等）。命中时在 Scheduler 日志给出请求号、文件路径与命中序号（不打印值本身），便于核对是哪份文件触发；真实凭据仍 fail closed。
+
 ## 预算与边界
 
 人工等待期间调用 `resume` 或 `rerun-current` 时，平台读取当前人工请求，优先返回本次准入检查的阻塞原因。准入通过后，若调度器为本请求记录了续做失败，接口说明上次检查的结果，例如配置变化或授权受阻；最新状态以调度器下次检查为准。已回复、断点就绪且没有失败记录时返回 `409 HUMAN_CONTINUATION_PENDING`。若断点已过期或封存命中凭据保护规则，操作者可取消任务或新建任务。
