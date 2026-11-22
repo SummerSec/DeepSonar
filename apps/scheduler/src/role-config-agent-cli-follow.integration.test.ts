@@ -121,6 +121,15 @@ if (!testDatabaseUrl) {
       const [credStill] = await sql`SELECT agent_cli FROM credentials WHERE id = ${anthropicId}`;
       assert.equal(credStill.agent_cli, "claude-code", "RoleConfig writes must not rewrite Credential.agent_cli");
 
+      // #1219 迁移窗口：已保存配置里的旧工具键在保存时归一化成新键，
+      // 否则升级后编辑页改一项无关设置既可能存不下来，也可能把原先关掉的读取重新打开。
+      const legacyTools = await putRoleConfig({ platform_tools: { read_project_memory: false } });
+      assert.equal(legacyTools.statusCode, 200, legacyTools.payload);
+      const [toolRow] = await sql`SELECT platform_tools_json FROM role_configs WHERE id = ${savedBody.id}`;
+      const storedTools = toolRow.platform_tools_json as Record<string, boolean>;
+      assert.equal(storedTools.read_project_memory, undefined, "旧键不应再写回存储");
+      assert.equal(storedTools.read_project_knowledge, false, "旧的关闭决定必须迁移到新键");
+
     } finally {
       if (closeApp) await closeApp().catch(() => undefined);
       if (endSql) await endSql().catch(() => undefined);
