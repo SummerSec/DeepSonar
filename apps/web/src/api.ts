@@ -561,6 +561,7 @@ export interface ContextDiagnostics {
 }
 
 export interface JobAttemptSummary {
+  outcome_json?: { reason?: string } | null;
   id: string;
   attempt_no: number;
   status: string;
@@ -654,6 +655,7 @@ export interface HumanContinuation {
 }
 
 export interface JobDetail {
+  device_binding?: import("./DeviceBindingView").BindingDiagnostics;
   process_diagnostics?: import("./RuntimeProcessEvidence").RuntimeProcessEvidence[];
   job: {
     execution_state?: JobExecutionState | null;

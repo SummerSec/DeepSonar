@@ -9,6 +9,8 @@ DeepSonar 的 Job 跑在硬化容器沙箱里，沙箱内**没有任何物理设
 
 镜像层已经预埋了设备工具链（`agent-harness/mobile-runtime.json` 的 `adb`+`hdc`、`agent-harness/openharmony-test-runtime.json` 的 `hdc`，capabilities 标记 `device-protocol`），缺的不是工具，而是调度与治理。
 
+任务详情的「结果 → 执行账本 → 设备绑定」展示当前 Job 的设备需求与租约记录。每次重试分别展示。租约申请失败时提供对应轮次的原因，设备连通性需由该轮的设备侧记录确认。
+
 ## 1. 现状（代码事实）
 
 | 事实 | 位置 |
