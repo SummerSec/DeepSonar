@@ -451,7 +451,11 @@ export async function requeueJob(
     const [previousContinuation]=!humanRequestId&&['failed','timeout','orphan'].includes(status)
       ?await tx`SELECT id FROM human_requests WHERE job_id=${jobId} AND resumed_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1`:[];
     const continuationId=humanRequestId??currentWaitingRequest?.id??previousContinuation?.id;
-    const continuation=continuationId?await humanContinuationAdmission(tx,job,String(continuationId),!humanRequestId):null;
+    // recovering 表示「已续做过一次的 Job 再次恢复」：只有 failed/timeout/orphan 且请求已 resumed 才是。
+    // waiting_human 的前台入口传 recovering=false，否则会被判成 HUMAN_REQUEST_NOT_CURRENT，
+    // 真实断点原因（如密钥检出）又会被吞掉。
+    const recovering=!humanRequestId&&['failed','timeout','orphan'].includes(status);
+    const continuation=continuationId?await humanContinuationAdmission(tx,job,String(continuationId),recovering):null;
     if(continuation&&mode==='rerun-current') return {kind:'not_resumable' as const,status,provenance,
       error_code:'HUMAN_CONTINUATION_REQUIRES_FROZEN',reason:'已封存续做只接受原冻结快照；更换配置须另建任务。'};
     if(continuation?.blocker) return {
