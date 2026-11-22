@@ -49,6 +49,10 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 `GET /jobs/:id` 的 `provision_diagnostics` 复用原 `tasks:read` 项目/Job scope；只查询原 Attempt 上首次 immutable audit 引用，使用数据库规范 Job ID 比较 text 归属（UUID URL 大小写不改变诊断），再核 system/scheduler、项目/Job/Attempt、版本与固定字段，不赋予 audit 管理权限。返回来源/时间及固定阶段、HTTP 状态和布尔信号；未知/旧引用不回填，SDK/body/env/审计元数据和容器日志不进入投影。预算只见[实现](../../apps/scheduler/src/provision-failure-evidence.ts)，正常 Job 无引用不查询 audit。引用与审计同事务在正常清理前发布，不变更 lifecycle/效果/预算；[SQL/HTTP 回归](../../apps/scheduler/src/provision-failure-evidence.integration.test.ts)已接 `pnpm ci:integration:platform-api`，最终 SHA 待验。
 
+### 设备绑定诊断（#1211）
+
+`GET /jobs/:id` 增加只读 `device_binding`，沿用 `tasks:read` 与项目/Job scope，只投影平台已经记录的事实：需求是否冻结在 Job 快照（执行期唯一权威）、是否只写在画布 `target_json`、Job 角色是否命中 `roles`、以及该 Job 是否真的拿到过租约（含设备 key、rig、授予/到期/释放时间与释放原因）。分档固定为 `not_declared`（任务与画布都没有声明需求，调度器不会申请租约）、`not_attempted`（已声明但还没有 Attempt：领取/准备尚未开始，租约申请未发生，与真正的申请失败分开）、`not_applying`（Attempt 的角色不在 `roles` 内）、`attempted_no_lease`（Attempt 存在但租约还在进行/未写结果）、`acquire_failed`（Attempt 带错误或终态失败且没有租约行；原因原文不在此复读，指向同请求 `attempts[].error`）、`lease_recorded_unverified`（有租约但无连接结果）。分档按 Attempt 独立给出（`attempts`，最多 20 个，按 `attempt_no` 倒序），且判定依据是按 Attempt 的全量租约计数，不依赖 32 条有界显示窗口；顶层 `state` 跟随最新 Attempt，重试不会被历史合并掩盖。租约列表最多 32 条并携带 `attempt_id`，超出时 `lease_count` 保留真实总数且 `leases_truncated` / `attempts_truncated` 为 true。`connection_result_recorded` 当前恒为 `false`：设备连接结果还没有受治理的写入口，因此投影只说明「未记录」，绝不把沙箱内 `127.0.0.1:5555` 一类探测失败表述为「设备不可用」或「连接失败」。该投影不申请/释放租约、不改调度资格与重试链，也不读取 broker 凭据；设备列表里显示可用不等于某个 Job 已绑定设备。回归见 [binding-diagnostics.test.ts](../../apps/scheduler/src/domains/device/binding-diagnostics.test.ts)（已接 `pnpm ci:unit:device-lease`），最终 SHA Actions 待验。
+
 ### 管理 Skill 的当前契约（#996）
 
 [Management Skill](../../skills/deepsonar-management/SKILL.md)及 Python CLI 跟随现有 credential-first 契约：RoleConfig 不再写账号绑定或 `reasoning`；项目角色由 Hub/Job 在可见目录内选择，不提供角色启用开关。旧 `project-settings update --roles` 在发请求前明确拒绝，项目 CLI/Provider 白名单仍是授权边界，不因删角色开关而放宽。

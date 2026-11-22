@@ -34,6 +34,7 @@ import { jobProvenance } from "../../import-provenance.js";
 import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionArtifact, SESSION_VIEW_MAX_BYTES } from "../../evidence.js";
 import { revokeJobTokens } from "../../gateway.js";
 import { releaseDeviceLeasesForJobQuietly } from "../device/index.js";
+import { readDeviceBindingDiagnostics } from "../device/binding-diagnostics.js";
 import { CursorError, cursorErrorHttpStatus, cursorForRow, decodeCursor, page, pageLimit } from "../../pagination.js";
 import { runner } from "../../runtime.js";
 import { PROJECT_MISMATCH, resolveActorProjectId } from "../../project-scope.js";
@@ -613,6 +614,19 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       usage,
       missing_modules: missingModules,
       context_diagnostics: contextDiagnostics,
+      // #1211：只投影平台已记录的事实（需求是否冻结、有无租约），不推测设备是否连通。
+      device_binding: await readDeviceBindingDiagnostics(sql, {
+        jobId: String(job.id),
+        snapshot,
+        canvasTarget: canvas?.target_json,
+        roleName: String(snapshot && typeof snapshot === "object" ? (snapshot as Record<string, unknown>).name ?? job.type ?? "" : job.type ?? ""),
+        attempts: attempts.map((attempt) => ({
+          id: String(attempt.id),
+          attempt_no: attempt.attempt_no ?? null,
+          status: String(attempt.status),
+          error: (attempt.error as string | null) ?? null,
+        })),
+      }),
     };
   });
 
