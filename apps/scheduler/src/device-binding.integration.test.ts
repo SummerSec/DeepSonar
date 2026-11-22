@@ -145,7 +145,7 @@ if (testDatabaseUrl) {
         [2, "lease_recorded_unverified"],
         [1, "acquire_failed"],
       ]);
-      assert.match(String(attempts[1]?.reason), /原因原文见本请求 attempts\[\].error/);
+      assert.match(String(attempts[1]?.reason), /错误原文见本请求 attempts\[\].error/);
       assert.match(String(leased.reason), /最新 Attempt #2/);
       assert.equal(leased.connection_result_recorded, false);
       const leases = leased.leases as Array<Record<string, unknown>>;
