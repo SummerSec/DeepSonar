@@ -188,6 +188,8 @@ Gateway 请求额度跨 token/Attempt 累计，含撤销和过期 token；普通
 
 ### 4.3 失败反馈与修正
 
+**所有供 Agent 调用的平台 API 都遵循同一原则。** 请求不符合规范且可修正时，平台拒绝本次调用，在工具响应中直接告诉当前 Agent 错在哪、如何修改、如何重新提交。Agent 可继续执行其余已授权步骤。单次可修正错误不得触发任务阻塞、终止或转人工；依赖本次结果的步骤须等到成功回执才能推进。
+
 插件、Control API、Plan、Artifact、Verify 和 Runtime Adapter 必须使用四类失败语义：
 
 | 类别 | Scheduler 行为 | 模型能否修正 |
