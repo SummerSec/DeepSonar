@@ -65,13 +65,17 @@ if (testDatabaseUrl) {
       const plainJobId = await insertJob(plainCanvasId, { name: "test" });
       const declaredJobId = await insertJob(declaredCanvasId, { name: "test" });
       const leasedJobId = await insertJob(leasedCanvasId, { name: "test", device_requirement: requirement });
+      const unattemptedJobId = randomUUID();
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
+        VALUES (${unattemptedJobId}, ${projectId}, ${plainCanvasId}, 'test', 'pending', ${sql.json({} as never)}, ${sql.json({ name: "test", device_requirement: requirement } as never)})`;
 
       // 重试：第 1 次 Attempt 没有租约，第 2 次才有；顶层必须跟随最新 Attempt。
       const firstAttemptId = randomUUID();
       const secondAttemptId = randomUUID();
       await sql`
-        INSERT INTO job_attempts (id, job_id, attempt_no, status, finished_at)
-        VALUES (${firstAttemptId}, ${leasedJobId}, 1, 'failed', now())`;
+        INSERT INTO job_attempts (id, job_id, attempt_no, status, error, finished_at)
+        VALUES (${firstAttemptId}, ${leasedJobId}, 1, 'failed', 'device broker 拒绝：没有可用设备', now())`;
       await sql`
         INSERT INTO job_attempts (id, job_id, attempt_no, status)
         VALUES (${secondAttemptId}, ${leasedJobId}, 2, 'active')`;
@@ -113,8 +117,22 @@ if (testDatabaseUrl) {
       assert.deepEqual(declared.canvas_requirement, { roles: ["test"], transport: "hdc", rig_id: "local-sim" });
       assert.match(String(declared.reason), /Job 快照没有冻结该需求/);
 
+      const unattempted = await read(unattemptedJobId);
+      assert.equal(unattempted.state, "not_attempted");
+      assert.deepEqual(unattempted.attempts as unknown, []);
+      assert.equal(unattempted.attempts_truncated as unknown, false);
+      assert.match(String(unattempted.reason), /租约申请未发生/);
+      assert.deepEqual(unattempted.snapshot_requirement as unknown, { roles: ["test"], transport: "hdc", rig_id: "local-sim" });
+
       const leased = await read(leasedJobId);
       assert.equal(leased.state, "lease_recorded_unverified");
+      const attempts = leased.attempts as Array<Record<string, unknown>>;
+      assert.deepEqual(attempts.map((a) => [a.attempt_no, a.state]), [
+        [2, "lease_recorded_unverified"],
+        [1, "acquire_failed"],
+      ]);
+      assert.match(String(attempts[1]?.reason), /原因原文见本请求 attempts\[\].error/);
+      assert.match(String(leased.reason), /最新 Attempt #2/);
       assert.equal(leased.connection_result_recorded, false);
       const leases = leased.leases as Array<Record<string, unknown>>;
       assert.equal(leases.length, 1);
@@ -122,11 +140,6 @@ if (testDatabaseUrl) {
       assert.equal(leases[0]?.attempt_id, secondAttemptId);
       assert.equal(leased.lease_count, 1);
       assert.equal(leased.leases_truncated, false);
-      const attempts = leased.attempts as Array<Record<string, unknown>>;
-      assert.deepEqual(attempts.map((a) => [a.attempt_no, a.state]), [
-        [2, "lease_recorded_unverified"],
-        [1, "declared_no_lease"],
-      ]);
       assert.equal(leases[0]?.state, "released");
       assert.equal(leases[0]?.release_reason, "attempt_terminal");
     } finally {
