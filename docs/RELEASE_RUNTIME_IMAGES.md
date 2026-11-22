@@ -3,11 +3,11 @@
 > 状态：**运维 as-built；最新正式版 v0.6.23，于 2026-11-22 正式发布（release run 45021547917）；既有 tag 与镜像保持不可变**。
 > 同步日期：2026-11-22
 >
-> **v0.6.23 发布结果（2026-11-22）**。[正式 Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.23) 绑定不可变 tag 的源码 `162ec5b616f256ff0113c4ac4a2754ee52cf59b2`（annotated tag 对象 `1640743c`），比较范围为 `v0.6.22...v0.6.23`。本版内容为 Finding 重复候选与重复处置（#1206，schema 78）、任务收尾知识沉淀首两阶段（#1197/#1200/#1203）、知识整理历史与反馈覆盖率（#1192/#1193）、删除项目任务队列（#1180，schema 79）、任务发现状态与轮询修复（#1199/#1201）、统一操作反馈（#967）。数据库基线 77 → 79，非空库没有增量迁移链，先备份并按既有基线重建流程预演；受控重建把旧队列待办与人工续做投影为现有任务暂停。
+> **v0.6.23 发布结果（2026-11-22）**。[正式 Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.23) 绑定不可变 tag 的源码 `162ec5b616f256ff0113c4ac4a2754ee52cf59b2`（annotated tag 对象 `1640743c`），比较范围为 `v0.6.22...v0.6.23`。本版内容为 Finding 重复候选与重复处置（#1206，schema 78）、任务收尾知识沉淀首两阶段（#1197/#1200/#1203）、知识整理历史与反馈覆盖率（#1192/#1193）、删除项目任务队列（#1180，schema 79）、任务发现状态与轮询修复（#1199/#1201）、统一操作反馈（#967）。数据库基线 77 → 79，非空库没有增量迁移链，先备份并按既有基线重建流程预演；受控重建只把旧项目任务队列里仍处于排队/占位的条目、以及由队列让出触发的人工续做投影为现有任务暂停；已领取、准备中、执行中的任务与其它原因的暂停保持原状。
 >
 > 候选提交是纯文档改动（CHANGELOG PR #1210），`push@main` 未触发核心 `ci` 与四个专家套件，因此按发布硬门在**同一候选 SHA** 上手动 `workflow_dispatch` 五个门禁：核心 `ci` 45016866136（首次因 kali-minimal 镜像内 Maven 依赖下载瞬时失败，同 SHA 重跑通过）、chrome-runtime 45016869417、mobile-runtime 45016872952、openharmony-runtime 45016876188、reverse-runtime 45016879403，全部 `success`，与 `refs/tags/v0.6.23^{}` 的 `162ec5b6` 一致。
 >
-> Release run 45021547917 一次成功：真实构建与通道发布、各通道 descriptor / inspect 证据、最终 catalog 双平台 payload 门禁、GitHub Release 与 5 个附件（Management Skill、reverse 证据、签名证据、两份 registry）均完成，`platform` 段记录 `0.6.23` / `162ec5b6` / schema `79` 与 scheduler `sha256:3cc7e7f3…`、web `sha256:665cd2df…`、image-admission `sha256:bf7899c0…`。清单回写经 PR #1214 合并（`7411a3b0`），`deploy/.env.example` 的 `DEEPSONAR_VERSION` 已是 `0.6.23`。
+> Release run 45021547917 的最终结果是 success（该 run 为 attempt 1，其内各 job 均 success）：真实构建与通道发布、各通道 descriptor / inspect 证据、最终 catalog 双平台 payload 门禁、GitHub Release 与 5 个附件（Management Skill、reverse 证据、签名证据、两份 registry）均完成，`platform` 段记录 `0.6.23` / `162ec5b6` / schema `79` 与 scheduler `sha256:3cc7e7f3…`、web `sha256:665cd2df…`、image-admission `sha256:bf7899c0…`。清单回写经 PR #1214 合并（`7411a3b0`），`deploy/.env.example` 的 `DEEPSONAR_VERSION` 已是 `0.6.23`。发布结果 success 不等于整条发布链没有故障：同一候选上的核心 `ci` 首次因 kali-minimal 镜像内 Maven 依赖下载瞬时失败而红，重跑通过后才打 tag。
 
 > **v0.6.22 发布结果（2026-11-20）**。[正式 Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.22) 绑定不可变 tag 的源码 `4adecdddc3c63698511ca09399b234b1b6da469d`（annotated tag 对象 `2972ace9`），比较范围为 `v0.6.21...v0.6.22`。发布数据库基线从 schema 75 升至 77：76 新增预算 owner（`jobs.budget_owner_job_id` / `budget_execution_job_id`）与 `job_continuations`，77 新增持久跨项目公平领取的游标与索引；非空库没有增量迁移链，先备份并按既有基线重建流程预演。
 >
