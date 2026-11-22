@@ -561,7 +561,6 @@ export interface ContextDiagnostics {
 }
 
 export interface JobAttemptSummary {
-  outcome_json?: { reason?: string } | null;
   id: string;
   attempt_no: number;
   status: string;

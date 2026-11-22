@@ -1,7 +1,7 @@
 import type { JobAttemptSummary } from "./api";
 
 interface BindingStatus {
-  state: "not_declared" | "declared_no_lease" | "lease_recorded_unverified";
+  state: "not_declared" | "not_attempted" | "not_applying" | "attempted_no_lease" | "acquire_failed" | "lease_recorded_unverified";
   reason: string;
 }
 
@@ -13,17 +13,15 @@ export interface BindingDiagnostics extends BindingStatus {
   leases_truncated: boolean;
 }
 
-type Attempt = Pick<JobAttemptSummary, "id" | "error" | "outcome_json">;
+type Attempt = Pick<JobAttemptSummary, "id" | "error">;
 
 function describe(binding: BindingDiagnostics, row: BindingStatus, attempt?: Attempt) {
   if (row.state === "lease_recorded_unverified") return { title: "已记录租约，连接未验证", detail: row.reason };
   if (row.state === "not_declared") return { title: "未绑定设备", detail: row.reason };
   if (!binding.snapshot_requirement) return { title: "设备需求未写入本次运行", detail: row.reason };
-  if (!binding.role_matched) return { title: "当前角色无需设备", detail: row.reason };
-  const failure = attempt?.outcome_json?.reason;
-  if (failure === "device_not_available" || failure === "device_not_authorized") {
-    return { title: "租约申请失败", detail: attempt?.error || failure };
-  }
+  if (row.state === "not_applying" || !binding.role_matched) return { title: "当前角色无需设备", detail: row.reason };
+  if (row.state === "not_attempted") return { title: "尚未申请租约", detail: row.reason };
+  if (row.state === "acquire_failed") return { title: "租约申请失败", detail: attempt?.error || row.reason };
   return { title: "暂无租约记录", detail: row.reason };
 }
 

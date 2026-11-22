@@ -74,8 +74,8 @@ if (testDatabaseUrl) {
       const firstAttemptId = randomUUID();
       const secondAttemptId = randomUUID();
       await sql`
-        INSERT INTO job_attempts (id, job_id, attempt_no, status, error, finished_at)
-        VALUES (${firstAttemptId}, ${leasedJobId}, 1, 'failed', 'device broker 拒绝：没有可用设备', now())`;
+        INSERT INTO job_attempts (id, job_id, attempt_no, status, outcome_json, error, finished_at)
+        VALUES (${firstAttemptId}, ${leasedJobId}, 1, 'failed', '{"reason":"device_not_available"}', 'device broker 拒绝：没有可用设备', now())`;
       await sql`
         INSERT INTO job_attempts (id, job_id, attempt_no, status)
         VALUES (${secondAttemptId}, ${leasedJobId}, 2, 'active')`;

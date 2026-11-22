@@ -34,12 +34,22 @@ test("#1211 画布声明了需求但快照未冻结时明确指出不会申请�
   assert.match(result.reason, /Job 快照没有冻结该需求/);
 });
 
+test("画布声明未冻结时，任务开始运行后仍显示设备需求未写入", () => {
+  const result = deriveDeviceBinding({
+    snapshot: {}, canvasTarget: { device_requirement: requirement }, roleName: "test",
+    attempts: [{ attempt_id: "first", attempt_no: 1, status: "failed" }],
+  });
+  assert.equal(result.state, "not_attempted");
+  assert.equal(result.attempts[0]?.state, "not_attempted");
+  assert.match(result.reason, /Job 快照没有冻结该需求/);
+});
+
 test("#1211 角色不命中的 Attempt 单独分档为 not_applying", () => {
   const result = deriveDeviceBinding({
     snapshot: snapshotWith(requirement),
     canvasTarget: {},
     roleName: "report",
-    attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status: "succeeded", error: null }],
+    attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status: "succeeded" }],
   });
   assert.equal(result.role_matched, false);
   assert.deepEqual(result.attempts.map((a) => [a.attempt_no, a.state]), [[1, "not_applying"]]);
@@ -51,19 +61,19 @@ test("#1211 有 Attempt 但无租约时区分「未申请」与「已记录的�
     snapshot: snapshotWith(requirement),
     canvasTarget: {},
     roleName: "test",
-    attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status: "active", error: null }],
+    attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status: "active" }],
   });
   assert.equal(alive.state, "attempted_no_lease");
-  assert.match(alive.reason, /还没有租约行：申请可能仍在进行/);
+  assert.match(alive.reason, /申请结果未记录/);
 
   const failed = deriveDeviceBinding({
     snapshot: snapshotWith(requirement),
     canvasTarget: {},
     roleName: "test",
-    attempts: [{ attempt_id: "attempt-2", attempt_no: 2, status: "failed", error: "device broker 拒绝" }],
+    attempts: [{ attempt_id: "attempt-2", attempt_no: 2, status: "failed", outcomeReason: "device_not_authorized" }],
   });
   assert.equal(failed.state, "acquire_failed");
-  assert.match(failed.reason, /已结束\/带错误记录但没有租约行/);
+  assert.match(failed.reason, /调度器记录了设备租约申请失败/);
   assert.doesNotMatch(failed.reason, /拒绝/); // 原因不在诊断里复读，只指向 attempts[].error
 });
 
@@ -83,7 +93,7 @@ test("#1211 有租约记录但无连接结果时只报未验证", () => {
     snapshot: snapshotWith(requirement),
     canvasTarget: {},
     roleName: "test",
-    attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status: "succeeded", error: null }],
+    attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status: "succeeded" }],
     leaseCountsByAttempt: { "attempt-1": 1 },
     leases: [
       {
@@ -110,8 +120,8 @@ test("#1211 重试时顶层跟随最新 Attempt，历史失败不被合并掩盖
     canvasTarget: {},
     roleName: "test",
     attempts: [
-      { attempt_id: "attempt-2", attempt_no: 2, status: "active", error: null },
-      { attempt_id: "attempt-1", attempt_no: 1, status: "failed", error: "没有可用设备" },
+      { attempt_id: "attempt-2", attempt_no: 2, status: "active" },
+      { attempt_id: "attempt-1", attempt_no: 1, status: "failed", outcomeReason: "device_not_available" },
     ],
     leaseCountsByAttempt: { "attempt-2": 1 },
     leases: [
@@ -155,8 +165,8 @@ test("#1211 分档判定用全租约计数，不依赖 32 条显示窗口", () =
     canvasTarget: {},
     roleName: "test",
     attempts: [
-      { attempt_id: "attempt-1", attempt_no: 2, status: "active", error: null },
-      { attempt_id: "attempt-0", attempt_no: 1, status: "failed", error: null },
+      { attempt_id: "attempt-1", attempt_no: 2, status: "active" },
+      { attempt_id: "attempt-0", attempt_no: 1, status: "failed" },
     ],
     leaseCountsByAttempt: { "attempt-0": 40, "attempt-1": 0 },
     leases: [...Array.from({ length: 32 }, () => windowRow("attempt-x")), ...Array.from({ length: 8 }, () => windowRow("attempt-0"))],
@@ -192,7 +202,6 @@ test("#1211 租约与 Attempt 列表都有上限并显式报告截断", () => {
       attempt_id: `attempt-${index}`,
       attempt_no: 30 - index,
       status: "failed",
-      error: null,
     })),
     leaseCountsByAttempt: Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`attempt-${index}`, 2])),
     leaseCountTotal: 60,
@@ -233,4 +242,14 @@ test("#1211 租约行投影保留 Attempt 归属、时间与释放原因", () =>
       release_reason: null,
     },
   ]);
+});
+
+test("共享资产准备失败或超时只说明没有租约结果", () => {
+  for (const status of ["failed", "timeout"]) {
+    const result = deriveDeviceBinding({
+      snapshot: snapshotWith(requirement), canvasTarget: {}, roleName: "test",
+      attempts: [{ attempt_id: "other", attempt_no: 1, status, outcomeReason: "exception" }],
+    });
+    assert.equal(result.state, "attempted_no_lease");
+  }
 });

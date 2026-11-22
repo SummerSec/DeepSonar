@@ -17,13 +17,13 @@ import { DeviceRequirement as DeviceRequirementSchema } from "@deepsonar/shared-
 export type DeviceBindingState =
   /** 快照与画布都没有声明设备需求：调度器不会为本 Job 申请租约。 */
   | "not_declared"
-  /** 已声明需求，但 Job 还没有任何 Attempt：领取/准备尚未开始，租约申请未发生。 */
+  /** 已声明需求，但需求未冻结或还没有 Attempt，租约申请未发生。 */
   | "not_attempted"
   /** 已声明需求但该 Attempt 的角色不命中 `roles`，不会为它申请租约。 */
   | "not_applying"
-  /** Attempt 已存在（无错误记录）但没有租约：租约申请正在进行或尚未写结果。 */
+  /** Attempt 已存在但没有租约，也没有明确设备错误码。 */
   | "attempted_no_lease"
-  /** Attempt 带错误/终态失败且没有租约：平台上已记录的一次申请失败路径。 */
+  /** Attempt 有明确设备错误码且没有租约：平台上已记录的一次申请失败路径。 */
   | "acquire_failed"
   /** 有租约记录，但平台没有该 Job/Attempt 的连接结果记录。 */
   | "lease_recorded_unverified";
@@ -85,7 +85,7 @@ export interface DeviceBindingAttemptRow {
   attempt_id: string;
   attempt_no: number | null;
   status: string;
-  error: string | null;
+  outcomeReason?: string | null;
 }
 
 function readCanvasRequirement(target: unknown): DeviceRequirement | null {
@@ -107,7 +107,7 @@ interface DeviceBindingInputs {
   canvasTarget: unknown;
   roleName: string;
   leases?: readonly DeviceBindingLease[];
-  /** 已持久化的 Attempt（id/序号/状态/错误原文按现有路由投影传入，原因不在诊断里复读）。 */
+  /** 详情路由已读取的执行记录和结构化结果码。 */
   attempts?: readonly DeviceBindingAttemptRow[];
   /** 每个 Attempt 的租约条数（全量计数，不受显示窗口截断影响）。 */
   leaseCountsByAttempt?: Readonly<Record<string, number>>;
@@ -137,6 +137,7 @@ function classifyAttempt(
   displayLeases: readonly DeviceBindingLease[],
 ): { state: DeviceBindingState; reason: string } {
   if (!facts.snapshotRequirement) {
+    if (facts.canvasRequirement) return unfrozenRequirement;
     return { state: "not_declared", reason: "Job 快照没有冻结设备需求，调度器不会申请租约。" };
   }
   if (!facts.roleMatched) {
@@ -154,18 +155,18 @@ function classifyAttempt(
         `，租约状态 ${latest?.state ?? "未知"}；平台没有这个 Attempt 的设备连接结果，沙箱内探测失败不能证明宿主机设备不可用。`,
     };
   }
-  if (attempt && (attempt.error !== null || attempt.status === "failed" || attempt.status === "timeout")) {
+  if (attempt?.outcomeReason === "device_not_available" || attempt?.outcomeReason === "device_not_authorized") {
     return {
       state: "acquire_failed",
       reason:
-        "该 Attempt 已结束/带错误记录但没有租约行：申请失败或其它 provision 失败都停在这里；" +
+        "调度器记录了设备租约申请失败。" +
         "原因原文见本请求 attempts[].error，不在诊断里复读。",
     };
   }
   if (attempt) {
     return {
       state: "attempted_no_lease",
-      reason: "该 Attempt 已存在但还没有租约行：申请可能仍在进行、刚被取消，或 Attempt 记录与租约写入不在同一步。",
+      reason: "本次执行没有设备租约记录，申请结果未记录。",
     };
   }
   return {
@@ -173,6 +174,11 @@ function classifyAttempt(
     reason: "还没有 Attempt 记录：领取/准备尚未开始，租约申请未发生。",
   };
 }
+
+const unfrozenRequirement = {
+  state: "not_attempted",
+  reason: "画布声明了设备需求，但 Job 快照没有冻结该需求，调度器不会申请租约。",
+} as const;
 
 function topLevelVerdict(input: {
   facts: ReturnType<typeof baseRequirementFacts>;
@@ -201,10 +207,7 @@ function topLevelVerdict(input: {
     };
   }
   if (input.facts.canvasRequirement) {
-    return {
-      state: "not_attempted",
-      reason: "画布声明了设备需求，但 Job 快照没有冻结该需求，调度器不会申请租约；设备不会自动绑定到该任务。",
-    };
+    return unfrozenRequirement;
   }
   return {
     state: "not_declared",
@@ -292,7 +295,7 @@ export async function readDeviceBindingDiagnostics(
     canvasTarget: unknown;
     roleName: string;
     /** 会话里已加载的 Attempt（id/序号/状态/错误），避免重复查询并保证与 Job 详情同源。 */
-    attempts: ReadonlyArray<{ id: string; attempt_no: number | null; status: string; error: string | null }>;
+    attempts: ReadonlyArray<{ id: string; attempt_no: number | null; status: string; outcomeReason: string | null }>;
   },
 ): Promise<DeviceBindingDiagnostics> {
   const [rows, [counts]] = await Promise.all([
@@ -316,7 +319,7 @@ export async function readDeviceBindingDiagnostics(
       attempt_id: String(attempt.id),
       attempt_no: attempt.attempt_no,
       status: attempt.status,
-      error: attempt.error,
+      outcomeReason: attempt.outcomeReason,
     }))
     .slice(0, DEVICE_BINDING_ATTEMPT_CAP);
   // 分档判定按 Attempt 计数：全量 GROUP BY，不受 32 条显示窗口取舍影响。

@@ -624,7 +624,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
           id: String(attempt.id),
           attempt_no: attempt.attempt_no ?? null,
           status: String(attempt.status),
-          error: (attempt.error as string | null) ?? null,
+          outcomeReason: typeof attempt.outcome_json?.reason === "string" ? attempt.outcome_json.reason : null,
         })),
       }),
     };
