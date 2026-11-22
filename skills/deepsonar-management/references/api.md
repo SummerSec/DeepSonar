@@ -514,6 +514,8 @@ AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当�
 
 Agent 侧对应受治理 operation 是 `request_project_knowledge` / `search_project_knowledge` / `read_project_knowledge` / `pull_skill` 等（见专题），**不是**这些 HTTP 管理接口。
 
+读取操作自 #1219 起统一叫 `read_project_knowledge`；旧名 `read_project_memory` 只在迁移窗口内、且仅对冻结快照本来就允许旧名的在途 Job 保留，新 Job 与角色默认表只用新名。
+
 ### Readiness / preflight（#35/#36）
 
 | 方法 | 路径 | Scope | 说明 |

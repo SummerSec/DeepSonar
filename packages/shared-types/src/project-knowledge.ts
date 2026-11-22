@@ -143,6 +143,10 @@ export const KnowledgeControlPayloadSchemas = {
   request_project_knowledge: RequestProjectKnowledgePayload,
   search_project_knowledge: SearchProjectKnowledgePayload,
   read_project_knowledge: ReadProjectKnowledgePayload,
+  // #1219 迁移窗口：只读旧名，仅对「冻结快照本来就允许旧名」的在途 Job 生效（application 的
+  // platform_tools 校验按 context.operationId 逐项匹配），走完全相同的项目/版本/撤权检查，
+  // 不新增写权限、不改快照。新 Job 与角色默认表只出现新名；旧名在新链路验收后单独删除。
+  read_project_memory: ReadProjectKnowledgePayload,
   read_knowledge_input: ReadKnowledgeInputPayload,
   propose_project_knowledge: ProposeProjectKnowledgePayload,
   submit_knowledge_evaluation: SubmitKnowledgeEvaluationPayload,
@@ -151,6 +155,12 @@ export const KnowledgeControlPayloadSchemas = {
   get_knowledge_receipt: GetKnowledgeReceiptPayload,
 } as const;
 export const KNOWLEDGE_OPERATION_IDS = Object.keys(KnowledgeControlPayloadSchemas) as Array<keyof typeof KnowledgeControlPayloadSchemas>;
+
+/** #1219 迁移窗口：只在旧快照上生效的只读别名。它们仍参与运行期输入校验，
+ * 但不进入平台工具目录、操作注册表和动态 OpenAPI，避免新配置继续使用旧名。 */
+export const LEGACY_KNOWLEDGE_OPERATION_IDS = ["read_project_memory"] as const;
+export const ACTIVE_KNOWLEDGE_OPERATION_IDS = KNOWLEDGE_OPERATION_IDS
+  .filter((name) => !(LEGACY_KNOWLEDGE_OPERATION_IDS as readonly string[]).includes(name));
 export const KNOWLEDGE_MUTATION_IDS = ["record_skill_choice", "request_project_knowledge", "propose_project_knowledge", "submit_knowledge_evaluation", "review_project_knowledge", "record_knowledge_feedback"] as const;
 export const KnowledgeMutationPayload = z.object({ operation: z.enum(KNOWLEDGE_MUTATION_IDS), input: z.unknown() }).strict()
   .superRefine((value, ctx) => {

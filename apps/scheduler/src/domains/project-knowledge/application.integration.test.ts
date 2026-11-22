@@ -392,6 +392,47 @@ test("frozen memory remains readable after ordinary change but version revoke st
   });
 });
 
+test("#1219 迁移窗口：只有旧快照允许旧名的在途 Job 才能用 read_project_memory", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const folder = await mkdtemp(join(tmpdir(), "knowledge-legacy-read-"));
+    setSharedAssetBlobStoreForTests(new LocalBlobStore(folder));
+    try {
+      const maker = await seedKnowledgeJob(db, undefined, []);
+      const content = { kind: "memory", logical_key: "fixture/legacy", title: "Legacy frozen memory", keywords: ["legacy"], content: "legacy snapshot" };
+      const blob = await writeKnowledgeBlob(db as never, content);
+      await registerKnowledgeBlob(db as never, blob.hash, blob.bytes);
+      const [item] = await db`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,keywords_json)
+        VALUES(${maker.projectId},'memory','fixture/legacy','Legacy frozen memory',${db.json(["legacy"])}) RETURNING id`;
+      const [version] = await db`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
+        VALUES(${maker.projectId},${item!.id},1,${blob.hash},${maker.jobId},${maker.attemptId},'[]'::jsonb,${H}) RETURNING id`;
+      await db`UPDATE project_knowledge_items SET status='active',active_version_id=${version!.id},generation=1 WHERE id=${item!.id}`;
+      const entries = [{ item_id: item!.id, owner_project_id: maker.projectId, version_id: version!.id,
+        version: 1, kind: "memory", hash: blob.hash, title: "Legacy frozen memory", logical_key: "fixture/legacy", keywords: ["legacy"] }];
+      const snapshot = { entries, hash: sha256(canonical(entries)) };
+      // 旧快照：只冻结了旧名，重命名上线时它可能已经在运行或在等待晚回复。
+      const legacyReader = await seedKnowledgeJob(db, maker.projectId, ["search_project_knowledge", "read_project_memory"]);
+      await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_memory"], project_knowledge_catalog: snapshot })} WHERE id=${legacyReader.jobId}`;
+      const app = createProjectKnowledgeApplication({ db, governanceHash: H });
+      const legacyContext = { jobId: legacyReader.jobId, projectId: legacyReader.projectId, canvasId: legacyReader.canvasId,
+        operationId: "read_project_memory", input: { item_ref: item!.id, version: 1, expected_hash: blob.hash },
+        eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null };
+      const legacyRead = await app.invoke(legacyContext);
+      assert.equal(legacyRead.content, "legacy snapshot");
+      assert.equal(typeof legacyRead.usage_ref, "string");
+      // 新名不在旧快照里，不能被借用。
+      await assert.rejects(app.invoke({ ...legacyContext, operationId: "read_project_knowledge" }), /SCOPE_DENIED|allowlist/i);
+      // 撤权对旧名同样立即生效。
+      await db`UPDATE project_knowledge_versions SET revoked_at=now(),revoked_reason='fixture' WHERE id=${version!.id}`;
+      await assert.rejects(app.invoke(legacyContext), /REVOKED|revoked/i);
+      // 新 Job 只用新名，旧名不再被放行。
+      const modernReader = await seedKnowledgeJob(db, maker.projectId, ["read_project_knowledge"]);
+      await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["read_project_knowledge"], project_knowledge_catalog: snapshot })} WHERE id=${modernReader.jobId}`;
+      await assert.rejects(app.invoke({ ...legacyContext, jobId: modernReader.jobId, projectId: modernReader.projectId,
+        canvasId: modernReader.canvasId }), /SCOPE_DENIED|allowlist/i);
+    } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
+  });
+});
+
 test("merge checks every base generation before changing either identity", async () => {
   await withKnowledgeDatabase(async (db) => {
     const folder = await mkdtemp(join(tmpdir(), "knowledge-merge-"));

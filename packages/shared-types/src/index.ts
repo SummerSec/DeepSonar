@@ -7,7 +7,7 @@ export * from "./task-result.js";
 import { z } from "zod";
 import { CandidateOutcomeClaim } from "./task-outcome.js";
 export * from "./task-outcome.js";
-import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload, TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "./project-knowledge.js";
+import { ACTIVE_KNOWLEDGE_OPERATION_IDS, KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload, TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "./project-knowledge.js";
 export * from "./project-knowledge.js";
 import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
 import { CompletionRecoveryDecision } from "./completion-recovery.js";
@@ -1428,8 +1428,12 @@ export const AckHumanMessagePayload = z.object({
 }).strict();
 export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
 
+// #1219 迁移窗口：旧只读别名不进平台工具目录（注册表、动态 OpenAPI、MCP 工具列表），
+// 只保留在 KnowledgeControlPayloadSchemas 里供运行期校验旧快照的调用。
+const { read_project_memory: _legacyReadProjectMemory, ...ActiveKnowledgePayloadSchemas } = KnowledgeControlPayloadSchemas;
+
 export const ControlToolPayloadSchemas = {
-  ...KnowledgeControlPayloadSchemas,
+  ...ActiveKnowledgePayloadSchemas,
   list_available_roles: ListAvailableRolesPayload,
   list_available_runtime_images: ListAvailableRuntimeImagesPayload,
   list_available_agent_clis: ListAvailableAgentClisPayload,
@@ -1688,7 +1692,9 @@ export function validateModuleSelectors(values: unknown, field = "modules"): str
  * 每个 Agent 默认都可勾选其中任意项；是否真正注入以 RoleConfig 开关 + Job 快照为准。
  */
 export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
-  ...KNOWLEDGE_OPERATION_IDS,
+  // #1219 迁移窗口：read_project_memory 是只在旧快照上生效的只读别名，
+  // 不出现在新角色/新 Job 的可选工具里。
+  ...ACTIVE_KNOWLEDGE_OPERATION_IDS,
   "list_available_roles",
   "list_available_runtime_images",
   "list_available_agent_clis",
