@@ -3,36 +3,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
+import { writeClipboard } from "./clipboard";
 import { api } from "./api";
 
 type TerminalState = "idle" | "connecting" | "connected" | "closed" | "error";
-
-async function writeClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-
-  if (typeof document.execCommand !== "function" || !document.body) {
-    throw new Error("CLIPBOARD_UNAVAILABLE");
-  }
-
-  const textarea = document.createElement("textarea");
-  const activeElement = document.activeElement as HTMLElement | null;
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    if (!document.execCommand("copy")) throw new Error("CLIPBOARD_DENIED");
-  } finally {
-    textarea.remove();
-    activeElement?.focus();
-  }
-}
 
 function getTerminalBufferText(terminal: Terminal): string {
   const buffer = terminal.buffer.active;
