@@ -23,7 +23,7 @@ import {
   CLASSIFIER_STATUSES,
   classifyRecords,
   isDocsOnlyPath,
-  parseGitNameStatusZ,
+  parseGitDiffRecords,
 } from "./classify-ci-changes.mjs";
 
 export const RUN_MODES = Object.freeze({
@@ -273,7 +273,7 @@ export function buildRunPlan({
   let records;
   try {
     const bytes = diffBytes ?? readGitDiff(base, head);
-    records = parseGitNameStatusZ(bytes);
+    records = parseGitDiffRecords(bytes);
     plan.reasons.push("diff_parsed");
   } catch {
     plan.status = PLAN_STATUSES.FAILED;

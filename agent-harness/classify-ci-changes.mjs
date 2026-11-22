@@ -176,6 +176,58 @@ export function parseGitNameStatusZ(input) {
   return records;
 }
 
+/**
+ * Parse `git diff --raw -z` output. Unlike `--name-status`, raw records carry the
+ * blob modes, which is what tells a real document from a symlink (120000) or a
+ * submodule (160000) that merely has a `.md` name (#1221 review).
+ */
+export function parseGitRawZ(input) {
+  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(String(input), "utf8");
+  if (bytes.length > 0 && bytes.at(-1) !== 0) throw new Error("unterminated git diff record");
+  const tokens = bytes.toString("utf8").split("\0");
+  if (tokens.at(-1) === "") tokens.pop();
+  const records = [];
+  let index = 0;
+  while (index < tokens.length) {
+    const header = tokens[index++];
+    if (!header.startsWith(":")) throw new Error("malformed git raw diff header");
+    const fields = header.slice(1).split(" ");
+    if (fields.length !== 5) throw new Error("malformed git raw diff header");
+    const [oldMode, newMode, , , status] = fields;
+    const pathCount = /^[RC]/u.test(status) ? 2 : 1;
+    const paths = tokens.slice(index, index + pathCount);
+    index += pathCount;
+    if (paths.length !== pathCount || paths.some((path) => !path || path.includes("\0"))) {
+      throw new Error("malformed git diff path");
+    }
+    records.push({ status, paths, oldMode, newMode });
+  }
+  return records;
+}
+
+/** Accept either `--raw -z` or legacy `--name-status -z` fixture bytes. */
+export function parseGitDiffRecords(input) {
+  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(String(input), "utf8");
+  if (bytes.length > 0 && bytes[0] === 0x3a /* ":" */) return parseGitRawZ(bytes);
+  return parseGitNameStatusZ(bytes);
+}
+
+export function isRegularFileMode(mode) {
+  return mode === "100644";
+}
+
+/**
+ * Docs-only requires a real regular file: symlinks (120000), submodules (160000)
+ * and missing mode data are unsafe. A modification must also have been a regular
+ * file before, so "existing symlink retargeted" cannot pass.
+ */
+function recordHasSafeFileMode(record) {
+  if (typeof record.oldMode !== "string" || typeof record.newMode !== "string") return false;
+  if (!isRegularFileMode(record.newMode)) return false;
+  if (record.status === "M" && !isRegularFileMode(record.oldMode)) return false;
+  return true;
+}
+
 export function classifyRecords(records, { eventName = "pull_request", base = "", head = "" } = {}) {
   if (eventName !== "pull_request") {
     return { mode: CLASSIFIER_MODES.FULL, status: CLASSIFIER_STATUSES.OK, reason: "non_pull_request_event", changedCount: 0 };
@@ -198,6 +250,9 @@ export function classifyRecords(records, { eventName = "pull_request", base = ""
     if (record.status !== "A" && record.status !== "M") {
       return { mode: CLASSIFIER_MODES.FULL, status: CLASSIFIER_STATUSES.OK, reason: code === "R" ? "rename" : code === "D" ? "delete" : "unsafe_change_status", changedCount: records.length };
     }
+    if (!recordHasSafeFileMode(record)) {
+      return { mode: CLASSIFIER_MODES.FULL, status: CLASSIFIER_STATUSES.OK, reason: "unsafe_file_mode", changedCount: records.length };
+    }
     if (record.paths.length !== 1 || !isDocsOnlyPath(record.paths[0])) {
       return { mode: CLASSIFIER_MODES.FULL, status: CLASSIFIER_STATUSES.OK, reason: "path_not_allowlisted", changedCount: records.length };
     }
@@ -206,7 +261,7 @@ export function classifyRecords(records, { eventName = "pull_request", base = ""
 }
 
 function readGitDiff(base, head, cwd = process.cwd()) {
-  return execFileSync("git", ["diff", "--name-status", "-z", "--find-renames", `${base}...${head}`], {
+  return execFileSync("git", ["diff", "--raw", "-z", "--find-renames", `${base}...${head}`], {
     cwd,
     encoding: "buffer",
     stdio: ["ignore", "pipe", "pipe"],
@@ -222,7 +277,7 @@ export function classifyPullRequest({ eventName, base, head, cwd = process.cwd()
   if (!base || !head) return classifyRecords(null, { eventName, base, head });
   try {
     const bytes = diffBytes ?? readGitDiff(base, head, cwd);
-    return classifyRecords(parseGitNameStatusZ(bytes), { eventName, base, head });
+    return classifyRecords(parseGitDiffRecords(bytes), { eventName, base, head });
   } catch {
     return { mode: CLASSIFIER_MODES.FULL, status: CLASSIFIER_STATUSES.FAILED, reason: "diff_read_failed", changedCount: 0 };
   }

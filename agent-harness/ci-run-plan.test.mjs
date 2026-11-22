@@ -25,7 +25,11 @@ import {
 } from "./ci-run-plan.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const diff = (...records) => Buffer.from(records.flat().join("\0") + "\0", "utf8");
+// #1221 review：运行计划现在解析 `git diff --raw -z`，夹具必须带 blob 模式。
+const diff = (...records) => Buffer.from(records.map(([status, ...paths]) => [
+  `:${status === "A" ? "000000" : "100644"} 100644 ${"0".repeat(40)} ${"0".repeat(40)} ${status}`,
+  ...paths,
+].join("\0")).join("\0") + "\0", "utf8");
 const change = (path) => ["M", path];
 const pr = { eventName: "pull_request", base: "base-sha", head: "head-sha", ciPrMode: "tiered" };
 const SUITE_PATHS = loadSuitePaths(ROOT);
@@ -443,7 +447,11 @@ test("#961 ci.yml wires the Chrome Fuzz ARM gate to the run plan", () => {
 // package.json field-level check is what allows an independent test script to
 // avoid the three heavy native matrices.
 test("#976 the run plan carries a fail-closed Reverse sub-suite decision", () => {
-  const diff = (...records) => Buffer.from(records.flat().join("\0") + "\0", "utf8");
+  // #1221 review：运行计划现在解析 `git diff --raw -z`，夹具必须带 blob 模式。
+const diff = (...records) => Buffer.from(records.map(([status, ...paths]) => [
+  `:${status === "A" ? "000000" : "100644"} 100644 ${"0".repeat(40)} ${"0".repeat(40)} ${status}`,
+  ...paths,
+].join("\0")).join("\0") + "\0", "utf8");
   const record = (status, path) => [status, path];
   const base = { ...pr, suitePaths: SUITE_PATHS };
 
