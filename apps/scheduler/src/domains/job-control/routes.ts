@@ -620,7 +620,12 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         snapshot,
         canvasTarget: canvas?.target_json,
         roleName: String(snapshot && typeof snapshot === "object" ? (snapshot as Record<string, unknown>).name ?? job.type ?? "" : job.type ?? ""),
-        attempts: attempts.map((attempt) => ({ id: String(attempt.id), attempt_no: attempt.attempt_no ?? null })),
+        attempts: attempts.map((attempt) => ({
+          id: String(attempt.id),
+          attempt_no: attempt.attempt_no ?? null,
+          status: String(attempt.status),
+          error: (attempt.error as string | null) ?? null,
+        })),
       }),
     };
   });
