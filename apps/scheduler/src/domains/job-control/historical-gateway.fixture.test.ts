@@ -134,7 +134,9 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
       assert.equal((await readRepairTokenBudget(sql, first.jobId))?.known_tokens, 3);
       const secondRequest = randomUUID();
       const [originalRequest] = await sql`SELECT payload_json FROM human_requests WHERE id=${f.requestId}`;
-      await sql`UPDATE job_execution_clocks SET active_since=clock_timestamp()-interval '2 seconds' WHERE job_id=${f.jobId}`;
+      // 对已有 active_since 做偏移，而不是用 clock_timestamp()-2s 覆盖：覆盖会丢掉该 Job
+      // 已累计的执行时间，使 remaining 只减少「2s 减去已跑时长」，在不同机器上抖动（CI 曾因此红灯）。
+      await sql`UPDATE job_execution_clocks SET active_since=COALESCE(active_since,clock_timestamp())-interval '2 seconds' WHERE job_id=${f.jobId}`;
       await ingestEvent(first.jobId, { v: 1, event_id: secondRequest, type: "human", payload: originalRequest.payload_json });
       await sealHumanCheckpoint({ jobId: first.jobId, attemptId: owner.attemptId, host: f.host, excludedPaths: [], secrets: [], processBaseline: [] });
       await destroyAndSettleHumanWaitRun(sql, { destroy: async () => {} }, { jobId: first.jobId, attemptId: owner.attemptId, sandboxId: owner.sandbox });
