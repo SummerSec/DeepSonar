@@ -277,3 +277,58 @@ test("#1211 设备未授权与不可用都归入 acquire_failed，其它终态�
   });
   assert.equal(other.state, "lease_unrecorded");
 });
+
+test("#1211 终态边界：schema 中除 active 外全部状态都不冒充「还在申请」", () => {
+  // job_attempts_status_check 的全部取值；只有 active 表示仍在进行。
+  for (const status of ["succeeded", "failed", "cancelled", "timeout", "orphan", "interrupted", "unknown"]) {
+    const result = deriveDeviceBinding({
+      snapshot: snapshotWith(requirement),
+      canvasTarget: {},
+      roleName: "test",
+      // 不设置 error / failure_reason：确保这一组锁住的是「终态」条件本身，而不是 error 分支。
+      attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status, error: null, failure_reason: null }],
+    });
+    assert.equal(result.state, "lease_unrecorded", status);
+    assert.match(result.reason, new RegExp(`status=${status}`));
+    assert.doesNotMatch(result.reason, /租约申请失败/);
+  }
+  const active = deriveDeviceBinding({
+    snapshot: snapshotWith(requirement),
+    canvasTarget: {},
+    roleName: "test",
+    attempts: [{ attempt_id: "attempt-1", attempt_no: 1, status: "active", error: null, failure_reason: null }],
+  });
+  assert.equal(active.state, "attempted_no_lease");
+});
+
+test("#1211 终态原因与错误原文不进入诊断文案（单独锁定）", () => {
+  const result = deriveDeviceBinding({
+    snapshot: snapshotWith(requirement),
+    canvasTarget: {},
+    roleName: "test",
+    attempts: [
+      {
+        attempt_id: "attempt-1",
+        attempt_no: 1,
+        status: "failed",
+        error: "materializeSharedAssetBlob failed: synthetic-secret-value",
+        failure_reason: "exception",
+      },
+    ],
+  });
+  assert.equal(result.state, "lease_unrecorded");
+  assert.doesNotMatch(result.reason, /materializeSharedAssetBlob|synthetic-secret-value|exception/);
+  assert.match(result.reason, /终态原因不在此复读/);
+});
+
+test("#1211 设备失败码只按 allowlist 给固定描述，其它码不回显", () => {
+  const known = deriveDeviceBinding({
+    snapshot: snapshotWith(requirement),
+    canvasTarget: {},
+    roleName: "test",
+    attempts: [
+      { attempt_id: "a", attempt_no: 1, status: "failed", error: "x", failure_reason: "device_not_authorized" },
+    ],
+  });
+  assert.match(known.reason, /device_not_authorized（未授权，不可重试）/);
+});
