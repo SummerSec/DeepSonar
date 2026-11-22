@@ -1795,8 +1795,9 @@ export function resolvePlatformToolsTightened(
 ): PlatformToolName[] {
   const globalTools = resolvePlatformTools(roleName, roleKind, globalConfig ?? {});
   if (projectConfig == null) return globalTools;
-  // An absent project override inherits the global opt-in; an override can only tighten it.
-  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, { ...globalConfig, ...projectConfig }));
+  // #1219 迁移窗口：两层各自先归一化（同一层内新键优先、缺新键沿用旧键的决定），
+  // 再取交集。合并原始键会让全局的新键覆盖项目自己用旧键做过的收紧。
+  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, projectConfig));
   return globalTools.filter((name) => projectAllowed.has(name));
 }
 

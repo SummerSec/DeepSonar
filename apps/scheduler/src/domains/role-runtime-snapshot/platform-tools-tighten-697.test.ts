@@ -47,3 +47,19 @@ test("#1219 升级前关掉的旧名读取不会在新名上默认打开", () =>
   const enabled = resolvePlatformTools("explore", "role", { read_project_memory: true });
   assert.ok(enabled.includes("read_project_knowledge"));
 });
+
+test("#1219 混合新旧键时项目仍只能收紧，不能因全局新键覆盖项目旧键而放开", () => {
+  // 升级后全局显式开启新名，项目此前用旧名显式关闭：项目收紧必须保留。
+  const tightened = resolvePlatformToolsTightened("explore", "role",
+    { read_project_knowledge: true }, { read_project_memory: false });
+  assert.equal(tightened.includes("read_project_knowledge"), false,
+    "项目用旧键做过的关闭不能丢掉");
+  // 全局用旧名关闭，项目用新名打开也不行（全局关闭不能被项目打开）。
+  const globalOff = resolvePlatformToolsTightened("explore", "role",
+    { read_project_memory: false }, { read_project_knowledge: true });
+  assert.equal(globalOff.includes("read_project_knowledge"), false);
+  // 两层都开启时才保留。
+  const bothOn = resolvePlatformToolsTightened("explore", "role",
+    { read_project_knowledge: true }, { read_project_knowledge: true });
+  assert.ok(bothOn.includes("read_project_knowledge"));
+});
