@@ -219,6 +219,19 @@ if (!testDatabaseUrl) {
       const [legacyAfterClear] = await sql`
         SELECT runtime_image_key FROM role_configs WHERE id = ${ownRoleConfigId}`;
       assert.equal(legacyAfterClear.runtime_image_key, null);
+      // #1219 迁移窗口：已保存配置里的旧工具键在保存时归一化成新键，
+      // 否则编辑页改一项无关设置就会因为旧键不在白名单而存不下来，或把关闭的读取重新打开。
+      const legacyToolPut = await inject("PUT", `/projects/${ownProjectId}/role-configs/${roleId}`, {
+        agent_cli: "claude-code",
+        platform_tools: { read_project_memory: false },
+      });
+      assert.equal(legacyToolPut.statusCode, 200, legacyToolPut.payload);
+      const [legacyToolRow] = await sql`
+        SELECT platform_tools_json FROM role_configs WHERE id = ${ownRoleConfigId}`;
+      const storedTools = legacyToolRow.platform_tools_json as Record<string, boolean>;
+      assert.equal(storedTools.read_project_memory, undefined, "旧键不应再写回存储");
+      assert.equal(storedTools.read_project_knowledge, false, "旧的关闭决定必须迁移到新键");
+
       const ownDelete = await inject("DELETE", `/projects/${ownProjectId}/role-configs/${roleId}`);
       assert.equal(ownDelete.statusCode, 200, ownDelete.payload);
       const [ownAfterDelete] = await sql`SELECT id FROM role_configs WHERE id = ${ownRoleConfigId}`;

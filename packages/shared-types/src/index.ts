@@ -1763,6 +1763,21 @@ const LEGACY_PLATFORM_TOOL_DECISIONS: Readonly<Record<string, string>> = {
   read_project_knowledge: "read_project_memory",
 };
 
+/**
+ * #1219 迁移窗口：把已保存配置里的旧工具键迁移成新键（新键优先，旧键不丢）。
+ * 未知键原样保留，交给调用方按当前白名单拒绝。
+ */
+export function normalizeLegacyPlatformTools(tools: PlatformToolConfig): PlatformToolConfig {
+  const normalized: Record<string, boolean | undefined> = { ...(tools as Record<string, boolean | undefined>) };
+  for (const [name, legacy] of Object.entries(LEGACY_PLATFORM_TOOL_DECISIONS)) {
+    if (!(legacy in normalized)) continue;
+    const decision = normalized[legacy];
+    delete normalized[legacy];
+    if (!(name in normalized)) normalized[name] = decision;
+  }
+  return normalized as PlatformToolConfig;
+}
+
 function platformToolDecision(name: PlatformToolName, config: PlatformToolConfig): boolean | undefined {
   const own = config[name];
   if (own !== undefined) return own;
@@ -1798,7 +1813,9 @@ export function resolvePlatformToolsTightened(
   // #1219 迁移窗口：项目层只做「显式收紧」，未设置的键继续继承全局结果
   // （不能先合并原始键，否则全局的新键会盖掉项目用旧键做过的关闭；
   // 也不能把项目层单独按默认值解析，否则未写的键会被当成关闭而误删全局已开的工具）。
-  return globalTools.filter((name) => platformToolDecision(name, projectConfig) !== false);
+  // 必需工具（mark_job_done 等）不因项目旧数据里的 false 被关掉：导入路径可能绕过编辑校验。
+  const required = new Set(requiredPlatformTools(roleKind));
+  return globalTools.filter((name) => required.has(name) || platformToolDecision(name, projectConfig) !== false);
 }
 
 // fingerprint 计算：title + location + rule_id 归一化后的 sha256 前 16 位

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolvePlatformTools, resolvePlatformToolsTightened } from "@deepsonar/shared-types";
+import { normalizeLegacyPlatformTools, resolvePlatformTools, resolvePlatformToolsTightened, requiredPlatformTools } from "@deepsonar/shared-types";
 
 test("#697 global disables emit_finding; empty project {} must not reopen", () => {
   const globalCfg = { emit_finding: false } as const;
@@ -62,4 +62,24 @@ test("#1219 混合新旧键时项目仍只能收紧，不能因全局新键覆�
   const bothOn = resolvePlatformToolsTightened("explore", "role",
     { read_project_knowledge: true }, { read_project_knowledge: true });
   assert.ok(bothOn.includes("read_project_knowledge"));
+});
+
+test("#1219 项目旧数据里的 false 不能关掉终态必需工具", () => {
+  const required = requiredPlatformTools("role");
+  // 导入路径可能绕过编辑校验写入任意映射，运行时仍要保住必需工具。
+  const tools = resolvePlatformToolsTightened("explore", "role", {},
+    { mark_job_done: false, ack_human_message: false, emit_finding: false });
+  for (const name of required) assert.ok(tools.includes(name), `${name} 必须保留`);
+  assert.equal(tools.includes("emit_finding"), false, "非必需工具仍按项目配置收紧");
+});
+
+test("#1219 保存前把旧工具键归一化成新键，新键优先、未知键保留给白名单拒绝", () => {
+  // 旧键的显式关闭迁移到新键：编辑页改一项无关设置后不会把读取重新打开。
+  assert.deepEqual(normalizeLegacyPlatformTools({ read_project_memory: false }), { read_project_knowledge: false });
+  // 新键已显式设置时以新键为准，旧键被丢弃。
+  assert.deepEqual(normalizeLegacyPlatformTools({ read_project_memory: false, read_project_knowledge: true }),
+    { read_project_knowledge: true });
+  // 未知键原样保留，交给白名单校验拒绝。
+  const unknown = normalizeLegacyPlatformTools({ totally_unknown_tool: true } as never);
+  assert.deepEqual(unknown, { totally_unknown_tool: true });
 });
