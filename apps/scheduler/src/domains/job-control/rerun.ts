@@ -456,12 +456,14 @@ export async function requeueJob(
     // 真实断点原因（如密钥检出）又会被吞掉。
     const recovering=!humanRequestId&&['failed','timeout','orphan'].includes(status);
     const continuation=continuationId?await humanContinuationAdmission(tx,job,String(continuationId),recovering):null;
-    if(continuation&&mode==='rerun-current') return {kind:'not_resumable' as const,status,provenance,
-      error_code:'HUMAN_CONTINUATION_REQUIRES_FROZEN',reason:'已封存续做只接受原冻结快照；更换配置须另建任务。'};
+    // 先报真实 blocker 再判「已封存续做不接受更换配置」：continuation 现在可能携带 blocker，
+    // 顺序颠倒会让 rerun-current 把断点不可用伪装成「请改用冻结快照」。
     if(continuation?.blocker) return {
       kind:"not_resumable" as const,status,provenance,error_code:continuation.blocker,
       reason:describeHumanContinuationBlocker(continuation.blocker),
     };
+    if(continuation&&mode==='rerun-current') return {kind:'not_resumable' as const,status,provenance,
+      error_code:'HUMAN_CONTINUATION_REQUIRES_FROZEN',reason:'已封存续做只接受原冻结快照；更换配置须另建任务。'};
     // waiting_human 必须持有通过准入的当前续做，否则不放行（与原语义一致，但不再伪造原因）。
     if(status==='waiting_human'&&!continuation) return {
       kind:"not_resumable" as const,status,provenance,error_code:"HUMAN_REPLY_REQUIRED",
