@@ -154,8 +154,10 @@ if (testDatabaseUrl) {
       assert.equal(requestAfter.status, "answered");
       assert.equal(requestAfter.resumed_at, null);
 
-      // #1223 期望 2：放弃写回位于所有校验之后。该夹具没有完整的冻结网关预算，
-      // 重跑会在预算检查处被拒——被拒时人工请求必须完全没动（不能先关再报错）。
+      // #1223 期望 2：断点不可用时可以显式放弃现场。封存断点时旧 Attempt 已按
+      // interrupted 收口（markAttemptInterrupted 会 settle 掉未决网关请求），但该夹具没有
+      // 完整的冻结预算，重跑仍会被预算检查拒绝——所以这里断言放弃路径的只读性：
+      // 被拒时人工请求必须完全没动，不能先关请求再报错。
       const refusedByBudget = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
       assert.notEqual(refusedByBudget.statusCode, 200, refusedByBudget.body);
       const [requestAfterAbandon] = await sql`SELECT status, close_reason, resumed_at FROM human_requests
