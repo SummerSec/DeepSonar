@@ -221,6 +221,20 @@ test("quick start preserves explicit device requirements and inherited network p
   });
 });
 
+test("device quick start requires an existing project before creating any records", async () => {
+  let calls = 0;
+  const result = await runQuickStart({ title: "device", goal: "test device", project: null,
+    newProject: { name: "new device project" }, networkOverride: "inherit",
+    device: { transport: "hdc", exclusive: true, ttl_sec: 1800, roles: ["test"] },
+  }, {
+    createProject: async () => { calls++; throw new Error("unexpected project creation"); },
+    readiness: async () => { calls++; throw new Error("unexpected readiness"); },
+    createTask: async () => { calls++; throw new Error("unexpected task creation"); },
+  });
+  assert.equal(result.kind, "invalid");
+  assert.equal(calls, 0);
+});
+
 test("readiness repair actions resolve every global and project route", () => {
   const globalScope = { kind: "global" as const, project_id: null };
   const projectScope = { kind: "project" as const, project_id: project.id };

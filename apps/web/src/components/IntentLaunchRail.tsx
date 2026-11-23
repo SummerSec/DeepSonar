@@ -333,6 +333,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                 </fieldset>
                 <p>默认继承项目设置。覆盖只写入本次任务快照，不能指定镜像、凭据或 Agent 角色。</p>
                 <TaskDeviceEditor value={deviceDraft} onChange={setDeviceDraft} />
+                {isCreatingProject && <p>设备任务需要先选择已有项目，并在该项目设置中启用设备接入。</p>}
               </div>
             </details>
 

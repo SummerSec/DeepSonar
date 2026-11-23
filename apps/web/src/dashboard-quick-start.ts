@@ -292,6 +292,7 @@ export async function runQuickStart(input: QuickStartInput, client: QuickStartAp
   const goal = input.goal.trim();
   if (!title) return { kind: "invalid", message: "请先写一个任务标题。" };
   if (!goal) return { kind: "invalid", message: "请补充目标，平台需要它来决定第一步。" };
+  if (input.device && !input.project) return { kind: "invalid", message: "设备任务需要选择已有项目，并先在项目设置中启用设备接入。" };
 
   let project = input.project;
   if (!project && input.newProject?.name.trim()) {

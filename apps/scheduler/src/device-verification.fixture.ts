@@ -27,15 +27,22 @@ export async function verifyTaskDeviceCreation(projectId: string) {
     assert.equal(plain.statusCode, 201, plain.payload);
     const [plainJob] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${plain.json().job.id}`;
     assert.equal(plainJob.agent_snapshot_json.device_requirement, undefined);
+    const counts = async () => (await sql`SELECT
+      (SELECT count(*)::int FROM canvases WHERE project_id=${projectId}) AS canvases,
+      (SELECT count(*)::int FROM canvas_nodes WHERE canvas_id IN (SELECT id FROM canvases WHERE project_id=${projectId})) AS nodes,
+      (SELECT count(*)::int FROM jobs WHERE project_id=${projectId}) AS jobs`)[0];
+    const beforeDenied = await counts();
     for (const payload of [{ device, allow_egress: false }, { device: { ...device, rig_id: "unconfigured" }, allow_egress: true }]) {
       const denied = await create(payload);
       assert.equal(denied.statusCode, 409, denied.payload);
       assert.equal(denied.json().error_code, "device_not_authorized");
+      assert.deepEqual(await counts(), beforeDenied, "device admission rejection leaves no Canvas, root or Job");
     }
     await sql`UPDATE projects SET config_json=jsonb_set(config_json,'{device_access_enabled}','false') WHERE id=${projectId}`;
     const optOut = await create({ device, allow_egress: true });
     assert.equal(optOut.statusCode, 409, optOut.payload);
     assert.equal(optOut.json().error_code, "device_not_authorized");
+    assert.deepEqual(await counts(), beforeDenied, "project opt-out rolls back the entire task creation");
     await sql`UPDATE projects SET config_json=jsonb_set(config_json,'{device_access_enabled}','true') WHERE id=${projectId}`;
     const response = await create({ device, allow_egress: true });
     assert.equal(response.statusCode, 201, response.payload);
