@@ -17,7 +17,9 @@ export type IngestOutcome = {
 
 /** 标题归一化成稳定逻辑键：小写、非字母数字折叠成单横线，最长 120 字符。 */
 export function taskKnowledgeLogicalKey(title: string): string {
-  const slug = title.toLowerCase().normalize("NFKC").replace(/[^\p{Letter}\p{Number}]+/gu, "-")
+  // 逻辑键要落进 knowledge 契约（^[a-zA-Z0-9][a-zA-Z0-9._/-]*$），所以标题先做 NFKC
+  // 兼容归一，再把非 ASCII 字母数字折叠成 '-'：中文标题不拼拼音，只留稳定可读的前缀。
+  const slug = title.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/gu, "-")
     .replace(/^-+|-+$/gu, "").slice(0, 120);
   return `task/${slug || "untitled"}`;
 }

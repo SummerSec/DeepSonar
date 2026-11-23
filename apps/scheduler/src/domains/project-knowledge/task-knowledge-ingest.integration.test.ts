@@ -5,6 +5,7 @@ import { TASK_KNOWLEDGE_SUGGESTION_OPERATION as operation } from "@deepsonar/sha
 import { setSharedAssetBlobStoreForTests, type BlobStore } from "../../blob-store/index.js";
 import { hashJobSnapshot } from "../platform-api/tokens.js";
 import { submitTaskKnowledgeSuggestion } from "./closeout-intake.js";
+import { taskKnowledgeLogicalKey } from "./task-knowledge-ingest.js";
 import { freezeProjectKnowledgeCatalog } from "./catalog-snapshot.js";
 import { createProjectKnowledgeApplication } from "./application.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./test-support.js";
@@ -65,7 +66,7 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
       const [item] = await sql`SELECT id, status, active_version_id, logical_key FROM project_knowledge_items
         WHERE project_id=${writer.projectId}`;
       assert.equal(item!.status, "active");
-      assert.equal(item!.logical_key, "task/构建要先升-sdk");
+      assert.match(String(item!.logical_key), /^task\/[a-z0-9-]+$/u);
 
       // 冻结在入库之前的任务看不到；入库之后创建的任务能搜索并读取。
       const stale = await app.invoke({ jobId: frozenBefore.jobId, projectId: writer.projectId, canvasId: frozenBefore.canvasId,
@@ -133,7 +134,7 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
       assert.equal(r1.accepted, true);
       assert.equal(r2.accepted, true);
       const [{ count: sameTitle }] = await sql`SELECT count(*)::int AS count FROM project_knowledge_items
-        WHERE project_id=${writer.projectId} AND logical_key='task/并发同名沉淀'`;
+        WHERE project_id=${writer.projectId} AND logical_key=${taskKnowledgeLogicalKey("并发同名沉淀")}`;
       assert.equal(Number(sameTitle), 1, "concurrent same-title submissions converge on one item");
     } finally {
       setSharedAssetBlobStoreForTests(null);

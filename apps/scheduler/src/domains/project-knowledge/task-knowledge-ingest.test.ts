@@ -10,7 +10,10 @@ const skill = { kind: "skill" as const, title: "打包脚本", scope: "产物",
 test("#1219 任务沉淀的稳定逻辑键：同标题同键，空白与符号折叠，超长截断", () => {
   assert.equal(taskKnowledgeLogicalKey("构建要先升 SDK"), taskKnowledgeLogicalKey("构建要先升  SDK "));
   assert.equal(taskKnowledgeLogicalKey("构建要先升 SDK"), taskKnowledgeLogicalKey("构建要先升-SDK"));
-  assert.match(taskKnowledgeLogicalKey("构建要先升 SDK"), /^task\/[^/ ]+$/u);
+  // 逻辑键要满足 knowledge 契约的 ASCII 形状，中文标题只留 'sdk' 这类可读片段。
+  assert.equal(taskKnowledgeLogicalKey("构建要先升 SDK"), "task/sdk");
+  for (const title of ["构建要先升 SDK", "构建", "a/b c", "  ", "x".repeat(400)])
+    assert.match(taskKnowledgeLogicalKey(title), /^task\/[a-z0-9][a-z0-9._-]*$/u);
   assert.equal(taskKnowledgeLogicalKey("   "), "task/untitled");
   assert.ok(taskKnowledgeLogicalKey("x".repeat(400)).length <= 125);
 });
