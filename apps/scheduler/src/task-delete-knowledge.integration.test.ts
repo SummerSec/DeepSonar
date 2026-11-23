@@ -94,6 +94,16 @@ if (testDatabaseUrl) {
       const [leaseKept] = await sql`SELECT count(*)::int AS count FROM device_leases WHERE job_id = ${withLease.jobId}`;
       assert.equal(Number(leaseKept.count), 1, "lease history must survive a task delete attempt");
 
+      // #1236：重试路径对被设备历史挡住的任务必须给出专门的错误码与可行动引导，
+      // 不能复用「知识记录不能删」的话术让用户以为是自己删了知识。
+      const retryWithLease = await app.inject({ method: "POST", url: `/tasks/${withLease.canvasId}/retry`, headers });
+      assert.equal(retryWithLease.statusCode, 409, retryWithLease.payload);
+      const retryBody = retryWithLease.json();
+      assert.equal(retryBody.error_code, "TASK_RETRY_BLOCKED_BY_DEVICE_HISTORY", retryWithLease.payload);
+      assert.deepEqual(retryBody.retained_kinds, ["device_lease"]);
+      assert.match(retryBody.next_action, /另建新任务/u);
+      assert.doesNotMatch(retryBody.next_action, /知识/u);
+
       // 2. A job that produced knowledge work: deleting the task would destroy
       //    governance evidence, so the API refuses before touching anything.
       const withWork = await seedJob(randomUUID());
