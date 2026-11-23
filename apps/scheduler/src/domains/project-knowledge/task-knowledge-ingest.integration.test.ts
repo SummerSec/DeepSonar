@@ -31,6 +31,13 @@ async function submit(
 ) {
   const sql = db as unknown as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>;
   const tokenId = randomUUID();
+  // 投稿需要 Job 快照自己授权该操作，否则 KNOWLEDGE_SCOPE_DENIED；这里按夹具需要补上，
+  // 不去动其它快照字段（catalog 等由调用方先写好）。
+  const [existing] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${job.jobId}`;
+  const snapshot = (existing?.agent_snapshot_json ?? {}) as { platform_tools?: string[] };
+  const tools = [...new Set([...(snapshot.platform_tools ?? []), operation])];
+  await sql`UPDATE jobs SET agent_snapshot_json=${JSON.stringify({ ...snapshot, platform_tools: tools })}::jsonb
+    WHERE id=${job.jobId}`;
   const [row] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${job.jobId}`;
   await sql`INSERT INTO job_capability_tokens(id,job_id,project_id,canvas_id,role_name,snapshot_sha256,token_prefix,token_hash,operation_ids,expires_at)
     VALUES(${tokenId},${job.jobId},${job.projectId},${job.canvasId},'fixture',${hashJobSnapshot(row!.agent_snapshot_json)},${tokenId},'test',${[operation]},now()+interval '1 hour')`;
