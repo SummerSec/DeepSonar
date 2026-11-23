@@ -400,7 +400,16 @@ export async function requeueJob(
         AND status IN ('open','answered') AND resumed_at IS NULL
         ORDER BY revision DESC, created_at DESC, id DESC LIMIT 1`;
       if (request) {
-        const { blocker } = await humanContinuationAdmission(tx, job, String(request.id));
+        const { blocker, request: currentRequest } = await humanContinuationAdmission(tx, job, String(request.id));
+        const previousError = currentRequest?.resume_error_code;
+        if (!blocker && previousError) {
+          if (previousError === "SNAPSHOT_STALE") return { kind: "not_resumable" as const, status, provenance,
+            error_code: previousError, reason: "调度器上次检查发现任务配置与保存的现场不一致。请核对配置后查看下一次检查结果。" };
+          if (previousError === "HUMAN_CONTINUATION_AUTHORIZATION_BLOCKED") return { kind: "not_resumable" as const, status, provenance,
+            error_code: previousError, reason: "调度器上次未能通过续做授权检查。请核对目标授权后查看下一次检查结果。" };
+          return { kind: "not_resumable" as const, status, provenance, error_code: "HUMAN_CONTINUATION_BLOCKED",
+            reason: "调度器上次尝试续做时受阻。请查看当前人工请求记录和下一次检查结果。" };
+        }
         const reasons: Record<string, string> = {
           HUMAN_REPLY_REQUIRED: "请回复当前人工请求。",
           HUMAN_CHECKPOINT_SECRET_DETECTED: "保存现场时命中凭据保护规则，无法从此处继续。请取消该任务或新建任务。",

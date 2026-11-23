@@ -84,7 +84,7 @@ if (testDatabaseUrl) {
               id, request_id, request_revision, canvas_id, human_node_id, target_kind, target_node_id, target_job_id, body, delivery_status
             ) VALUES (${messageId}, ${requestId}, 1, ${canvasId}, ${rootNodeId}, 'job', ${rootNodeId}, ${jobId}, '继续', 'planned')`;
         }
-        return { jobId, requestId };
+        return { jobId, requestId, attemptId };
       };
 
       const resumeAnswered = await insertWaitingJob("answered");
@@ -105,6 +105,26 @@ if (testDatabaseUrl) {
 
       const call = async (jobId: string, path: string) =>
         app.inject({ method: "POST", url: `/jobs/${jobId}/${path}`, headers });
+
+      const ready = await insertWaitingJob("answered");
+      const { humanSnapshotDigest } = await import("./domains/job-control/human-continuation-store.js");
+      const manifest = { v: 2, mode: "structured", files: [], job_id: ready.jobId,
+        request_id: ready.requestId, attempt_id: ready.attemptId, snapshot_sha256: humanSnapshotDigest({ name: "hub_reason" }) };
+      await sql`UPDATE human_requests SET checkpoint_status='ready', checkpoint_error_code=NULL,
+        manifest_json=${sql.json(manifest)} WHERE id=${ready.requestId}`;
+      await sql`INSERT INTO job_execution_clocks (job_id, budget_ms) VALUES (${ready.jobId}, 60000)`;
+      for (const previous of [null, "SNAPSHOT_STALE", "HUMAN_CONTINUATION_AUTHORIZATION_BLOCKED", null]) {
+        await sql`UPDATE human_requests SET resume_error_code=${previous} WHERE id=${ready.requestId}`;
+        for (const path of ["resume", "rerun-current"]) {
+          const result = await call(ready.jobId, path);
+          assert.equal(result.statusCode, 409, result.body);
+          assert.equal(result.json().error_code, previous ?? "HUMAN_CONTINUATION_PENDING", result.body);
+          if (previous) assert.match(result.json().error, /上次/);
+        }
+      }
+      await sql`UPDATE human_requests SET resume_error_code='SNAPSHOT_STALE',
+        checkpoint_expires_at=now()-interval '1 second' WHERE id=${ready.requestId}`;
+      assert.equal((await call(ready.jobId, "resume")).json().error_code, "HUMAN_CHECKPOINT_EXPIRED");
 
       for (const [path, answered, unanswered] of [
         ["resume", resumeAnswered, resumeUnanswered],
