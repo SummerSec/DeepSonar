@@ -228,6 +228,17 @@ Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过
 
 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)给 mark_job_done 增加必填 proposal revision header、原 key 的只读回执查询和持久拒绝计数。原 Control 权限仍有效；accepted/persisted_deferred 不是终态或效果结算。
 
+## 任务声明的前置条件反馈（#1245，2026-11-23）
+
+普通任务允许不提供 `task_contract`，该契约只在创建期由宿主冻结。`emit_fact` 的工具说明与拒绝反馈因此按前置条件分档：
+
+| 情形 | 工具说明 | 拒绝码 | 反馈分类 | `next_action` |
+| --- | --- | --- | --- | --- |
+| 快照带冻结契约 | 相关交付/阴性结果走 `artifact.task_result` | 契约内校验失败 | `model_correctable` | 按 `expected` 修正 |
+| 快照无冻结契约 | 明确不支持 `artifact.task_result`，改用普通 Fact 记录有界结果 | `task_result_contract_missing`（409） | `permanent_failure` | 停止提交 task_result，改用普通 Fact 并按完成协议收口 |
+
+`task_result_contract_missing` 不进入 Agent 可修复集合，反馈不携带 `expected`，也不给出「改 payload / 换 Idempotency-Key」这类在宿主冻结面上不可能成功的下一步。契约存在时的严格校验、证据绑定、预算、权限与不可变历史不变。
+
 ## Pi RPC 完整归档回读（#990 切片）
 
 `GET /jobs/:id/evidence/runtime` 是 Management 只读接口，沿用 `tasks:read` 和项目/Job 鉴权，不新增 Control operation。严格 query 选择 `path/attempt_id/sha256`、可选 RFC 6901 `pointer` 和返回值 `bytes` 校验；仅读取该 Job manifest 的对应 Attempt RPC 文件。先校验不可变源长度/hash，再完整脱敏、选值；`value` 保持类型，`source` 与返回值 hash/字节范围明确分离。未知字段、源冲突、Pointer/字节/预算/本地可见性错误返回稳定 `PI_RPC_*`，忙返回可审查拒绝，不以预览降级成成功。既有证据列表/下载按需访问，无新开关、通知或自动大输入。完整字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 和 [Pi RPC 专题](../PI_RPC_PAYLOAD_LIMITS.md)，最终 SHA Actions 待验。

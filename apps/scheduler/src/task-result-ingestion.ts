@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
 import { normalizeTaskResultProposal, normalizeTaskContract, taskResultContractIssues } from "@deepsonar/shared-types";
 import type { sql } from "./db.js";
-import { ControlInputError } from "./control-input.js";
+import { CONTROL_INPUT_ERROR_CODES, ControlInputError } from "./control-input.js";
 import { goalReviewDigest } from "./task-goal-review-source.js";
 import { taskContractDigest } from "./task-outcome-snapshot.js";
 import { loadGoalReviewEvidence } from "./task-goal-review-evidence.js";
 
 const denied = (code: string): never => { throw new ControlInputError("invalid_payload", code, "artifact.task_result", { task_result: { code } }); };
+/** 冻结契约由宿主在创建期写入；Agent 无权补契约，改 payload 或换 key 都不会成功。 */
+const contractMissing = (): never => { throw new ControlInputError(
+  CONTROL_INPUT_ERROR_CODES.taskResultContractMissing,
+  "本 Job 的冻结快照没有 task_contract，平台不接收 artifact.task_result：契约由任务创建方在创建期冻结，Agent 无法通过修改 payload 或更换 Idempotency-Key 补齐。请改用普通 Fact 记录本次有界结果（含证据引用与限制），并按完成协议收口。",
+  "artifact.task_result",
+  { task_result: { code: "task_result_contract_missing" } },
+); };
 const object = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
 /** A declaration is provenance, not a verdict. Existing event receipts own replay. */
@@ -16,7 +23,7 @@ export async function prepareTaskResult(db: typeof sql, job: Record<string, unkn
   const proposal = normalizeTaskResultProposal(raw);
   let contract;
   try { contract = normalizeTaskContract(object(job.agent_snapshot_json).task_contract); }
-  catch { return denied("task_result_contract_missing"); }
+  catch { return contractMissing(); }
   if (taskContractDigest(contract) !== proposal.task_contract_sha256) denied("task_result_contract_mismatch");
   const contractIssues = taskResultContractIssues(contract, proposal);
   if (contractIssues.length) denied(contractIssues[0]);
