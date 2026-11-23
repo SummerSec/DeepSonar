@@ -11,7 +11,7 @@ import { nativeHumanSessionPath, type NativeHumanSession } from "./human-session
 
 test("human native import uses the normal runner resume path with fresh execution inputs",async()=>{
   const id="75e625d4-ed23-46b3-a4ca-a82bdb1d6022";
-  const humanSession:NativeHumanSession={cli:"pi",version:"1.5.2",sessionId:id,content:[
+  const humanSession:NativeHumanSession={cli:"pi",version:"1.6.0",sessionId:id,content:[
     {type:"session",version:3,id,cwd:"/workspace",timestamp:"2026-11-19T00:00:00Z"},
     {type:"message",id:"user",parentId:null,timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep decision"}},
   ].map(row=>JSON.stringify(row)).join("\n")};
@@ -48,7 +48,7 @@ test("human native import uses the normal runner resume path with fresh executio
     assert.ok(protocolInputs.some(value=>JSON.parse(value)["gateway-token"]==="new-gateway"));
     return process;
   },uploadFile:async(content,destination)=>{if(destination===importedPath)order.push("redacted-history");uploads.set(destination,String(content));},readWorkspaceFile:async()=>Buffer.from(''),writeHumanInboxFile:async()=>{}};
-  const identity=contextIdentity(createContextState({attempt_id:'new-attempt',adapter_id:'pi',adapter_version:'1.5.2',
+  const identity=contextIdentity(createContextState({attempt_id:'new-attempt',adapter_id:'pi',adapter_version:'1.6.0',
     runtime_identity:'sha256:'+'a'.repeat(64),policy:'automatic',input_digest:contextTextDigest('new input')}));
   const extension='/workspace/.deepsonar-home/.pi/agent/extensions/current.ts';
   const result=await runRealAgent(runtime,{provider:'pi',env:{},privateCredentials:{gatewayToken:'new-gateway',controlToken:'new-control'},secretValues:['new-gateway','new-control'],input:'human reply',systemPrompt:'CURRENT_SYSTEM_BOUNDARY',
@@ -204,7 +204,7 @@ for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
     for (const warning of warnings) {
       assert.equal(warning.code, "unknown_runtime_event");
       const detail = JSON.parse(warning.detail!);
-      assert.equal(detail.adapter, "pi"); assert.equal(detail.version, "1.5.2");
+      assert.equal(detail.adapter, "pi"); assert.equal(detail.version, "1.6.0");
       assert.equal(detail.count, detail.phase === "first" ? 1 : 25);
       assert.match(detail.types[0].hash, /^[a-f0-9]{16}$/u);
     }
@@ -215,7 +215,7 @@ for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
 test("#1038 type summaries are bounded, redact before hashing and retain total warning occurrences", () => {
   const warnings: RuntimeWarning[] = [];
   const secret = "synthetic-warning-type-token";
-  const report = createRuntimeWarningReporter({ id: "pi", version: "1.5.2" }, w => warnings.push(w),
+  const report = createRuntimeWarningReporter({ id: "pi", version: "1.6.0" }, w => warnings.push(w),
     text => String(redactRuntimeSecrets(text, [secret])));
   for (let i = 0; i < 100; i++) for (let n = 0; n < 2; n++) report.warn(
     { code: "unknown_runtime_event", detail: "unrecognized_stream_type" }, { type: `${secret}-${i}`, body: "PRIVATE BODY" });
