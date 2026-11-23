@@ -100,7 +100,7 @@ RUN set -eu; \
 
 # 候选构建产物里记录 Node 内置与 npm 实际装入的 Undici 版本（#1228）：进程内绑定版本
 # 只证明 Node 自带副本，DSH vendor 与实际装入的工作区依赖分别读取。
-RUN node -p '"runtime node=" + process.version + " undici_bundled=" + process.versions.undici + " undici_dsh=" + require("/opt/deepsonar/dsh/node_modules/undici/package.json").version"'
+RUN node -p 'JSON.stringify({node: process.version, undici_bundled: process.versions.undici, undici_dsh: require("/opt/deepsonar/dsh/node_modules/undici/package.json").version})'
 
 COPY agent-harness/pi-observational-memory-governed.ts /opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts
 RUN test -s /opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts
