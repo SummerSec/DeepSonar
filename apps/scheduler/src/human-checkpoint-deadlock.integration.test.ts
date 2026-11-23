@@ -103,8 +103,9 @@ if (testDatabaseUrl) {
       await app.ready();
       closeApp = () => app.close();
 
-      const call = async (jobId: string, path: string) =>
-        app.inject({ method: "POST", url: `/jobs/${jobId}/${path}`, headers });
+      const call = async (jobId: string, path: string, payload?: Record<string, unknown>) =>
+        app.inject({ method: "POST", url: `/jobs/${jobId}/${path}`, headers,
+          ...(payload ? { payload } : {}) });
 
       const ready = await insertWaitingJob("answered");
       const { humanSnapshotDigest } = await import("./domains/job-control/human-continuation-store.js");
@@ -152,6 +153,28 @@ if (testDatabaseUrl) {
       const [requestAfter] = await sql`SELECT status, resumed_at FROM human_requests WHERE id = ${rerunAnswered.requestId}`;
       assert.equal(requestAfter.status, "answered");
       assert.equal(requestAfter.resumed_at, null);
+
+      // #1223 期望 2：断点不可用时的受治理出口——显式声明放弃现场后按当前配置重跑。
+      const abandoned = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
+      assert.equal(abandoned.statusCode, 200, abandoned.body);
+      const [requestAbandoned] = await sql`SELECT status, close_reason, resumed_at FROM human_requests
+        WHERE id = ${rerunAnswered.requestId}`;
+      assert.deepEqual({ status: requestAbandoned.status, close_reason: requestAbandoned.close_reason,
+        resumed_at: requestAbandoned.resumed_at }, { status: "closed", close_reason: "abandoned_checkpoint", resumed_at: null });
+      const [jobAbandoned] = await sql`SELECT status FROM jobs WHERE id = ${rerunAnswered.jobId}`;
+      assert.equal(jobAbandoned.status, "pending");
+
+      // 现场仍可用时不允许放弃，避免把可续做的现场当作不可用丢掉。
+      const usable = await insertWaitingJob("answered");
+      await sql`UPDATE human_requests SET checkpoint_status='ready', checkpoint_error_code=NULL,
+        manifest_json=${sql.json({ v: 2, mode: "structured", files: [], job_id: usable.jobId,
+          request_id: usable.requestId, attempt_id: usable.attemptId,
+          snapshot_sha256: humanSnapshotDigest({ name: "hub_reason" }) })} WHERE id=${usable.requestId}`;
+      const refused = await call(usable.jobId, "rerun-current", { abandon_checkpoint: true });
+      assert.equal(refused.statusCode, 409, refused.body);
+      assert.equal(refused.json().error_code, "CHECKPOINT_ABANDON_NOT_APPLICABLE");
+      const [usableAfter] = await sql`SELECT status FROM human_requests WHERE id = ${usable.requestId}`;
+      assert.equal(usableAfter.status, "answered");
     } finally {
       if (closeApp) await closeApp().catch(() => undefined);
       if (endSql) await endSql().catch(() => undefined);

@@ -328,10 +328,29 @@ export async function requeueTargetAuthorizationBlockers(tx: typeof sql, job: Re
  * and retains the old snapshot; rerun-current atomically installs the newly
  * resolved snapshot before exposing pending to Dispatcher.
  */
+/**
+ * #1223：关闭「断点不可用」的当前人工请求，作为显式放弃现场的落库动作。
+ * 返回拒绝原因字符串表示不适用；返回 null 表示已关闭，可继续按新会话重跑。
+ */
+async function closeAbandonedCheckpoint(tx: typeof sql, jobId: string): Promise<string | null> {
+  const [request] = await tx`SELECT id, checkpoint_status FROM human_requests WHERE job_id=${jobId}
+    AND status IN ('open','answered') AND resumed_at IS NULL
+    ORDER BY revision DESC, created_at DESC, id DESC LIMIT 1`;
+  if (!request) return "没有可放弃的人工请求；如需重跑请直接使用重跑入口。";
+  if (String(request.checkpoint_status ?? "") === "ready") {
+    return "已保存的现场仍可用，请先通过正常续做继续；放弃现场只适用于断点不可用的情况。";
+  }
+  await tx`UPDATE human_requests SET status='closed', revision=revision+1, closed_at=now(),
+    close_reason='abandoned_checkpoint'
+    WHERE id=${String(request.id)} AND status IN ('open','answered') AND resumed_at IS NULL`;
+  return null;
+}
+
 export async function requeueJob(
   jobId: string,
   mode: "resume-frozen" | "rerun-current",
   humanRequestId?: string,
+  options?: { abandonCheckpoint?: boolean },
 ): Promise<RequeueJobResult> {
   const result = await sql.begin(async (rawTx) => {
     // SAFETY: postgres.js hands the transaction handle the same tagged-template
@@ -392,7 +411,15 @@ export async function requeueJob(
       return { kind: "not_resumable" as const, status, provenance };
     }
     await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
-    if(status==='waiting_human'&&!humanRequestId) {
+    // #1223：断点封存失败时若不给出口，Job 会永久停在 waiting_human。这里只接受显式声明
+    // 「按当前配置重新执行、不继承旧现场」，且只在断点确实不可用时生效。
+    const abandonCheckpoint = mode === "rerun-current" && options?.abandonCheckpoint === true;
+    if(status==='waiting_human'&&abandonCheckpoint) {
+      const refusal=await closeAbandonedCheckpoint(tx,jobId);
+      if(refusal) return {kind:"not_resumable" as const,status,provenance,
+        error_code:"CHECKPOINT_ABANDON_NOT_APPLICABLE",reason:refusal};
+    }
+    if(status==='waiting_human'&&!humanRequestId&&!abandonCheckpoint) {
       const admission=await readRepairRequeueAdmission(tx,jobId);
       if(admission.blocker) return {kind:"not_resumable" as const,status,provenance,
         error_code:admission.blocker.code,reason:admission.blocker.reason};
@@ -427,11 +454,11 @@ export async function requeueJob(
     }
     const [previousContinuation]=!humanRequestId&&['failed','timeout','orphan'].includes(status)
       ?await tx`SELECT id FROM human_requests WHERE job_id=${jobId} AND resumed_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1`:[];
-    const continuationId=humanRequestId??previousContinuation?.id;
+    const continuationId=humanRequestId??(abandonCheckpoint?undefined:previousContinuation?.id);
     const continuation=continuationId?await humanContinuationAdmission(tx,job,String(continuationId),!humanRequestId):null;
     if(continuation&&mode==='rerun-current') return {kind:'not_resumable' as const,status,provenance,
       error_code:'HUMAN_CONTINUATION_REQUIRES_FROZEN',reason:'已封存续做只接受原冻结快照；更换配置须另建任务。'};
-    if(continuation?.blocker||(status==='waiting_human'&&!humanRequestId)) return {
+    if(!abandonCheckpoint&&(continuation?.blocker||(status==='waiting_human'&&!humanRequestId))) return {
       kind:"not_resumable" as const,status,provenance,error_code:continuation?.blocker??"HUMAN_REPLY_REQUIRED",
       reason:"人工回复和可校验断点均须通过当前续做准入。",
     };
