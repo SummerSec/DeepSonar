@@ -370,6 +370,8 @@ Control的evaluation_plan增加每例显式task_inputs，平台校验引用已�
 
 ## 人工等待回复与普通续做（#1180）
 
+FR-JOB-008 的手动恢复接口在人工等待期间返回当前请求的断点错误码；回复已就绪时返回 `409 HUMAN_CONTINUATION_PENDING`。实际启动仍由[人工续做流程](../HUMAN_CONTINUATION.md)处理。
+
 显式让位入口与队列分组已删除。回复沿既有消息 API 持久保存，202 只证明保存；原检查点、任务暂停/取消、授权、退出/效果/预算准入决定唯一后继，不等待其它任务整体完成。升级保全为任务暂停的 waiting_human 仍只保存回复，不绕过任务执行门。见[人工续做](../HUMAN_CONTINUATION.md)，最终 SHA Actions 待验。
 
 ## 不限配额接口（#1123）
