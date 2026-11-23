@@ -90,8 +90,10 @@ RUN set -eu; \
   ln -sf /opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh; \
   npm cache clean --force
 
-# 候选构建产物里记录 Node 与自带 Undici 版本，供发布核对（#1228）。
-RUN node -p '"runtime node=" + process.version + " undici=" + process.versions.undici'
+# 候选构建产物里记录 Node 内置与 npm 实际装入的 Undici 版本（#1228）。进程内绑定版本
+# 只能证明 Node 自带的副本，所以另读 DSH vendor 实际安装的 package.json。
+RUN node -p '"runtime node=" + process.version + " undici_bundled=" + process.versions.undici \
+  + " undici_dsh=" + require("/opt/deepsonar/dsh/node_modules/undici/package.json").version"
 
 RUN set -eu; \
   test "$TOOLSET" = base -o "$TOOLSET" = audit; \
