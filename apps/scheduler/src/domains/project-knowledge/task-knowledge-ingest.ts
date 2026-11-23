@@ -54,7 +54,10 @@ export async function ingestTaskKnowledgeSuggestions(
         integrity_hash: evidenceHashes[index]?.[position] ?? null })),
       { kind: "task", job_id: owner.jobId, canvas_id: owner.canvasId, attempt_id: owner.attemptId, scope: item.scope },
     ];
-    const blob = await writeKnowledgeBlob(tx, { kind: "memory", title: item.title, content: item.content, sources });
+    // 版本 CAS 字节必须是完整的 KnowledgeCandidate（strict）：来源与任务归属单独进
+    // sources_json，不能混进正文，否则读取侧 KnowledgeCandidate.parse 会直接拒绝。
+    const blob = await writeKnowledgeBlob(tx, { kind: "memory", logical_key: logicalKey,
+      title: item.title.slice(0, 200), keywords: [item.scope.slice(0, 80)], content: item.content });
     await registerKnowledgeBlob(tx, blob.hash, blob.bytes);
     const governanceHash = sha256(canonical({ project_id: owner.projectId, job_id: owner.jobId,
       attempt_id: owner.attemptId, operation: "submit_task_knowledge_suggestion", logical_key: logicalKey,
