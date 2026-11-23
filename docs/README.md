@@ -10,6 +10,7 @@
 任务声明的前置条件反馈（#1245）在 [接口规格](architecture/09-interface-specs.md#任务声明的前置条件反馈12452026-11-23) 中按快照分档。正常省略返回 `task_result_contract_missing`，现有无效契约返回 `task_result_contract_invalid`，均为当前 Agent 无法修正的永久前置条件。正常创建到实际 Control HTTP 与事件入账回归接既有 Actions，最终候选另验。
 #1230 的 [`GET /gateway/_settlement/:id`](architecture/09-interface-specs.md#model-gateway) 按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一持久身份读取，原 Attempt 已终态或出现后续活动 Attempt 时仍可读。多条匹配回答 `unknown`，真缺失仍为 404，失效 token 和终态 Job 仍拒绝。历史 `settled` 只表示账本已经结算，模型结果和恢复准入分别判定。PostgreSQL 回归接 `ci:integration:platform-api`，最终 SHA Actions 待验，现场 8 次失败的逐条归因与真实模型效果未验证。
 
+#1219 第一步把任务内沉淀的 Memory 直接写进知识条目与版本（`task-knowledge-ingest`）：同标题追加版本并置为 `active`，不经过模型评测、不额外起 Job；Skill 仍走显式送评。目录在 Job 创建时冻结，因此只影响之后创建的 Job。详见[项目知识与 Skill](PROJECT_KNOWLEDGE.md#任务沉淀直接入库1219-第一步2026-11-23)。
 #1228 把运行时自带的 Undici 跟到已修复版本：Kali 镜像的 Node 24.22.2→24.22.3（自带 Undici 7.30.2，两架构校验和同步更新）、控制面四个 Node 镜像 digest 由 24.21.0 升到 24.22.3、agent 基础镜像换成 24.22.3-alpine/bookworm-slim 摘要、工作区 `undici` 直接依赖收到 `^7.30.2`、DSH 运行时用 `overrides` 固定 8.12.4，并在两处 Dockerfile 打印 `process.version` / `process.versions.undici` 作为候选产物证据。顺带修掉 kali 清单里指向 `v22.23.2` 的 Node 下载地址。Pi 1.6.0 另行单独验证，不在本次范围；版本取证以 Actions 镜像构建日志为准，未运行真实模型。
 
 #1211 的[设备绑定诊断](architecture/09-interface-specs.md#设备绑定诊断1211)在 `GET /jobs/:id` 增加只读 `device_binding`：区分「未声明设备需求」「已声明但无租约（含画布声明未冻结、角色不命中）」「有租约但无连接结果」，只投影平台已记录的事实，不把沙箱内探测失败当成设备不可用，也不申请或释放租约。回归见 `ci:unit:device-lease`，最终 SHA Actions 待验。

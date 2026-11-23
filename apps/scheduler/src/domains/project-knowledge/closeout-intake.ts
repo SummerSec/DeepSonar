@@ -10,6 +10,7 @@ import type { PlatformRuntimeHandlerContext } from "../platform-api/registry.js"
 import { hashJobSnapshot } from "../platform-api/tokens.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, knowledgeEventId, reject, sha256, type KnowledgeDb } from "./types.js";
+import { ingestTaskKnowledgeSuggestions } from "./task-knowledge-ingest.js";
 
 export type SuggestionOwner = { projectId: string; canvasId: string; jobId: string; attemptId: string };
 type SuggestionItem = Suggestion["items"][number];
@@ -126,13 +127,19 @@ export async function submitTaskKnowledgeSuggestion(context: PlatformRuntimeHand
       sourceHashes.push(hashes);
       fingerprints.push(sha256(canonical({ ...item, target: target ? { item_ref: target.item_ref, version_ref: target.version_ref } : null, evidence_refs: [...new Set(contentHashes)].sort() })));
     }
+    // #1219 第一步：任务内沉淀的 memory 直接成为可检索条目，不再经模型评测另起 Job。
+    // Skill 仍走显式送评，本函数对它返回空结果，既有链路不受影响。
+    const ingested = input.items.length
+      ? await ingestTaskKnowledgeSuggestions(tx, owner, input.items, sourceHashes)
+      : [];
     await consumeEventRateLimit(tx, jobId, "control_receipt", new Date());
     const blob = input.items.length ? await writeKnowledgeBlob(tx, { input, source_hashes: sourceHashes }) : undefined;
     if (blob) await registerKnowledgeBlob(tx, blob.hash, blob.bytes);
     const receiptRef = randomUUID(), eventId = knowledgeEventId(jobId, key);
     const response = { accepted: true, operation, receipt_ref: receiptRef, receipt_status: "settled" };
     const metadata = { ...response, result: input.result, count: input.items.length, root_node_id: root.id,
-      session_id: attempt.session_id, ...(blob ? { blob_hash: blob.hash, fingerprints } : {}) };
+      session_id: attempt.session_id, ...(blob ? { blob_hash: blob.hash, fingerprints } : {}),
+      ...(ingested.length ? { ingested } : {}) };
     const [{ next }] = await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${jobId}`;
     await tx`INSERT INTO event_dedup(event_id,job_id) VALUES(${eventId},${jobId})`;
     await tx`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type,payload_json)
