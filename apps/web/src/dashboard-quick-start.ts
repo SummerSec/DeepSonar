@@ -4,7 +4,7 @@ import type {
   AuthStatus,
   Project,
 } from "./api";
-import type { TaskContract, ReadinessCheck, ReadinessFixAction, ReadinessResponse } from "@deepsonar/shared-types";
+import type { DeviceRequirement, TaskContract, ReadinessCheck, ReadinessFixAction, ReadinessResponse } from "@deepsonar/shared-types";
 
 export const NEW_PROJECT = "__new_project__" as const;
 export const LAST_PROJECT_STORAGE_KEY = "deepsonar:last-project-id";
@@ -105,6 +105,7 @@ export interface QuickStartTaskPayload {
   title: string;
   content: string;
   task_contract?: TaskContract;
+  device?: DeviceRequirement;
   allow_egress?: boolean;
 }
 
@@ -121,6 +122,7 @@ export interface QuickStartInput {
   newProject?: { name: string; description?: string } | null;
   networkOverride: NetworkOverride;
   task_contract?: TaskContract;
+  device?: DeviceRequirement;
 }
 
 export type QuickStartResult =
@@ -246,12 +248,13 @@ export function quickStartNetworkQuery(value: NetworkOverride): { allow_egress?:
   return allow_egress === undefined ? {} : { allow_egress };
 }
 
-export function quickStartTaskPayload(input: Pick<QuickStartInput, "title" | "goal" | "networkOverride" | "task_contract">): QuickStartTaskPayload {
+export function quickStartTaskPayload(input: Pick<QuickStartInput, "title" | "goal" | "networkOverride" | "task_contract" | "device">): QuickStartTaskPayload {
   const allow_egress = networkOverrideValue(input.networkOverride);
   return {
     title: input.title.trim(),
     content: input.goal.trim(),
     ...(input.task_contract ? { task_contract: input.task_contract } : {}),
+    ...(input.device ? { device: input.device } : {}),
     ...(allow_egress === undefined ? {} : { allow_egress }),
   };
 }
@@ -301,6 +304,6 @@ export async function runQuickStart(input: QuickStartInput, client: QuickStartAp
   const readiness = await client.readiness(project.id, quickStartNetworkQuery(input.networkOverride));
   if (!readiness.ready) return { kind: "readiness_failed", project, readiness };
 
-  const task = await client.createTask(project.id, quickStartTaskPayload({ title, goal, networkOverride: input.networkOverride, task_contract: input.task_contract }));
+  const task = await client.createTask(project.id, quickStartTaskPayload({ title, goal, networkOverride: input.networkOverride, task_contract: input.task_contract, device: input.device }));
   return { kind: "success", project, task };
 }

@@ -51,6 +51,8 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 ### 设备绑定诊断（#1211）
 
+Web 的任务工作台和快捷创建共用设备需求编辑器，将显式 adb/hdc、设备组、设备 key 与匹配角色提交到现有 `POST /projects/:id/tasks` 的 `device`。默认省略需求，创建入口继续执行共享 schema、项目设备准入和网络授权检查。`verifyTaskDeviceCreation` 在真实 Management HTTP 与 PostgreSQL 上核对画布、快照和按角色申请租约的完整链路，回归接现有 device-lease Actions。
+
 `GET /jobs/:id` 增加只读 `device_binding`，沿用 `tasks:read` 与项目/Job scope，只投影平台已经记录的事实：需求是否冻结在 Job 快照（执行期唯一权威）、是否只写在画布 `target_json`、Job 角色是否命中 `roles`、以及该 Job 是否真的拿到过租约（含设备 key、rig、授予/到期/释放时间与释放原因）。分档固定为 `not_declared`（任务与画布都没有声明需求，调度器不会申请租约）、`not_attempted`（已声明但还没有 Attempt：领取/准备尚未开始，租约申请未发生，与真正的申请失败分开）、`not_applying`（Attempt 的角色不在 `roles` 内）、`attempted_no_lease`（Attempt 存在但租约还在进行/未写结果）、`acquire_failed`（仅当 `job_attempts.outcome_json.reason` 是设备失败码 `device_not_available` / `device_not_authorized` 且没有租约行；不从「Attempt 失败」反推调用过 broker，原因原文不在此复读，指向同请求 `attempts[].error`）、`lease_unrecorded`（Attempt 已结束但原因不是设备失败码；终态取 `job_attempts_status_check` 中除 `active` 外的全部取值 succeeded/failed/timeout/orphan/cancelled/interrupted/unknown，共享资产/卷/凭据等 provision 步骤失败同样会没有租约，平台未记录是否走到租约申请；终态原因只在 `attempts[].error` 与调度器分类记录里，不在诊断文案中复读）、`lease_recorded_unverified`（有租约但无连接结果）。分档按 Attempt 独立给出（`attempts`，最多 20 个，按 `attempt_no` 倒序），且判定依据是按 Attempt 的全量租约计数，不依赖 32 条有界显示窗口；顶层 `state` 跟随最新 Attempt，重试不会被历史合并掩盖。租约列表最多 32 条并携带 `attempt_id`，超出时 `lease_count` 保留真实总数且 `leases_truncated` / `attempts_truncated` 为 true。`connection_result_recorded` 当前恒为 `false`：设备连接结果还没有受治理的写入口，因此投影只说明「未记录」，绝不把沙箱内 `127.0.0.1:5555` 一类探测失败表述为「设备不可用」或「连接失败」。该投影不申请/释放租约、不改调度资格与重试链，也不读取 broker 凭据；设备列表里显示可用不等于某个 Job 已绑定设备。回归见 [binding-diagnostics.test.ts](../../apps/scheduler/src/domains/device/binding-diagnostics.test.ts)（已接 `pnpm ci:unit:device-lease`），最终 SHA Actions 待验。
 
 ### 管理 Skill 的当前契约（#996）

@@ -2353,6 +2353,7 @@ export const api = {
       title: string;
       content: string;
       task_contract?: TaskContract;
+      device?: import("@deepsonar/shared-types").DeviceRequirement;
       /** 省略则继承项目设置；服务端在任务创建时冻结。 */
       allow_egress?: boolean;
       finding_protocol?: FindingProtocolConfig;

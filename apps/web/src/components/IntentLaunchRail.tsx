@@ -1,4 +1,5 @@
 import { TaskContractEditor, TaskContractFeedbackView } from "./TaskContractEditor";
+import { EMPTY_TASK_DEVICE, parseTaskDevice, TaskDeviceEditor } from "./TaskDeviceEditor";
 import { SnapshotConfigurationNotice } from "./SnapshotConfigurationNotice";
 import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
 import { ApiRequestError } from "../login-error";
@@ -92,6 +93,8 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
   const [selectedProjectId, setSelectedProjectId] = useState(forcedNewProject ? NEW_PROJECT : "");
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
   const [contractDraft, setContractDraft] = useState("");
+  const [deviceDraft, setDeviceDraft] = useState(EMPTY_TASK_DEVICE);
+  const parsedDevice = parseTaskDevice(deviceDraft);
   const [contractFeedback, setContractFeedback] = useState<TaskContractFeedback>({});
   const [failedProjectId, setFailedProjectId] = useState<string | null>(null);
   const [createdTaskHref, setCreatedTaskHref] = useState<string | null>(null);
@@ -163,6 +166,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
     event.preventDefault();
     if (busy || createdTaskHref) return;
     if (parsedContract.error) return setOperationError(parsedContract.error);
+    if (parsedDevice.error) return setOperationError(parsedDevice.error);
     setContractFeedback({});
     setFailedProjectId(null);
     if (!canStart) {
@@ -187,6 +191,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
           newProject: creatingProject ? { name: newProjectName, description: newProjectDescription } : null,
           networkOverride,
           task_contract: parsedContract.contract,
+          device: parsedDevice.device,
         },
         {
           createProject: async (input) => {
@@ -327,6 +332,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                   {(["inherit", "allow", "deny"] as NetworkOverride[]).map((value) => <label key={value} className={networkOverride === value ? "is-selected" : ""}><input type="radio" name={`quick-start-network-${instanceId}`} value={value} checked={networkOverride === value} onChange={() => setNetworkOverride(value)} /><span>{networkOverrideLabel(value)}</span></label>)}
                 </fieldset>
                 <p>默认继承项目设置。覆盖只写入本次任务快照，不能指定镜像、凭据或 Agent 角色。</p>
+                <TaskDeviceEditor value={deviceDraft} onChange={setDeviceDraft} />
               </div>
             </details>
 
@@ -384,7 +390,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
               projectId={configurationProjectId} readiness={currentReadiness} />
             <div className="intent-launch-submit-row">
               <div><span className="intent-launch-submit-note"><span className="intent-launch-live-dot" />预检通过后才会创建任务与 Job</span><span className="intent-launch-submit-note">{networkOverrideLabel(networkOverride)}</span></div>
-              {createdTaskHref ? <PrimaryButton type="button" onClick={() => navigate(createdTaskHref)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={busy} disabled={!canStart || permissionLoading || Boolean(parsedContract.error)}>{busy ? "检查并进入画布" : <><span>开始任务</span><ArrowRight size={15} weight="light" /></>}</PrimaryButton>}
+              {createdTaskHref ? <PrimaryButton type="button" onClick={() => navigate(createdTaskHref)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={busy} disabled={!canStart || permissionLoading || Boolean(parsedContract.error || parsedDevice.error)}>{busy ? "检查并进入画布" : <><span>开始任务</span><ArrowRight size={15} weight="light" /></>}</PrimaryButton>}
             </div>
           </form>
         )}

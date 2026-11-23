@@ -214,6 +214,13 @@ test("network advanced override maps only to the governed task boundary", () => 
   });
 });
 
+test("quick start preserves explicit device requirements and inherited network policy", () => {
+  const device = { transport: "hdc" as const, exclusive: true, ttl_sec: 1800, roles: ["test"], rig_id: "local-sim" };
+  assert.deepEqual(quickStartTaskPayload({ title: "title", goal: "goal", networkOverride: "inherit", device }), {
+    title: "title", content: "goal", device,
+  });
+});
+
 test("readiness repair actions resolve every global and project route", () => {
   const globalScope = { kind: "global" as const, project_id: null };
   const projectScope = { kind: "project" as const, project_id: project.id };

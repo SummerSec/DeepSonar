@@ -1,5 +1,7 @@
 # DeepSonar Design
 
+#1211 的[设备需求入口](docs/DEVICE_ACCESS.md#1-现状代码事实)在任务工作台与快捷创建复用现有创建契约。用户显式声明需求后，Scheduler 冻结到画布和 Job，按匹配角色重新授权并申请租约。网页提交与真实 HTTP 到 broker grant 回归接既有 Actions，最终候选结果另验。
+
 #1133 补齐人工技术收口与设备冻结。Finding 详情允许有 findings:write 权限的操作者对 needs_human 显式记录无定论决定，按对象修订、状态、最后轮次做 CAS，新增终结轮次并同事务写审计。补证两个入口复用画布设备要求冻结与授权，远端测试按明确目标执行。补证无进展刹车尊重既有关闭开关，见[运行时规则](docs/architecture/06-runtime-view.md#verify-补证无进展开关1133)。工程验收以最终 SHA Actions 为准，详见[接口边界](docs/architecture/09-interface-specs.md#人工结束技术验证1133)。
 
 #1118 的[持久跨项目公平领取](docs/architecture/06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。

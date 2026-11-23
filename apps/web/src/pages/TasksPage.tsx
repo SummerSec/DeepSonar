@@ -1,4 +1,5 @@
 import { TaskContractEditor, TaskContractFeedbackView } from "../components/TaskContractEditor";
+import { EMPTY_TASK_DEVICE, parseTaskDevice, TaskDeviceEditor } from "../components/TaskDeviceEditor";
 import { SnapshotConfigurationNotice } from "../components/SnapshotConfigurationNotice";
 import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
 import { ApiRequestError } from "../login-error";
@@ -41,6 +42,8 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
     startAtLocal: nextBeijing8amLocalValue(),
   });
   const [contractDraft, setContractDraft] = useState("");
+  const [deviceDraft, setDeviceDraft] = useState(EMPTY_TASK_DEVICE);
+  const parsedDevice = parseTaskDevice(deviceDraft);
   const [contractFeedback, setContractFeedback] = useState<TaskContractFeedback>({});
   const [createdCanvasId, setCreatedCanvasId] = useState<string | null>(null);
   const parsedContract = parseTaskContractDraft(contractDraft);
@@ -121,6 +124,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           e.preventDefault();
           if (submitting || createdCanvasId) return;
           if (parsedContract.error) return flash(parsedContract.error, "error");
+          if (parsedDevice.error) return flash(parsedDevice.error, "error");
           setContractFeedback({});
           if (!form.title.trim()) return flash("请写明希望得到的结果", "error");
           if (!form.content.trim()) return flash("请补充必要背景或边界", "error");
@@ -140,6 +144,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           try {
             const result = await api.createTask(projectId, {
               ...(parsedContract.contract ? { task_contract: parsedContract.contract } : {}),
+              ...(parsedDevice.device ? { device: parsedDevice.device } : {}),
               title: form.title.trim(),
               content: form.content.trim(),
               kind: form.kind,
@@ -334,6 +339,8 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
             </div>
           </fieldset>
 
+          <TaskDeviceEditor value={deviceDraft} onChange={setDeviceDraft} />
+
           {/* 执行时间：立即 / 指定时间 集中在同一面板 */}
           <section className="rounded-xl border border-white/[.06] bg-white/[.015] p-4" aria-labelledby="task-schedule-heading">
             <div className="flex items-start gap-3">
@@ -456,7 +463,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           </div>
           <div className="flex gap-2 sm:ml-auto">
             <SecondaryButton type="button" onClick={onCancel}>稍后再说</SecondaryButton>
-            {createdCanvasId ? <PrimaryButton type="button" onClick={() => onDone(createdCanvasId)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={submitting} disabled={Boolean(scheduleIssue || parsedContract.error)}>
+            {createdCanvasId ? <PrimaryButton type="button" onClick={() => onDone(createdCanvasId)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={submitting} disabled={Boolean(scheduleIssue || parsedContract.error || parsedDevice.error)}>
               交给系统
             </PrimaryButton>}
           </div>
