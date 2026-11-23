@@ -55,7 +55,7 @@ export function JobHumanRequestPanel({ request, status, onSendMessage, continuat
         detailVersionMatches={true}
         subjectKind={subject?.type === "platform_blocker" ? subject.kind : null}
       />
-      {current && continuation && canvasId && <HumanContinuationReply key={continuation.id}
+      {current && continuation && <HumanContinuationReply key={continuation.id}
         continuation={continuation} canvasId={canvasId} canReply={!!onSendMessage} />}
       {historical && <HistoricalContinuationReply key={continuation.id} jobId={jobId} continuation={continuation} />}
       {current && !continuation && onSendMessage && <button type="button" onClick={onSendMessage}
