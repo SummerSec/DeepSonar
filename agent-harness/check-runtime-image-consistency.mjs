@@ -294,12 +294,12 @@ for (const imageDockerfile of [dockerfile, kaliDockerfile]) {
 }
 const piPackage = "@earendil-works/pi-coding-agent";
 const piManifest = config.npm[piPackage];
-expect(piManifest?.version === "1.5.2", "Pi Coding Agent version must remain pinned");
-expect(piManifest?.integrity === "sha512-mUWI04rqF1Vd/m1q+Ps1XeWsTXEVvRUnsmRa83I3Dzua0Tx5bYS93imeqtIfrXf7PkkaR6ERz+AuQhIJlom5yA==", "Pi Coding Agent integrity drift");
+expect(piManifest?.version === "1.6.0", "Pi Coding Agent version must remain pinned");
+expect(piManifest?.integrity === "sha512-zX1BVEsshx7A2MRuQ6jfr3RJGWw4Wn+vLq5ZfmlvS1RskhRmByaSZVXH/zcwRrWHO7qPgs98pNCbPOEti/t0fQ==", "Pi Coding Agent integrity drift");
 const piInstallRef = `${piPackage}@\${PI_CODING_AGENT_VERSION}`;
 const piIntegrityCheck = `npm view ${piInstallRef} dist.integrity`;
 expect(dockerfile.includes(`ARG PI_CODING_AGENT_VERSION=${piManifest.version}`), "base Pi Coding Agent Docker ARG must remain pinned");
-expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=1.5.2") && kaliDockerfile.includes(piInstallRef), "Kali Pi Coding Agent must be installed from the pinned Docker ARG");
+expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=1.6.0") && kaliDockerfile.includes(piInstallRef), "Kali Pi Coding Agent must be installed from the pinned Docker ARG");
 expect(dockerfile.includes(`ARG PI_CODING_AGENT_INTEGRITY=${piManifest.integrity}`), "base Pi Coding Agent Docker ARG integrity must remain pinned");
 const expectBaseLock = (manifest, lock, name, entry) => {
   const locked = lock.packages?.[`node_modules/${name}`];
