@@ -40,7 +40,7 @@ export function TaskActionCard({
       {!action.human_request && <p className="text-[12px] leading-5 text-zinc-500">{action.reason}</p>}
       {action.human_request && (
         <>
-          <HumanRequestDetails {...action.human_request} showQuestion={false} />
+          <HumanRequestDetails {...action.human_request} />
           {action.recommended_action === "reply_to_agent" && <p className="text-[11px] leading-5 text-zinc-500">
             回复会进入消息投递；若运行正在等待此回复，平台核验当前权限和恢复条件后，才会重新排队。消息送达、Agent 确认和任务完成分别更新；回复本身不会批准授权。
           </p>}

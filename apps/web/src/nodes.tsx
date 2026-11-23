@@ -325,7 +325,7 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
               overflow: "hidden",
             }}
           >
-            {n.title}
+            {n.node_type === "human" ? "人工请求" : n.title}
           </div>
 
           {/* #954：Skill 目录陈旧时，在 Job 节点留一条 warning 级记录 */}

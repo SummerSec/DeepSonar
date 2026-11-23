@@ -274,7 +274,7 @@ export function humanInterventionKindLabel(node: CanvasNode): string {
     case "authorization": return "授权确认";
     case "high_risk_action": return "高风险操作确认";
     case "business_decision": return "业务决定";
-    default: return "平台要求";
+    default: return "人工请求";
   }
 }
 
@@ -285,10 +285,10 @@ export function humanInterventionSubjectKind(node: CanvasNode): string | null {
   return value.type === "platform_blocker" && typeof value.kind === "string" ? value.kind : null;
 }
 
-export function humanInterventionSafetyMessage(node: CanvasNode): string | null {
-  switch (humanInterventionSubjectKind(node)) {
-    case "credential": return "此请求涉及凭据；请使用请求明确且已获准的安全配置方式，未说明入口时先核实配置位置。不要把秘密写进回复或附件。";
-    case "authorization": return "此请求涉及授权；请按现有权限边界核对所需范围，回复本身不会替代平台核验或扩大权限。";
+export function humanInterventionSafetyMessage(kind: string | null): string | null {
+  switch (kind) {
+    case "credential": return "请求涉及凭据。此处没有经平台核验的配置入口，凭据配置仍待核实。";
+    case "authorization": return "请求涉及授权。此处没有经平台核验的授权入口，回复不会替代平台核验或扩大权限。";
     case "high_risk_action": return "此请求涉及高风险操作；请按现有授权边界核对，回复不会增加操作权限。";
     case "business_decision": return "此请求需要业务决定；回复内容不会自动转成平台执行授权。";
     default: return null;

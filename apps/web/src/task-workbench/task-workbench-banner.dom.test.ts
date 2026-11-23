@@ -101,7 +101,9 @@ test("只有历史、0 条待处理时横幅降噪并默认收起，但历史必
     act(() => toggle.click());
     const reopened = harness.container.querySelector("section") as HTMLElement;
     assert.equal((reopened.querySelector("button[aria-expanded]") as HTMLElement).getAttribute("aria-expanded"), "true");
-    assert.match(reopened.textContent ?? "", /旧的介入/);
+    assert.doesNotMatch(reopened.textContent ?? "", /旧的介入|等待人工确认凭据环境/);
+    assert.match(reopened.textContent ?? "", /查看请求/);
+    assert.ok([...reopened.querySelectorAll("button")].some(button => button.textContent === "Job"));
   } finally {
     harness.unmount();
   }

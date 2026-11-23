@@ -211,6 +211,8 @@ test("an accepted human request replaces its duplicate waiting_human projection"
   assert.equal(humanBlockers.length, 1);
   assert.equal(humanBlockers[0]?.id, "human:human-2");
   assert.deepEqual(humanBlockers[0]?.human_request?.guidance, guidance);
+  assert.ok(!humanBlockers[0].title.includes(guidance.question));
+  assert.ok(!humanBlockers[0].reason.includes(guidance.question));
 
   const missingRequest = projectTaskActions({ jobs: [{ id: "job-without-node", status: "waiting_human" }] });
   assert.equal(missingRequest[0]?.recommended_action, "inspect_recovery", "a missing human node must keep the real recovery projection visible");

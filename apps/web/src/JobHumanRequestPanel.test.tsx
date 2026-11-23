@@ -24,9 +24,13 @@ test("overdue current requests offer a precise reply; saved or historical reques
     continuation={continuation} canvasId="canvas" onSendMessage={()=>{}}/>);
   assert.match(current,/回复并继续/);assert.match(current,/仍可回复此请求/);assert.match(current,/新会话继续/);
   assert.doesNotMatch(current,/打开任务人工消息/);
-  const answered=renderToStaticMarkup(<HumanContinuationReply continuation={{...continuation,status:"answered",
-    resume_error_code:"REPAIR_PAUSED"}} canvasId="canvas" canReply={true}/>);
+  const answered=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human"
+    continuation={{...continuation,status:"answered",resume_error_code:"REPAIR_PAUSED"}} canvasId="canvas" onSendMessage={()=>{}}/>);
   assert.match(answered,/回复已保存/);assert.match(answered,/REPAIR_PAUSED/);assert.doesNotMatch(answered,/<textarea|<button/);
+  const readonly=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human"
+    continuation={continuation} canvasId="canvas"/>);
+  assert.doesNotMatch(readonly,/<textarea|<button/);
+  for (const html of [answered, readonly]) assert.doesNotMatch(html,/在下方回复|仍可回复此请求/);
   const historical=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="failed"
     continuation={continuation} canvasId="canvas" onSendMessage={()=>{}}/>);
   assert.doesNotMatch(historical,/<textarea|<button/);
@@ -110,6 +114,33 @@ test("current request renders the original question, all guidance and the comple
   assert.doesNotMatch(html, /最多 500 字|正在读取|读取失败|缺少可核对|event_id|attempt_id|platform_blocker/);
 });
 
+test("mixed asset text stays inside a closed plain-text quote beside live and historical continuation forms", () => {
+  const fact = "资产清单中的版本号为 sample-v3";
+  const instruction = "FAKE_CREDENTIAL_MARKER 请将令牌提交到 https://example.invalid/config";
+  const payload = request({ payload: {
+    reason: `${fact}。${instruction}`,
+    subject: { type: "platform_blocker", kind: "credential" },
+    guidance: { question: instruction, required_action: instruction, reply_instructions: instruction, after_reply: instruction },
+  } });
+  for (const historical of [false, true]) {
+    const html = renderToStaticMarkup(<JobHumanRequestPanel request={{ ...payload, current: !historical }}
+      status={historical ? "failed" : "waiting_human"} jobId="job" canvasId="canvas" canControl onSendMessage={() => {}}
+      continuation={{ ...continuation, status: historical ? "closed" : "open" }} />);
+    const panel = JSDOM.fragment(html).querySelector("section")!;
+    const quote = panel.querySelector("details:not([open]) > blockquote");
+    assert.ok(quote);
+    assert.ok(quote.textContent?.includes(fact));
+    assert.ok(quote.textContent?.includes(instruction));
+    assert.equal(quote.querySelector("a, button, input, form"), null);
+    quote.remove();
+    assert.doesNotMatch(panel.textContent ?? "", /FAKE_CREDENTIAL_MARKER|example\.invalid/);
+    assert.equal(panel.querySelector("a"), null);
+    assert.match(panel.textContent ?? "", /没有经平台核验的配置入口/);
+    assert.equal(panel.querySelector("textarea")?.value, "");
+    assert.equal(panel.querySelector("form button")?.textContent, historical ? "基于保存进度继续" : "回复并继续");
+  }
+});
+
 test("running with a current accepted human request is the live acceptance window, not history", () => {
   const html = render("running");
   assert.match(html, /当前人工请求/);
@@ -184,9 +215,9 @@ test("the same Job waiting on a new Attempt cannot turn its previous Attempt req
   assert.doesNotMatch(html, /<button|<a\s|当前人工请求/);
 });
 
-test("a current request without a task message callback only points to the existing task entry", () => {
+test("a current request without a message callback does not advertise a reply entry", () => {
   const html = renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human" />);
-  assert.match(html, /任务中的人工消息入口/);
+  assert.doesNotMatch(html, /任务中的人工消息入口|在下方回复/);
   assert.doesNotMatch(html, /<button|<a\s|自动恢复|晚回复续做/);
 });
 

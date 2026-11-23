@@ -4,6 +4,8 @@
 > 同步日期：2026-11-21
 > 需求：FR-JOB-008、FR-CTRL-006；决策：[ADR 0022](architecture/adr/0022-human-continuation.md)
 
+当前回复与历史续做界面均可展开未经核验的请求原文。保存进度不会将其中的资产说明、配置地址或凭据索取转成平台操作。详见[人工请求展示边界](architecture/10-security-and-trust-boundaries.md#人工断点业务文件权限)。
+
 人工等待超过响应阈值只记 overdue，Job 保持 waiting_human。有权限的用户可在 Job 详情读取完整问题并「回复并继续」。2026-11-11 的两个历史 failed Job 不自动复活，也不据历史回执重放外部效果。此实现不部署现场，不更换用户运行配置。
 
 ## 原生会话受限导入

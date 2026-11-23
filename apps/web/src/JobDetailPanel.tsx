@@ -1,4 +1,5 @@
 import { RuntimeProcessEvidenceView } from "./RuntimeProcessEvidence";
+import { DeviceBindingView } from "./DeviceBindingView";
 import { useJobRerun, CredentialRepairNotice } from "./useJobRerun";
 import { ArrowClockwise, PaperPlaneTilt, Stop, X } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -11,6 +12,7 @@ import { JobUsageLedgerView } from "./UsageLedgerBoard";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
+import { HumanEventSummary } from "./HumanEventSummary";
 import { SearchableMultiSelect } from "./SearchableSelect";
 import { HumanMessageList } from "./HumanMessageList";
 import { JobHumanRequestSection } from "./JobHumanRequestPanel";
@@ -873,7 +875,9 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                 <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
                   执行账本
                 </div>
-                <ExecutionLedgerView detail={detail} /><RuntimeProcessEvidenceView rows={detail.process_diagnostics} />
+                <ExecutionLedgerView detail={detail} />
+                <DeviceBindingView binding={detail.device_binding} />
+                <RuntimeProcessEvidenceView rows={detail.process_diagnostics} />
               </section>
 
               <section className="theme-surface rounded-2xl p-4 ring-1">
@@ -987,11 +991,11 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                             {formatTime(e.created_at)}
                           </span>
                         </div>
-                        <MarkdownView
+                        {e.type === "human" ? <HumanEventSummary text={summarizePayload(e.payload_json ?? {})} /> : <MarkdownView
                           markdown={summarizePayload(e.payload_json ?? {})}
                           controls={false}
                           className="mt-0.5 text-[13px] text-zinc-400"
-                        />
+                        />}
                       </li>
                     ))}
                   </ol>

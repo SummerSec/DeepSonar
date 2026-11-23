@@ -41,8 +41,7 @@ export function JobHumanRequestPanel({ request, status, onSendMessage, continuat
       </div>
       <p className="mt-2 text-[12px] leading-5 text-zinc-400">
         {current
-          ? continuation ? "以下是本次运行提出的问题和处理指引。"
-            : "请按以下指引处理，可通过任务中的人工消息入口回复。回复是否被接受及后续执行以平台核验结果为准。"
+          ? "以下是本次运行的人工请求。"
           : historical ? "本次运行已失败。可在下方基于保存的进度申请续做。"
           : terminal
             ? "本次运行已结束；以下为已保存的人工请求，仅供查看，不再等待此请求的回复。"
@@ -54,6 +53,7 @@ export function JobHumanRequestPanel({ request, status, onSendMessage, continuat
         guidanceStatus={guidance ? "available" : "missing"}
         detailStatus="loaded"
         detailVersionMatches={true}
+        subjectKind={subject?.type === "platform_blocker" ? subject.kind : null}
       />
       {current && continuation && <HumanContinuationReply key={continuation.id}
         continuation={continuation} canvasId={canvasId} canReply={!!onSendMessage} />}
