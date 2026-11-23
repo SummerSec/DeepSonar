@@ -1,6 +1,7 @@
 # DeepSonar Design
 
 #1182 的[提问前核对](docs/HUMAN_CONTINUATION.md#提问前核对已授权资源1182)在静态控制 Skill 和动态人工请求指导中共用有界资源读取、有效答案复用及真实阻塞分类。现有回复、断点、唯一接续、累计额度与无队列恢复继续复用。可控 Agent 的资源读取与实际 HTTP 提案回归接既有 Actions，真实模型提问收益未验证。
+#1223 的[断点凭据来源](docs/HUMAN_CONTINUATION.md#断点凭据候选的来源1223)按已有 Claude 配置契约区分正整数输出额度，并在文件封存与原生历史导入共用精确受管凭据集合。短凭据、自定义歧义字段与显式平台令牌继续保护，最终候选 Actions 结果另验。
 
 #1133 补齐人工技术收口与设备冻结。Finding 详情允许有 findings:write 权限的操作者对 needs_human 显式记录无定论决定，按对象修订、状态、最后轮次做 CAS，新增终结轮次并同事务写审计。补证两个入口复用画布设备要求冻结与授权，远端测试按明确目标执行。补证无进展刹车尊重既有关闭开关，见[运行时规则](docs/architecture/06-runtime-view.md#verify-补证无进展开关1133)。工程验收以最终 SHA Actions 为准，详见[接口边界](docs/architecture/09-interface-specs.md#人工结束技术验证1133)。
 

@@ -13,6 +13,7 @@ import { checkpointQuiescenceScript } from "./human-checkpoint-process.js";
 import { CHECKPOINT_MUTATION_GUARD } from "./human-checkpoint-mutation.js";
 import { checkpointGuardFixture } from "./human-checkpoint-fixture.js";
 import { checkpointManagedSecrets } from "./human-checkpoint.js";
+import { collectCheckpointCredentialValues } from "./human-checkpoint-secrets.js";
 
 test("Linux checkpoint scanner retains only owner execute with owner read/write", {skip:process.platform==='win32'},async()=>{
   const directory=await mkdtemp(path.join(os.tmpdir(),'checkpoint-mode-'));
@@ -246,6 +247,50 @@ test("capture checks source hashes and secrets; reads reject corruption and miss
     await assert.rejects(readCheckpointFile(requestId, stored), /HASH_MISMATCH/);
     await assert.rejects(readCheckpointFile(randomUUID(), stored), /FILE_UNAVAILABLE/);
   } finally { Reflect.set(config.storage, "blobDir", previous); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("checkpoint secret extraction recognizes only the defined numeric Claude environment cap", () => {
+  const cap = { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8" };
+  assert.deepEqual(checkpointManagedSecrets(cap, {}, [], "claude-code"), []);
+  assert.deepEqual(checkpointManagedSecrets(cap, {}, []), ["8"]);
+  assert.deepEqual(checkpointManagedSecrets(cap, {}, [], "pi"), ["8"]);
+  assert.deepEqual(checkpointManagedSecrets({}, { "settings.json": JSON.stringify({ env: cap }) }, [], "claude-code"), ["8"]);
+  assert.deepEqual(checkpointManagedSecrets(cap, {}, ["8", "true", " "], "claude-code"), ["8", "true", " "]);
+  for (const field of ["API_TOKEN_ENABLED", "API_KEY_FLAG", "API_TOKEN_TTL", "API_TOKEN_LIMIT", "auth_token"]) {
+    for (const value of ["true", "1", "abc123"]) {
+      assert.deepEqual(checkpointManagedSecrets({ [field]: value }, {}, []), [value]);
+    }
+  }
+  for (const value of ["true", "secret", "0", "9007199254740992"]) {
+    assert.deepEqual(checkpointManagedSecrets({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: value }, {}, [], "claude-code"), [value]);
+  }
+  assert.deepEqual(checkpointManagedSecrets({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: ["8"] }, {}, [], "claude-code"), ["8"]);
+  assert.deepEqual(collectCheckpointCredentialValues({ debug: { env: cap }, API_TOKEN: ["true", "1"] }), ["8", "true", "1"]);
+  assert.deepEqual(checkpointManagedSecrets({}, { "config.toml": 'api_token = "true"\n' }, []), ["true"]);
+});
+
+test("checkpoint capture retains ordinary numeric configuration while blocking short real credentials", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "checkpoint-field-source-"));
+  const previous = config.storage.blobDir;
+  Reflect.set(config.storage, "blobDir", directory);
+  const bytes = Buffer.from("saved progress with output cap 8 and a true comparison");
+  const host = { run: async () => ({ exitCode: 0, stdout: JSON.stringify([
+    { path: "progress.txt", bytes: bytes.length, sha256: checkpointHash(bytes), mode: 0o600 }]), stderr: "" }),
+    runAsync: async () => checkpointGuardFixture(), readWorkspaceFile: async () => bytes,
+  } as unknown as RuntimeHost;
+  try {
+    const environment = { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8" };
+    const managed = checkpointManagedSecrets(environment, {}, [], "claude-code");
+    assert.equal((await captureCheckpointFiles(host, randomUUID(), [], managed, [])).length, 1);
+    for (const secrets of [checkpointManagedSecrets({ ...environment, API_TOKEN_ENABLED: "true" }, {}, []),
+      checkpointManagedSecrets(environment, {}, ["8"], "claude-code"),
+      checkpointManagedSecrets({}, { "auth.json": JSON.stringify({ token: "true" }) }, [])]) {
+      await assert.rejects(captureCheckpointFiles(host, randomUUID(), [], secrets, []), /SECRET_DETECTED/u);
+    }
+  } finally {
+    Reflect.set(config.storage, "blobDir", previous);
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("进程基线读取遇到不可解析输出时失败闭合并返回稳定码", async () => {

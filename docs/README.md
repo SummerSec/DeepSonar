@@ -1,6 +1,7 @@
 # DeepSonar 文档索引
 
 #1182 的[提问前资源核对](HUMAN_CONTINUATION.md#提问前核对已授权资源1182)复用当前 Control API、冻结资产路径和有界 Canvas 查询，补齐静态/动态指导与可控 Agent 回归。晚回复和恢复的已有覆盖见同专题，最终候选 Actions 另验，真实模型判断和收益未验证。
+#1223 的[断点凭据来源](HUMAN_CONTINUATION.md#断点凭据候选的来源1223)按现有输出额度字段的精确路径与类型识别普通配置，文件和原生历史共用短凭据保护。合成回归接既有 Actions，历史现场的具体命中来源仍未确认。
 
 #1228 把运行时自带的 Undici 跟到已修复版本：Kali 镜像的 Node 24.22.2→24.22.3（自带 Undici 7.30.2，两架构校验和同步更新）、控制面四个 Node 镜像 digest 由 24.21.0 升到 24.22.3、agent 基础镜像换成 24.22.3-alpine/bookworm-slim 摘要、工作区 `undici` 直接依赖收到 `^7.30.2`、DSH 运行时用 `overrides` 固定 8.12.4，并在两处 Dockerfile 打印 `process.version` / `process.versions.undici` 作为候选产物证据。顺带修掉 kali 清单里指向 `v22.23.2` 的 Node 下载地址。Pi 1.6.0 另行单独验证，不在本次范围；版本取证以 Actions 镜像构建日志为准，未运行真实模型。
 
