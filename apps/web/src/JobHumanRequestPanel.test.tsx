@@ -39,9 +39,20 @@ test("answered blocked requests explain the checkpoint and manual exits without 
     canvasId="canvas" onSendMessage={() => {}} continuation={{ ...continuation, status: "answered",
       checkpoint_status: "blocked", checkpoint_error_code: "HUMAN_CHECKPOINT_SECRET_DETECTED",
       resume_error_code: "REPAIR_PAUSED" }} />);
-  for (const text of ["回复已保存", "断点不可用", "受保护的凭据", "HUMAN_CHECKPOINT_SECRET_DETECTED",
+  for (const text of ["回复已保存", "断点不可用", "保存现场时命中凭据保护规则", "HUMAN_CHECKPOINT_SECRET_DETECTED",
     "强制退出", "下达任务", "新任务不会继承这个现场"]) assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /REPAIR_PAUSED|在下方回复|仍可回复|核验通过后|<form|<button/);
+});
+
+test("released resources without a checkpoint show the scheduler reason and manual next steps", () => {
+  const html = renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human"
+    canvasId="canvas" continuation={{ ...continuation, status: "answered", checkpoint_status: "blocked",
+      checkpoint_error_code: "HUMAN_CHECKPOINT_UNAVAILABLE" }} />);
+  assert.match(html, /运行资源已释放，没有可供续做的现场记录。/);
+  assert.match(html, /HUMAN_CHECKPOINT_UNAVAILABLE/);
+  assert.match(html, /回复已保存/);
+  assert.match(html, /下达任务/);
+  assert.doesNotMatch(html, /凭据保护规则|<form/);
 });
 
 test("blocked open requests label the existing reply as save only, and keep diagnostics visible without a message target", () => {

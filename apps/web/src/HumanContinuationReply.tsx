@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { api, type HumanContinuation } from "./api";
 
 const checkpointReasons = new Map<string, string>([
-  ["HUMAN_CHECKPOINT_SECRET_DETECTED", "保存现场时检出受保护的凭据，平台已停止保存。"],
+  ["HUMAN_CHECKPOINT_SECRET_DETECTED", "保存现场时命中凭据保护规则，平台已停止保存。"],
+  ["HUMAN_CHECKPOINT_UNAVAILABLE", "运行资源已释放，没有可供续做的现场记录。"],
   ["HUMAN_CHECKPOINT_EXPIRED", "保存的现场已过期。"],
   ["HUMAN_CHECKPOINT_SIZE_LIMIT", "现场文件超过保存上限。"],
   ["HUMAN_CHECKPOINT_TIMEOUT", "保存现场超时。"],
