@@ -117,6 +117,8 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 新条目与新 Job 的关系：Job 创建时冻结知识目录，所以沉淀只对**之后创建**的 Job 出现在检索结果里；而已冻结目录的在途 Job 不受影响，这也符合「不改写冻结快照」的既有约束。
 
+迁移前已经产生的沉淀（当时只写回执与画布节点）用同一个入库路径回放：`legacy-knowledge-migration-cli.ts --plan` 先列出待迁移回执，`--apply` 逐份回执一个事务并回写 `ingested` 标记。归属仍是当初的 Job / Attempt / 画布，来源哈希取投稿时校验过的那份，因此旧记录不会被写成新任务的成果；重复执行会跳过，入库本身另有内容哈希幂等。结构不符或正文缺失的回执计入 `skipped`，不做文本猜测。
+
 ## 验证与运维
 
 2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。
