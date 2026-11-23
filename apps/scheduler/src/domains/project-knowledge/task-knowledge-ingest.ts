@@ -6,9 +6,13 @@ type SuggestionItem = SubmitTaskKnowledgeSuggestionPayload["items"][number];
 
 export type IngestOwner = { projectId: string; jobId: string; attemptId: string; canvasId: string };
 
+/** 调用方已校验过的修订目标；只有明确指向某条目时才允许追加版本。 */
+export type IngestTarget = { item_ref: string; version_ref: string };
+
 export type IngestOutcome = {
   item_ref: string; version_ref: string; version: number; logical_key: string;
-  outcome: "created" | "revised" | "unchanged";
+  outcome: "created" | "revised" | "unchanged" | "skipped";
+  reason?: string;
 };
 
 /** 标题归一化成稳定逻辑键：小写、非字母数字折叠成单横线，最长 120 字符。 */
@@ -38,6 +42,7 @@ export async function ingestTaskKnowledgeSuggestions(
   owner: IngestOwner,
   items: readonly SuggestionItem[],
   evidenceHashes: readonly (readonly string[])[],
+  targets: readonly (IngestTarget | null)[] = [],
 ): Promise<IngestOutcome[]> {
   const outcomes: IngestOutcome[] = [];
   for (const item of items) {
@@ -54,15 +59,33 @@ export async function ingestTaskKnowledgeSuggestions(
     const governanceHash = sha256(canonical({ project_id: owner.projectId, job_id: owner.jobId,
       attempt_id: owner.attemptId, operation: "submit_task_knowledge_suggestion", logical_key: logicalKey,
       content_hash: blob.hash }));
+    // 标题归一化只是「同一条知识」的候选键，不能凭它接管别人的条目：只有显式指定
+    // 修订目标（调用方已按 usage_ref 校验过归属、版本与 active 状态）才追加版本。
+    // 先在数据库里按 (项目,kind,逻辑键) 串行化：对新行 FOR UPDATE 加不上锁，
+    // 两个不同画布的投稿会同时通过存在性查询再撞唯一键。事务级 advisory lock 覆盖两者。
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${`knowledge-ingest:${owner.projectId}:memory:${logicalKey}`}))`;
+    const target = targets[index] ?? null;
     const [existing] = await tx`SELECT i.id, i.status, i.active_version_id, v.content_sha256 AS active_hash
       FROM project_knowledge_items i
       LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
       WHERE i.project_id=${owner.projectId} AND i.kind='memory' AND i.logical_key=${logicalKey}
       FOR UPDATE OF i`;
-    if (existing && String(existing.active_hash ?? "") === blob.hash) {
-      outcomes.push({ item_ref: String(existing.id), version_ref: String(existing.active_version_id),
-        version: 0, logical_key: logicalKey, outcome: "unchanged" });
-      continue;
+    if (existing) {
+      if (String(existing.active_hash ?? "") === blob.hash) {
+        outcomes.push({ item_ref: String(existing.id), version_ref: String(existing.active_version_id),
+          version: 0, logical_key: logicalKey, outcome: "unchanged" });
+        continue;
+      }
+      // 同名但不是显式修订目标，或条目已退出生命周期（retired/revoked/stale）：
+      // 一律不动它，交给后续的显式治理流程，避免同名投稿复活撤销条目。
+      const revivable = existing.status === "active" || existing.status === "draft";
+      if (!target || target.item_ref !== String(existing.id) || !revivable) {
+        outcomes.push({ item_ref: String(existing.id), version_ref: String(existing.active_version_id ?? ""),
+          version: 0, logical_key: logicalKey,
+          outcome: target ? "skipped" : "unchanged",
+          reason: target ? "同名条目存在但不是本次修订目标，或已退出生命周期" : "同名条目已存在且内容不同，需显式修订目标" });
+        continue;
+      }
     }
     let itemId: string;
     let version = 1;

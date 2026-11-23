@@ -111,6 +111,8 @@ export async function submitTaskKnowledgeSuggestion(context: PlatformRuntimeHand
     if (existing) return reject("KNOWLEDGE_SUGGESTION_ALREADY_ACCEPTED", "This Attempt has accepted a suggestion submission");
     const sourceHashes: string[][] = [];
     const fingerprints: string[] = [];
+    // 只有投稿里显式给了 target 且已按 usage_ref 校验通过的条目，才允许追加版本。
+    const ingestTargets: Array<{ item_ref: string; version_ref: string } | null> = [];
     for (const [i, item] of input.items.entries()) {
       const hashes: string[] = [];
       const contentHashes: string[] = [];
@@ -124,13 +126,14 @@ export async function submitTaskKnowledgeSuggestion(context: PlatformRuntimeHand
       const target = await resolveSuggestionTarget(tx, owner, item);
       if (item.target && !target)
         return reject("KNOWLEDGE_REVOKED", "Suggestion target version is unavailable", `items.${i}.target`);
+      ingestTargets.push(target ? { item_ref: target.item_ref, version_ref: target.version_ref } : null);
       sourceHashes.push(hashes);
       fingerprints.push(sha256(canonical({ ...item, target: target ? { item_ref: target.item_ref, version_ref: target.version_ref } : null, evidence_refs: [...new Set(contentHashes)].sort() })));
     }
     // #1219 第一步：任务内沉淀的 memory 直接成为可检索条目，不再经模型评测另起 Job。
     // Skill 仍走显式送评，本函数对它返回空结果，既有链路不受影响。
     const ingested = input.items.length
-      ? await ingestTaskKnowledgeSuggestions(tx, owner, input.items, sourceHashes)
+      ? await ingestTaskKnowledgeSuggestions(tx, owner, input.items, sourceHashes, ingestTargets)
       : [];
     await consumeEventRateLimit(tx, jobId, "control_receipt", new Date());
     const blob = input.items.length ? await writeKnowledgeBlob(tx, { input, source_hashes: sourceHashes }) : undefined;
