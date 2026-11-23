@@ -177,7 +177,10 @@ if (testDatabaseUrl) {
         { status: "answered", checkpoint_status: "preparing" });
 
       // 断点已失败但不是当前 Attempt 的请求：保守拒绝，不改状态。
+      // 必须先让旧 Attempt 终态，否则会撞 job_attempts_one_active_idx（唯一 active 约束）。
       const staleAttempt = await insertWaitingJob("answered");
+      await sql`UPDATE job_attempts SET status='interrupted', phase='interrupted', finished_at=now()
+        WHERE job_id=${staleAttempt.jobId} AND status='active'`;
       await sql`INSERT INTO job_attempts (id, job_id, attempt_no, status, phase)
         VALUES (${randomUUID()}, ${staleAttempt.jobId}, 2, 'active', 'agent.suspended')`;
       const staleRefused = await call(staleAttempt.jobId, "rerun-current", { abandon_checkpoint: true });
