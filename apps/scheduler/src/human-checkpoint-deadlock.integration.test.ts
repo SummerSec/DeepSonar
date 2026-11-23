@@ -64,8 +64,9 @@ if (testDatabaseUrl) {
           INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
           VALUES (${jobId}, ${projectId}, ${canvasId}, 'hub_reason', 'waiting_human', ${sql.json({})}, ${sql.json({ name: "hub_reason" })})`;
         await sql`
-          INSERT INTO job_attempts (id, job_id, attempt_no, status, phase)
-          VALUES (${attemptId}, ${jobId}, 1, 'active', 'agent.suspended')`;
+          INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, state_json)
+          VALUES (${attemptId}, ${jobId}, 1, 'active', 'agent.suspended',
+            ${sql.json({ version: 1, attempt_id: attemptId, job_id: jobId })})`;
         await sql`
           INSERT INTO events (job_id, job_seq, attempt_id, event_id, type, payload_json)
           VALUES (${jobId}, 1, ${attemptId}, ${eventId}, 'human', ${sql.json({})})`;
@@ -181,8 +182,10 @@ if (testDatabaseUrl) {
       const staleAttempt = await insertWaitingJob("answered");
       await sql`UPDATE job_attempts SET status='interrupted', phase='interrupted', finished_at=now()
         WHERE job_id=${staleAttempt.jobId} AND status='active'`;
-      await sql`INSERT INTO job_attempts (id, job_id, attempt_no, status, phase)
-        VALUES (${randomUUID()}, ${staleAttempt.jobId}, 2, 'active', 'agent.suspended')`;
+      const staleAttemptId = randomUUID();
+      await sql`INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, state_json)
+        VALUES (${staleAttemptId}, ${staleAttempt.jobId}, 2, 'active', 'agent.suspended',
+          ${sql.json({ version: 1, attempt_id: staleAttemptId, job_id: staleAttempt.jobId })})`;
       const staleRefused = await call(staleAttempt.jobId, "rerun-current", { abandon_checkpoint: true });
       assert.equal(staleRefused.statusCode, 409, staleRefused.body);
       assert.equal(staleRefused.json().error_code, "CHECKPOINT_ABANDON_NOT_APPLICABLE");
