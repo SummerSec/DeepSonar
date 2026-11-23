@@ -6,7 +6,7 @@
 
 ### 断点凭据候选的来源（#1223）
 
-封存文件与导入原生历史共用 `checkpointManagedSecrets`。显式 Control、Gateway 与记忆 Gateway 令牌保留完整值。环境变量及 JSON 的顶层 `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS` 是 `prepareClaudeLaunch` 已定义并校验的正整数配置，只有符合该具体路径与类型时才从凭据候选中排除。非法值、嵌套同名字段、数组及其他含凭据词的字段继续受保护，原生文本中的秘密赋值继续解析。
+封存文件与导入原生历史共用 `checkpointManagedSecrets`。显式 Control、Gateway 与记忆 Gateway 令牌保留完整值。只有真实 Claude 执行传入的运行时环境 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 才适用 `prepareClaudeLaunch` 已定义并校验的正整数配置规则。执行器显式传入当前 CLI，未提供来源或使用其他 CLI 时继续保守收集。同形的任意物化 JSON 继续按凭据策略收集。非法值、嵌套同名字段、数组及其他含凭据词的字段继续受保护，原生文本中的秘密赋值继续解析。
 
 命中时日志仅记录稳定错误码、请求 ID 和集合中的候选序号。文件路径与候选值均由输入决定，相关内容保留在原有受保护范围。文件封存和原生历史导入的数值配置、短凭据负例已接既有 bounded-contexts 与 platform-api Actions。现场历史五次命中的具体来源仍未确认，本次工程回归使用合成值验证。
 

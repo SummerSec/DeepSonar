@@ -122,7 +122,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
           timestamp:new Date().toISOString(),message:{role:'user',content:`Safe decision with output cap 8\nAuthorization: Bearer old-checkpoint-control\nprivate_key=${privateKey}\nsynthetic credential=true`}},
       ].map(value=>JSON.stringify(value)).join('\n')}]});
       await writer.finalize();
-      const secrets=checkpointManagedSecrets({CLAUDE_CODE_MAX_OUTPUT_TOKENS:'8',API_TOKEN_ENABLED:'true'}, {}, ['old-checkpoint-control',privateKey]);
+      const secrets=checkpointManagedSecrets({CLAUDE_CODE_MAX_OUTPUT_TOKENS:'8',API_TOKEN_ENABLED:'true'}, {}, ['old-checkpoint-control',privateKey], 'claude-code');
       await captureHumanSession(fixture.jobId,fixture.attemptId,secrets);
       const [captured]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
       assert.equal(captured.binding.status,'supported',JSON.stringify(captured.binding));

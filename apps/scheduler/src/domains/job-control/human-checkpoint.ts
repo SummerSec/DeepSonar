@@ -5,18 +5,18 @@ import { humanSnapshotDigest } from "./human-continuation-store.js";
 import { projectJobHumanRequestPayload } from "./job-human-request.js";
 import type { HumanPayload } from "@deepsonar/shared-types";
 import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
-import { collectCheckpointCredentialValues } from "./human-checkpoint-secrets.js";
+import { checkpointRuntimeEnvironmentSecrets, collectCheckpointCredentialValues } from "./human-checkpoint-secrets.js";
 import { readAcknowledgedHumanAttachments, restoreAcknowledgedHumanAttachments } from "./human-continuation-inbox.js";
 import { readAcknowledgedHumanHistory } from "./human-continuation-history.js";
 import { captureHumanSession, loadHumanSession } from "./human-checkpoint-session.js";
 
-export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[]) {
+export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[],agentCli?:string) {
   const materialized=Object.values(files).flatMap(config=>{
     if(typeof config==='string') {try{return collectCheckpointCredentialValues(JSON.parse(config));}catch{/* Native text configuration. */}}
     return collectCheckpointCredentialValues({config});
   });
   return [...new Set([...direct.filter((value):value is string=>typeof value==='string'&&value.length>0),
-    ...collectCheckpointCredentialValues(env,["env"]),...materialized])];
+    ...checkpointRuntimeEnvironmentSecrets(env,agentCli),...materialized])];
 }
 
 export async function prepareHumanCheckpointContext(input:{jobId:string;attemptNo:number;snapshot:unknown;host:RuntimeHost}) {
@@ -30,12 +30,13 @@ export async function prepareHumanCheckpointContext(input:{jobId:string;attemptN
 
 export async function persistHumanWaitCheckpoint(jobId:string,human:{eventId:string;payload:HumanPayload},
   input:{attemptId:string;host:()=>Promise<RuntimeHost>;workspaceFiles:Record<string,unknown>;env:Record<string,unknown>;
-    processBaseline?:readonly string[];managedSecrets:readonly(string|null|undefined)[]},
+    processBaseline?:readonly string[];managedSecrets:readonly(string|null|undefined)[];agentCli:string},
   persist:(jobId:string,event:{v:1;event_id:string;type:"human";payload:HumanPayload})=>Promise<unknown>) {
   await persist(jobId,{v:1,event_id:human.eventId,type:"human",payload:human.payload});
-  await captureHumanSession(jobId,input.attemptId,checkpointManagedSecrets(input.env,input.workspaceFiles,input.managedSecrets));
+  const secrets=checkpointManagedSecrets(input.env,input.workspaceFiles,input.managedSecrets,input.agentCli);
+  await captureHumanSession(jobId,input.attemptId,secrets);
   await sealHumanCheckpoint({jobId,attemptId:input.attemptId,host:await input.host(),processBaseline:input.processBaseline,
-    excludedPaths:Object.keys(input.workspaceFiles),secrets:checkpointManagedSecrets(input.env,input.workspaceFiles,input.managedSecrets)});
+    excludedPaths:Object.keys(input.workspaceFiles),secrets});
 }
 
 export async function sealHumanCheckpoint(input:{jobId:string;attemptId:string;host:RuntimeHost;

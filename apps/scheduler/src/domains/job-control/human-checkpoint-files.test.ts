@@ -251,18 +251,20 @@ test("capture checks source hashes and secrets; reads reject corruption and miss
 
 test("checkpoint secret extraction recognizes only the defined numeric Claude environment cap", () => {
   const cap = { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8" };
-  assert.deepEqual(checkpointManagedSecrets(cap, {}, []), []);
-  assert.deepEqual(checkpointManagedSecrets({}, { "settings.json": JSON.stringify({ env: cap }) }, []), []);
-  assert.deepEqual(checkpointManagedSecrets(cap, {}, ["8", "true", " "]), ["8", "true", " "]);
+  assert.deepEqual(checkpointManagedSecrets(cap, {}, [], "claude-code"), []);
+  assert.deepEqual(checkpointManagedSecrets(cap, {}, []), ["8"]);
+  assert.deepEqual(checkpointManagedSecrets(cap, {}, [], "pi"), ["8"]);
+  assert.deepEqual(checkpointManagedSecrets({}, { "settings.json": JSON.stringify({ env: cap }) }, [], "claude-code"), ["8"]);
+  assert.deepEqual(checkpointManagedSecrets(cap, {}, ["8", "true", " "], "claude-code"), ["8", "true", " "]);
   for (const field of ["API_TOKEN_ENABLED", "API_KEY_FLAG", "API_TOKEN_TTL", "API_TOKEN_LIMIT", "auth_token"]) {
     for (const value of ["true", "1", "abc123"]) {
       assert.deepEqual(checkpointManagedSecrets({ [field]: value }, {}, []), [value]);
     }
   }
   for (const value of ["true", "secret", "0", "9007199254740992"]) {
-    assert.deepEqual(checkpointManagedSecrets({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: value }, {}, []), [value]);
+    assert.deepEqual(checkpointManagedSecrets({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: value }, {}, [], "claude-code"), [value]);
   }
-  assert.deepEqual(checkpointManagedSecrets({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: ["8"] }, {}, []), ["8"]);
+  assert.deepEqual(checkpointManagedSecrets({ CLAUDE_CODE_MAX_OUTPUT_TOKENS: ["8"] }, {}, [], "claude-code"), ["8"]);
   assert.deepEqual(collectCheckpointCredentialValues({ debug: { env: cap }, API_TOKEN: ["true", "1"] }), ["8", "true", "1"]);
   assert.deepEqual(checkpointManagedSecrets({}, { "config.toml": 'api_token = "true"\n' }, []), ["true"]);
 });
@@ -278,10 +280,10 @@ test("checkpoint capture retains ordinary numeric configuration while blocking s
   } as unknown as RuntimeHost;
   try {
     const environment = { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8" };
-    const managed = checkpointManagedSecrets(environment, {}, []);
+    const managed = checkpointManagedSecrets(environment, {}, [], "claude-code");
     assert.equal((await captureCheckpointFiles(host, randomUUID(), [], managed, [])).length, 1);
     for (const secrets of [checkpointManagedSecrets({ ...environment, API_TOKEN_ENABLED: "true" }, {}, []),
-      checkpointManagedSecrets(environment, {}, ["8"]),
+      checkpointManagedSecrets(environment, {}, ["8"], "claude-code"),
       checkpointManagedSecrets({}, { "auth.json": JSON.stringify({ token: "true" }) }, [])]) {
       await assert.rejects(captureCheckpointFiles(host, randomUUID(), [], secrets, []), /SECRET_DETECTED/u);
     }
