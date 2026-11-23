@@ -92,7 +92,11 @@ print(json.dumps(files))`;
   for(const file of candidates) {
     const bytes=await host.readWorkspaceFile(`/workspace/${file.path}`,HUMAN_CHECKPOINT_FILE_BYTES);
     if(bytes.length!==file.bytes||checkpointHash(bytes)!==file.sha256) throw new Error("HUMAN_CHECKPOINT_FILE_CHANGED");
-    if(secrets.some(secret=>secret.length>0&&bytes.includes(Buffer.from(secret)))) throw new Error("HUMAN_CHECKPOINT_SECRET_DETECTED");
+    const hitIndex=secrets.findIndex(secret=>secret.length>0&&bytes.includes(Buffer.from(secret)));
+    if(hitIndex>=0) {
+      console.error(`[human-checkpoint] HUMAN_CHECKPOINT_SECRET_DETECTED request=${requestId} secret_index=${hitIndex}`);
+      throw new Error("HUMAN_CHECKPOINT_SECRET_DETECTED");
+    }
     if(files.reduce((total,entry)=>total+entry.bytes,0)+bytes.length>HUMAN_CHECKPOINT_MAX_BYTES) throw new Error("HUMAN_CHECKPOINT_SIZE_LIMIT");
     files.push({path:file.path,mode:file.mode,...await putCheckpointFile(requestId,bytes)});
   }

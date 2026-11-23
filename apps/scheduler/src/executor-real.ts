@@ -1947,7 +1947,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if (semanticState.human) {
     await persistHumanWaitCheckpoint(jobId,semanticState.human,{
       attemptId:attemptId!,host:()=>runner.ensureHost({sandboxId:job.sandbox_id as string}),
-      workspaceFiles,env,processBaseline:checkpointContext?.processBaseline,managedSecrets:[platformToken,gatewayToken,observationalMemoryGatewayToken],
+      workspaceFiles,env,processBaseline:checkpointContext?.processBaseline,managedSecrets:[platformToken,gatewayToken,observationalMemoryGatewayToken],agentCli:provider,
     },ingestSemanticEventObserved);
     return;
   }
