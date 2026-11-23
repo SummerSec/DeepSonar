@@ -43,3 +43,13 @@ test("trial injection contains execution guidance but neither grading answers no
   assert.ok(!JSON.stringify(trial).includes("evaluation-cases.json"));
   assert.ok(!JSON.stringify(trial).includes("KNOWLEDGE_SCOPE_DENIED"));
 });
+
+test("#1219 工具描述要求实际应用后评价，并禁止用任务成败反推知识有效性", async () => {
+  const { PLATFORM_OPERATION_REGISTRY } = await import("../platform-api/operations.js");
+  const record = PLATFORM_OPERATION_REGISTRY.record_knowledge_feedback;
+  assert.match(record.description, /实际使用|real usage/u);
+  assert.match(record.description, /never be inferred from task success/u);
+  for (const operation of ["search_project_knowledge", "read_project_memory"]) {
+    assert.match(PLATFORM_OPERATION_REGISTRY[operation].description, /usage_ref/u, operation);
+  }
+});
