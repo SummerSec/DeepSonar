@@ -34,6 +34,40 @@ test("overdue current requests offer a precise reply; saved or historical reques
   assert.doesNotMatch(historical,/<textarea|<button/);
 });
 
+test("answered blocked requests explain the checkpoint and manual exits without asking for another reply", () => {
+  const html = renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human"
+    canvasId="canvas" onSendMessage={() => {}} continuation={{ ...continuation, status: "answered",
+      checkpoint_status: "blocked", checkpoint_error_code: "HUMAN_CHECKPOINT_SECRET_DETECTED",
+      resume_error_code: "REPAIR_PAUSED" }} />);
+  for (const text of ["回复已保存", "断点不可用", "受保护的凭据", "HUMAN_CHECKPOINT_SECRET_DETECTED",
+    "强制退出", "下达任务", "新任务不会继承这个现场"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /REPAIR_PAUSED|在下方回复|仍可回复|核验通过后|<form|<button/);
+});
+
+test("blocked open requests label the existing reply as save only, and keep diagnostics visible without a message target", () => {
+  const blocked = { ...continuation, checkpoint_status: "blocked" as const, checkpoint_error_code: "HUMAN_CHECKPOINT_EXPIRED" };
+  const renderPanel = (canvasId?: string) => renderToStaticMarkup(<JobHumanRequestPanel request={request()}
+    status="waiting_human" continuation={blocked} canvasId={canvasId} onSendMessage={() => {}} />);
+  const open = renderPanel("canvas");
+  assert.match(open, /现场已过期/);
+  assert.match(open, /HUMAN_CHECKPOINT_EXPIRED/);
+  assert.match(open, /仅保存回复/);
+  assert.doesNotMatch(open, /回复并继续|回复已保存/);
+  const readonly = renderPanel();
+  assert.match(readonly, /断点不可用/);
+  assert.doesNotMatch(readonly, /<form|<button/);
+});
+
+test("missing or unrecognized checkpoint errors still give manual next steps without exposing raw diagnostics", () => {
+  for (const code of [null, "unexpected /workspace/private-path", "PRIVATE_VALUE"]) {
+    const html = renderToStaticMarkup(<HumanContinuationReply canReply={false} canvasId="canvas"
+      continuation={{ ...continuation, status: "answered", checkpoint_status: "blocked", checkpoint_error_code: code }} />);
+    assert.match(html, /断点不可用/);
+    assert.match(html, /下达任务/);
+    assert.doesNotMatch(html, /private-path|PRIVATE_VALUE|核验通过后|<button/);
+  }
+});
+
 function request(overrides: Partial<JobHumanRequest> = {}): JobHumanRequest {
   return {
     event_id: "human-event-1",
