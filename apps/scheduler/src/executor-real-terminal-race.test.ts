@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { agentRuntimeInput, readFrozenResource, call, completionReady, completionDiagnosticEvidence, frozenRuntimeBudget, piRecoveryAllowed, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents, setSharedAssetPublication, sharedAssetPublicationState, sharedAssetControlApp } from "./executor-real-terminal-race.fixture.js";
+import { agentControlSkills, readFrozenResource, call, completionReady, completionDiagnosticEvidence, frozenRuntimeBudget, piRecoveryAllowed, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents, setSharedAssetPublication, sharedAssetPublicationState, sharedAssetControlApp } from "./executor-real-terminal-race.fixture.js";
 import { getAgentCliRuntimeAdapter, resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
@@ -34,7 +34,7 @@ for (const agentCli of ["claude-code", "pi"] as const) {
     const { app, clearCache } = await sharedAssetControlApp();
     try {
       const terminals = await runExecutor(async () => {
-        assert.match(agentRuntimeInput(), /同一有效答案不重复索要/);
+        assert.match(agentControlSkills(), /同一有效答案不重复索要/);
         const response = await app.inject({ method: "POST", url: `/control/v1/jobs/${jobId}/operations/list_shared_assets`,
           headers: { authorization: "Bearer offline-capability", "idempotency-key": randomUUID() },
           payload: { scope: "project", prefix: "task-inputs", limit: 1 } });
