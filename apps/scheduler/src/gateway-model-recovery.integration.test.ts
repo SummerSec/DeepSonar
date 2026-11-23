@@ -229,7 +229,8 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
       headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
     assert.equal(nextAttemptProbe.statusCode, 200, `settled receipt with a newer Attempt: ${nextAttemptProbe.body}`);
     assert.equal(nextAttemptProbe.json().status, "settled");
-    // Two effects claiming the same durable identity are ambiguous, never resolved by recency.
+    // Two effects claiming the same durable identity are ambiguous, never resolved by recency,
+    // and that holds whether or not an active Attempt exists.
     await sql`INSERT INTO job_attempt_effects (attempt_id, job_id, effect_id, effect_kind, step, status,
         resource_identity_json, intent_json, replay_policy)
       SELECT attempt_id, job_id, effect_id || ':duplicate', effect_kind, step + 1, status,
@@ -237,12 +238,7 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
       FROM job_attempt_effects WHERE job_id=${terminalJob.id} AND intent_json->>'gateway_request_id'=${settledId}`;
     const ambiguous = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
       headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
-    assert.equal(ambiguous.json().status, "settled", "an active Attempt keeps its distinct effect scope");
-    await sql`UPDATE job_attempts SET status='failed', phase='terminal', finished_at=now()
-      WHERE job_id=${terminalJob.id} AND status='active'`;
-    const ambiguousHistory = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
-      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
-    assert.equal(ambiguousHistory.json().status, "unknown", "duplicate durable identities are never resolved by recency");
+    assert.equal(ambiguous.json().status, "unknown", "duplicate durable identities are never resolved by recency");
     // A token that is no longer usable keeps its existing refusal.
     await sql`UPDATE job_tokens SET status='revoked', revoked_at=now() WHERE id=${terminalToken.id}`;
     const revokedProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,

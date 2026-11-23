@@ -84,9 +84,10 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
       if (query.includes("FROM job_event_rate_limits")) return [{ job_id: jobId, window_started_at: new Date(),
         progress_count: 0, standard_count: 0, terminal_count: 0 }];
       if (query.startsWith("SELECT e.status, e.settlement_json, l.settlement_status, l.source")) {
-        // #1230: the receipt scope now carries job, an attempt-ownership guard, token and
-        // workload before the request identity, so the request id is the sixth value.
-        return state.effects.filter((entry) => (entry.intent_json as Row)?.gateway_request_id === values[5]).map((effect) => ({
+        // #1230: the receipt is located by durable identity (job, original token, request id,
+        // workload), so the request id is the third value; two rows for one identity stay
+        // visible here because the real query asks for LIMIT 2 to detect that ambiguity.
+        return state.effects.filter((entry) => (entry.intent_json as Row)?.gateway_request_id === values[2]).map((effect) => ({
           ...effect, settlement_status: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.settlement_status,
           source: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.source,
         }));

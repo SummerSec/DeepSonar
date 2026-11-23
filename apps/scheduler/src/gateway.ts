@@ -1386,16 +1386,16 @@ export function registerGateway(app: FastifyInstance): void {
       const receiptPath = /^\/gateway\/_settlement\/([0-9a-f-]{36})$/u.exec(req.url);
       if (req.url.startsWith("/gateway/_settlement/")) {
         if (req.method !== "GET" || !receiptPath) return deny(reply, 400, "Invalid settlement query", "invalid_settlement_query");
-        // #1230: the token's active Attempt is only the admission scope. The receipt must stay
-        // answerable once the Attempt is terminal, because job_tokens carries no attempt_id and
-        // `e.attempt_id = NULL` silently matched nothing, turning a settled request into a 404.
-        // History is keyed by the durable request identity only (Job + original token + request
-        // id + workload) and never re-derives a replay licence: without an active Attempt this
-        // queries one extra row so a duplicate identity is reported as unknown, not guessed.
+        // #1230: job_tokens carries no attempt_id, so the receipt used to be located through the
+        // ACTIVE Attempt. Once that Attempt reached a terminal state the filter became
+        // `e.attempt_id = NULL`, which never matches, so a settled request reported 404 and the
+        // client turned it into a permanent failure. The receipt is now located by its durable
+        // identity only — Job + original token + request id + workload — and two rows claiming
+        // that identity are reported as unknown instead of resolved by recency. Admission,
+        // budget and replay rules still key off the active Attempt and are unchanged.
         const receipts = await sql`SELECT e.status, e.settlement_json, l.settlement_status, l.source
           FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
-          WHERE e.job_id=${jt.job_id} AND (e.attempt_id=${jt.attempt_id ?? null}::uuid
-            OR (${jt.attempt_id ?? null}::uuid IS NULL AND e.attempt_id IN (SELECT id FROM job_attempts WHERE job_id=${jt.job_id})))
+          WHERE e.job_id=${jt.job_id}
           AND e.resource_identity_json->>'job_token_id'=${String(jt.id)}
           AND e.intent_json->>'gateway_request_id'=${receiptPath[1]!}
           AND e.intent_json->>'workload'=${String(jt.workload)}
