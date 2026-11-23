@@ -24,11 +24,13 @@ test("overdue current requests offer a precise reply; saved or historical reques
     continuation={continuation} canvasId="canvas" onSendMessage={()=>{}}/>);
   assert.match(current,/回复并继续/);assert.match(current,/仍可回复此请求/);assert.match(current,/新会话继续/);
   assert.doesNotMatch(current,/打开任务人工消息/);
-  const answered=renderToStaticMarkup(<HumanContinuationReply continuation={{...continuation,status:"answered",
-    resume_error_code:"REPAIR_PAUSED"}} canvasId="canvas" canReply={true}/>);
+  const answered=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human"
+    continuation={{...continuation,status:"answered",resume_error_code:"REPAIR_PAUSED"}} canvasId="canvas" onSendMessage={()=>{}}/>);
   assert.match(answered,/回复已保存/);assert.match(answered,/REPAIR_PAUSED/);assert.doesNotMatch(answered,/<textarea|<button/);
-  const readonly=renderToStaticMarkup(<HumanContinuationReply continuation={continuation} canvasId="canvas" canReply={false}/>);
+  const readonly=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human"
+    continuation={continuation} canvasId="canvas"/>);
   assert.doesNotMatch(readonly,/<textarea|<button/);
+  for (const html of [answered, readonly]) assert.doesNotMatch(html,/在下方回复|仍可回复此请求/);
   const historical=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="failed"
     continuation={continuation} canvasId="canvas" onSendMessage={()=>{}}/>);
   assert.doesNotMatch(historical,/<textarea|<button/);
@@ -159,9 +161,9 @@ test("the same Job waiting on a new Attempt cannot turn its previous Attempt req
   assert.doesNotMatch(html, /<button|<a\s|当前人工请求/);
 });
 
-test("a current request without a task message callback only points to the existing task entry", () => {
+test("a current request without a message callback does not advertise a reply entry", () => {
   const html = renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human" />);
-  assert.match(html, /任务中的人工消息入口/);
+  assert.doesNotMatch(html, /任务中的人工消息入口|在下方回复/);
   assert.doesNotMatch(html, /<button|<a\s|自动恢复|晚回复续做/);
 });
 

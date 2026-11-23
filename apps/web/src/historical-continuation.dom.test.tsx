@@ -82,6 +82,34 @@ test("JobDetail historical continuation respects permission, immutable retries a
   const rejection = (status: number, replyState?: string) => new ApiRequestError({ method: "POST", path: "/jobs/source/continuations",
     status, errorCode: "CONTINUATION_BLOCKED", taskContractFeedback: { reply_state: replyState } as ApiRequestError["taskContractFeedback"] });
   try {
+    await context.test("运行详情事件页将人工请求折叠为纯文本，普通进度仍显示 Markdown 链接", async () => {
+      const markdown = "[示例资料](https://example.invalid/resource)";
+      const events = ["human", "progress"].map((type, index) => ({
+        id: type, job_seq: index + 1, type, created_at: "2026-11-19T00:00:00Z", payload_json: { message: markdown },
+      }));
+      const page = api.jobEventsPage;
+      try {
+        api.jobEventsPage = async () => ({
+          items: events, after: null, next_cursor: null, has_more: false, watermark: "2", live: false,
+        });
+        await mount();
+        const tab = [...dom.window.document.querySelectorAll<HTMLButtonElement>("nav button")]
+          .find(button => button.textContent?.startsWith("事件"));
+        assert.ok(tab);
+        await act(async () => tab.click());
+        const rows = [...dom.window.document.querySelectorAll("ol > li")];
+        const human = rows.find(row => row.textContent?.includes("human"));
+        const progress = rows.find(row => row.textContent?.includes("progress"));
+        assert.ok(human && progress);
+        const summary = human.querySelector("details:not([open]) > summary");
+        assert.equal(summary?.textContent, "查看请求摘要（未经核验）");
+        assert.equal(human.querySelector("details > blockquote")?.textContent, markdown);
+        assert.equal(human.querySelector("a"), null);
+        assert.equal(progress.querySelector("a")?.getAttribute("href"), "https://example.invalid/resource");
+      } finally {
+        api.jobEventsPage = page;
+      }
+    });
     await context.test("ordinary operator submits from failed JobDetail and follows the new Job", async () => {
       await mount(); await type("Original reference"); await submit();
       assert.equal(calls.at(-1)?.jobId, jobId);

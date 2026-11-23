@@ -7,6 +7,7 @@ import { LiveStream } from "./LiveStream";
 import { KnowledgeCloseoutDetails } from "./KnowledgeCloseoutDetails";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
+import { HumanEventSummary } from "./HumanEventSummary";
 import { HumanMessageList } from "./HumanMessageList";
 import { SEVERITY_COLOR, STATUS_COLOR, VERIFICATION_META } from "./semantics";
 
@@ -374,9 +375,8 @@ export function Sidebar({
                         {e.type}
                       </span>
                     </div>
-                    {e.type === "human" ? <details><summary>查看请求原文（未经核验）</summary>
-                      <blockquote className="whitespace-pre-wrap break-words">{summarize(e.payload_json)}</blockquote>
-                    </details> : <MarkdownView markdown={summarize(e.payload_json)} controls={false} scrollable={false} className="mt-0.5 text-zinc-400" />}
+                    {e.type === "human" ? <HumanEventSummary text={summarize(e.payload_json)} />
+                      : <MarkdownView markdown={summarize(e.payload_json)} controls={false} scrollable={false} className="mt-0.5 text-zinc-400" />}
                   </li>
                 ))}
               </ol>
