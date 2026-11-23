@@ -84,7 +84,9 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
       if (query.includes("FROM job_event_rate_limits")) return [{ job_id: jobId, window_started_at: new Date(),
         progress_count: 0, standard_count: 0, terminal_count: 0 }];
       if (query.startsWith("SELECT e.status, e.settlement_json, l.settlement_status, l.source")) {
-        return state.effects.filter((entry) => (entry.intent_json as Row)?.gateway_request_id === values[3]).map((effect) => ({
+        // #1230: the receipt scope now carries job, an attempt-ownership guard, token and
+        // workload before the request identity, so the request id is the sixth value.
+        return state.effects.filter((entry) => (entry.intent_json as Row)?.gateway_request_id === values[5]).map((effect) => ({
           ...effect, settlement_status: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.settlement_status,
           source: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.source,
         }));
@@ -121,12 +123,6 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
       if (query.startsWith("SELECT job_id, effect_kind, status FROM job_attempt_effects")
         || query.startsWith("SELECT status, settlement_json FROM job_attempt_effects")) {
         return state.effects.filter((effect) => effect.attempt_id === values[0] && effect.effect_id === values[1]);
-      }
-      // #1230: the receipt query resolves the Attempt through job ownership, so the fake
-      // store matches the request identity (token + gateway_request_id) like production does.
-      if (query.startsWith("SELECT e.status, e.settlement_json")) {
-        const [, , , , , requestId] = values;
-        return state.effects.filter((effect) => (effect.intent_json as Row)?.gateway_request_id === requestId);
       }
       if (query.startsWith("SELECT id FROM job_usage_ledger")
         || query.startsWith("SELECT job_id, project_id, attempt_id, job_token_id")) {
