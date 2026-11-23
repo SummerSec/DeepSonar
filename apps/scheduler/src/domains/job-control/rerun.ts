@@ -396,6 +396,34 @@ export async function requeueJob(
       const admission=await readRepairRequeueAdmission(tx,jobId);
       if(admission.blocker) return {kind:"not_resumable" as const,status,provenance,
         error_code:admission.blocker.code,reason:admission.blocker.reason};
+      const [request] = await tx`SELECT id FROM human_requests WHERE job_id=${jobId}
+        AND status IN ('open','answered') AND resumed_at IS NULL
+        ORDER BY revision DESC, created_at DESC, id DESC LIMIT 1`;
+      if (request) {
+        const { blocker, request: currentRequest } = await humanContinuationAdmission(tx, job, String(request.id));
+        const previousError = currentRequest?.resume_error_code;
+        if (!blocker && previousError) {
+          if (previousError === "SNAPSHOT_STALE") return { kind: "not_resumable" as const, status, provenance,
+            error_code: previousError, reason: "调度器上次检查发现任务配置与保存的现场不一致。请核对配置后查看下一次检查结果。" };
+          if (previousError === "HUMAN_CONTINUATION_AUTHORIZATION_BLOCKED") return { kind: "not_resumable" as const, status, provenance,
+            error_code: previousError, reason: "调度器上次未能通过续做授权检查。请核对目标授权后查看下一次检查结果。" };
+          return { kind: "not_resumable" as const, status, provenance, error_code: "HUMAN_CONTINUATION_BLOCKED",
+            reason: "调度器上次尝试续做时受阻。请查看当前人工请求记录和下一次检查结果。" };
+        }
+        const reasons: Record<string, string> = {
+          HUMAN_REPLY_REQUIRED: "请回复当前人工请求。",
+          HUMAN_CHECKPOINT_SECRET_DETECTED: "保存现场时命中凭据保护规则，无法从此处继续。请取消该任务或新建任务。",
+          HUMAN_CHECKPOINT_EXPIRED: "保存的现场已过期，请取消该任务或新建任务。",
+          HUMAN_CHECKPOINT_NOT_READY: "现场仍未就绪，请查看人工请求中的断点状态。",
+          HUMAN_CONTINUATION_USAGE_UNKNOWN: "模型用量仍待核对，结清后可继续。",
+          HUMAN_CONTINUATION_RESOURCES_PENDING: "任务仍占用设备，等待租约释放后可继续。",
+          EXECUTION_TIME_EXHAUSTED: "无法确认还有可用执行时间，请核对任务的计时记录和剩余预算。",
+        };
+        return { kind: "not_resumable" as const, status, provenance,
+          error_code: blocker ?? "HUMAN_CONTINUATION_PENDING",
+          reason: blocker ? reasons[blocker] ?? "无法恢复已保存的现场，请根据错误码核对当前人工请求。"
+            : "回复已保存，正在等待调度器从原现场继续。" };
+      }
     }
     const [previousContinuation]=!humanRequestId&&['failed','timeout','orphan'].includes(status)
       ?await tx`SELECT id FROM human_requests WHERE job_id=${jobId} AND resumed_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1`:[];
