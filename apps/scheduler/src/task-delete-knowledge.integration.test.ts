@@ -40,7 +40,7 @@ if (testDatabaseUrl) {
     try {
       const token = generateToken();
       await sql`INSERT INTO api_tokens(name,token_prefix,token_hash,scopes)
-        VALUES ('task delete',${token.prefix},${token.hash},${["tasks:write", "tasks:read"]})`;
+        VALUES ('task delete',${token.prefix},${token.hash},${["tasks:write", "tasks:read", "jobs:control"]})`;
       const headers = { authorization: `Bearer ${token.plaintext}` };
       await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'task-delete-knowledge')`;
 
