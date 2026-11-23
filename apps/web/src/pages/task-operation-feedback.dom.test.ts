@@ -178,7 +178,7 @@ for (const transport of ["", "hdc", "adb"] as const) {
     context.mock.method(api, "settings", async () => ({ effective_finding_protocol: null }));
     const env = await setup(context, [{ id: "A", name: "device project", status: "active" } as Project]);
     const requests: Parameters<typeof api.createTask>[1][] = [];
-    context.mock.method(api, "createTask", async (_projectId, payload) => {
+    context.mock.method(api, "createTask", async (_projectId: string, payload: Parameters<typeof api.createTask>[1]) => {
       requests.push(payload);
       throw new Error("synthetic create failure");
     });
