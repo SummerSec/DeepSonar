@@ -66,7 +66,7 @@ Worker-plane 清理只向 SQL lease 记录的 owner 发起 destroy，然后使�
 
 新的 `request_human` 必须通过严格 `guidance` 契约，字段与长度范围以[接口规范](architecture/09-interface-specs.md#可行动人工请求2026-11-09)为准。Scheduler 将完整请求内容保存在 human 节点 `body_json`；Canvas L0 保持有界摘要，reason 在 L0 最多 500 字符，详情按需读取完整 L1 节点。任何请求节点缺少 guidance（包括历史请求或自动生成的平台等待项）时，Web 明确说明缺少处理指引，不自动迁移、回填或从 reason 猜测建议。
 
-待办和回复界面显示具体动作、回复方式/选项及回复后的业务计划。Hub 动态提示、固定 Control Skill 与内置角色示例也遵循同一指导要求；凭据只指向现有安全配置/授权路径，不能让用户贴入聊天，不得捏造配置入口。Job 列表仅为 `waiting_human` 附加由 `readCompletionExecutionState` 得到的 Scheduler 当前投影，使用有界读取；同 Job 的 human 节点与等待投影合为一个人工待办，独立 unknown effect 对账仍单独显示并保持优先级。
+待办和回复界面以折叠的纯文本引用展示请求方给出的动作、回复方式和计划。原文只用于核对资料，配置地址和操作按钮不能取自原文。Hub 动态提示、固定 Control Skill 与内置角色示例也遵循同一指导要求；凭据只指向现有安全配置/授权路径，不能让用户贴入聊天，不得捏造配置入口。Job 列表仅为 `waiting_human` 附加由 `readCompletionExecutionState` 得到的 Scheduler 当前投影，使用有界读取；同 Job 的 human 节点与等待投影合为一个人工待办，独立 unknown effect 对账仍单独显示并保持优先级。
 
 人工请求预览最多加载 12 条 L1，选中的回复请求从完整关联索引解析并额外固定加载（合计最多 13 条、4 路并发）。预览排序改变不会丢弃已打开请求的详情；请求版本变化须重新核对 L1，等待中的 Job 缺少关联请求或尚未核对完整内容时禁止发送。
 

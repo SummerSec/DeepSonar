@@ -202,9 +202,9 @@ test("credential and authorization requests are described without inviting secre
   const credential = node({ node_type: "human", body_json: { subject: { type: "platform_blocker", kind: "credential" } } });
   const authorization = node({ node_type: "human", body_json: { subject: { type: "platform_blocker", kind: "authorization" } } });
   assert.equal(humanInterventionKindLabel(credential), "凭据配置");
-  assert.match(humanInterventionSafetyMessage(credential) ?? "", /不要把秘密写进回复或附件/);
+  assert.match(humanInterventionSafetyMessage("credential") ?? "", /没有经平台核验的配置入口/);
   assert.equal(humanInterventionKindLabel(authorization), "授权确认");
-  assert.match(humanInterventionSafetyMessage(authorization) ?? "", /不会替代平台核验或扩大权限/);
+  assert.match(humanInterventionSafetyMessage("authorization") ?? "", /不会替代平台核验或扩大权限/);
 });
 
 test("human detail store caches by updated_at and requires an explicit retry after failure", async () => {

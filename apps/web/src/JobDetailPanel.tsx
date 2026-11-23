@@ -12,6 +12,7 @@ import { JobUsageLedgerView } from "./UsageLedgerBoard";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
+import { HumanEventSummary } from "./HumanEventSummary";
 import { SearchableMultiSelect } from "./SearchableSelect";
 import { HumanMessageList } from "./HumanMessageList";
 import { JobHumanRequestSection } from "./JobHumanRequestPanel";
@@ -990,11 +991,11 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                             {formatTime(e.created_at)}
                           </span>
                         </div>
-                        <MarkdownView
+                        {e.type === "human" ? <HumanEventSummary text={summarizePayload(e.payload_json ?? {})} /> : <MarkdownView
                           markdown={summarizePayload(e.payload_json ?? {})}
                           controls={false}
                           className="mt-0.5 text-[13px] text-zinc-400"
-                        />
+                        />}
                       </li>
                     ))}
                   </ol>

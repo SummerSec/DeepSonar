@@ -46,7 +46,6 @@ import {
   humanInterventionUiPrefUserKey,
   countPendingHumanInterventions,
   humanInterventionKindLabel,
-  humanInterventionSafetyMessage,
   humanInterventionSubjectKind,
   humanMessageTargetNodeForJobId,
   humanMessageTargetNodeFromContext,
@@ -734,7 +733,6 @@ export function TaskCanvasPage() {
       detailError: item.detailError,
       subjectKind: humanInterventionSubjectKind(item.node),
       subjectLabel: humanInterventionKindLabel(item.node),
-      safetyMessage: humanInterventionSafetyMessage(item.node),
     })),
     reportStale: outcome.report_stale,
   }), [facts, findingsForProjection, humanInterventions, jobs, outcome.report_stale]);

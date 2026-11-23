@@ -62,7 +62,6 @@ export type ActionIntervention = {
   detailError?: string;
   subjectLabel?: string;
   subjectKind?: string | null;
-  safetyMessage?: string | null;
 };
 
 export type TaskActionInput = {
@@ -235,8 +234,8 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
     actions.push({
       id: `human:${item.id}`,
       kind: platformRequest ? "platform_blocker" : "human_decision",
-      title: item.guidance?.question || (item.guidanceStatus === "missing" ? "此请求未提供完整操作指引" : "人工请求等待处理"),
-      reason: item.guidance?.question || "请查看完整请求原因与关联证据",
+      title: "人工请求等待处理",
+      reason: "请核对请求原文与关联证据",
       impact: item.guidance
         ? "回复只写入消息账本；恢复仍须宿主重新准入，Agent 确认与任务完成分别记录"
         : item.guidanceStatus === "missing"
@@ -259,7 +258,7 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
         detailVersionMatches: item.detailVersionMatches === true,
         detailError: item.detailError,
         subjectLabel: item.subjectLabel ?? "人工请求",
-        safetyMessage: item.safetyMessage,
+        subjectKind: item.subjectKind,
       },
     });
   }

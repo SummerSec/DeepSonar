@@ -11,6 +11,7 @@ export function HumanContinuationReply({ continuation, canvasId, canReply }: {
   const submission = useRef<{ id: string; body: string } | null>(null);
   const sendingRef = useRef(false);
   const answered = continuation.status === "answered" || saved;
+  const showReplyForm = canReply && !answered && continuation.status === "open";
   const blocker = continuation.checkpoint_error_code ?? continuation.resume_error_code;
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -31,13 +32,13 @@ export function HumanContinuationReply({ continuation, canvasId, canReply }: {
     } finally { sendingRef.current = false; setSending(false); }
   }
   return <div className="mt-3 text-[12px] leading-5 text-zinc-400">
-    {continuation.overdue_at && <p>回复时间已超过提醒阈值，仍可回复此请求。</p>}
+    {continuation.overdue_at && showReplyForm && <p>回复时间已超过提醒阈值，仍可回复此请求。</p>}
     <p>{continuation.checkpoint_status === "preparing" ? "正在保存进度和释放运行资源。"
       : continuation.checkpoint_status === "ready" ? "进度已保存，将依据保存的进度在新会话继续。"
       : "进度保存未完成，续做已阻塞。"}</p>
     {blocker && <p role="status">{answered ? "回复已保存，续做等待处理：" : "续做等待处理："}{blocker}</p>}
     {answered ? <p role="status">回复已保存。平台核验断点、权限和剩余额度后继续；任务尚未完成。</p>
-      : canReply && continuation.status === "open" && <form onSubmit={submit}>
+      : showReplyForm && <form onSubmit={submit}>
         <label className="mt-3 block">回复人工请求
           <textarea value={body} maxLength={8000} disabled={sending} onChange={event => setBody(event.target.value)}
             className="mt-1 block min-h-24 w-full rounded-lg bg-zinc-950 p-3 text-zinc-200 ring-1 ring-zinc-700"
