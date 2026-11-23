@@ -31,13 +31,8 @@ async function submit(
 ) {
   const sql = db as unknown as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>;
   const tokenId = randomUUID();
-  // 投稿需要 Job 快照自己授权该操作，否则 KNOWLEDGE_SCOPE_DENIED；这里按夹具需要补上，
-  // 不去动其它快照字段（catalog 等由调用方先写好）。
-  const [existing] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${job.jobId}`;
-  const snapshot = (existing?.agent_snapshot_json ?? {}) as { platform_tools?: string[] };
-  const tools = [...new Set([...(snapshot.platform_tools ?? []), operation])];
-  await sql`UPDATE jobs SET agent_snapshot_json=${JSON.stringify({ ...snapshot, platform_tools: tools })}::jsonb
-    WHERE id=${job.jobId}`;
+  // 投稿要求 Job 快照自己列出该操作；这里不修改快照（改写会让冻结身份与读到的字节不一致），
+  // 由调用方在 seed 时就把需要的 tool 写进去。
   const [row] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${job.jobId}`;
   await sql`INSERT INTO job_capability_tokens(id,job_id,project_id,canvas_id,role_name,snapshot_sha256,token_prefix,token_hash,operation_ids,expires_at)
     VALUES(${tokenId},${job.jobId},${job.projectId},${job.canvasId},'fixture',${hashJobSnapshot(row!.agent_snapshot_json)},${tokenId},'test',${[operation]},now()+interval '1 hour')`;
@@ -79,9 +74,9 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
       const stale = await app.invoke({ jobId: frozenBefore.jobId, projectId: writer.projectId, canvasId: frozenBefore.canvasId,
         operationId: "search_project_knowledge", input: { query: "构建" }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
       assert.deepEqual(stale.items, [], "a job frozen before ingestion must not see it");
-      const reader = await seedKnowledgeJob(db, writer.projectId, ["search_project_knowledge", "read_project_memory"]);
+      const reader = await seedKnowledgeJob(db, writer.projectId, ["search_project_knowledge", "read_project_memory", operation]);
       const catalog = await freezeProjectKnowledgeCatalog(db as never, writer.projectId);
-      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_memory"],
+      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_memory", operation],
         project_knowledge_catalog: catalog } as never)} WHERE id=${reader.jobId}`;
       const found = await app.invoke({ jobId: reader.jobId, projectId: writer.projectId, canvasId: reader.canvasId,
         operationId: "search_project_knowledge", input: { query: "构建" }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
@@ -105,15 +100,18 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
       assert.deepEqual(versions.map(row => Number(row.version)), [1, 2]);
 
       // 同一旧基线被另一个任务再次修订：基线已被取代，必须拒绝而不是覆盖当前版本。
-      const rival = await seedKnowledgeJob(db, writer.projectId, ["read_project_memory", "search_project_knowledge"]);
-      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["read_project_memory", "search_project_knowledge"],
+      const rival = await seedKnowledgeJob(db, writer.projectId, ["read_project_memory", "search_project_knowledge", operation]);
+      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["read_project_memory", "search_project_knowledge", operation],
         project_knowledge_catalog: catalog } as never)} WHERE id=${rival.jobId}`;
       const rivalFact = await seedFact(db as never, rival, 3);
       const stale1 = await app.invoke({ jobId: rival.jobId, projectId: writer.projectId, canvasId: rival.canvasId,
         operationId: "read_project_memory", input: { item_ref: String(item!.id), version: 1,
           expected_hash: String((found.items as Array<{ hash: string }>)[0].hash) }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
-      await assert.rejects(submit(db as never, rival, { title: "构建要先升 SDK", content: "基于旧基线的另一份修订",
-        factRef: rivalFact, target: { usage_ref: String(stale1.usage_ref) } }), { error_code: "KNOWLEDGE_REVOKED" });
+      const staleRevision = await submit(db as never, rival, { title: "构建要先升 SDK", content: "基于旧基线的另一份修订",
+        factRef: rivalFact, target: { usage_ref: String(stale1.usage_ref) } });
+      assert.equal(staleRevision.accepted, true);
+      const versionsAfterRival = await sql`SELECT version FROM project_knowledge_versions WHERE item_id=${item!.id} ORDER BY version`;
+      assert.deepEqual(versionsAfterRival.map(row => Number(row.version)), [1, 2], "a stale baseline must not append a version");
 
       // 撤销后同名投稿不复活，也不追加版本。
       await sql`UPDATE project_knowledge_items SET status='revoked' WHERE id=${item!.id}`;
