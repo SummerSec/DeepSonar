@@ -91,7 +91,9 @@ structured 模式恢复验证后的业务文件、原问题、用户回复和有
 
 断点封存失败或已过期时，回复再正确也无法从原现场继续。这类 Job 不应该永久停在 `waiting_human`，因此 `POST /jobs/:id/rerun-current` 增加显式声明 `{abandon_checkpoint:true}`：
 
-- 只在 `waiting_human` 且当前人工请求的 `checkpoint_status` **不是** `ready` 时生效；关闭该请求并记 `close_reason=abandoned_checkpoint`，随后同 Job 以新 Attempt、按当前配置重冻快照重新执行。
+- 只在 `waiting_human` 且**当前 Attempt** 的人工请求已进入明确的失败终态（`checkpoint_status=blocked` 且带错误码）时生效；`preparing` 可能仍在保存、`ready` 本就可用，两者都拒绝。
+- 拒绝是只读的：所有校验（快照解析、目标授权、预算、修复准入）都在关请求之前完成，任何拒绝都不改人工请求、Job、Attempt 或审计历史；只有全部通过后，才与随后的入队写入处于同一事务，失败整体回滚。
+- 非 `waiting_human` 状态下该字段被忽略，不会悄悄变成普通重跑，也不会记成「已放弃」；响应里的 `abandoned_checkpoint` 只在真的关闭了请求时为 `true`。
 - 现场仍为 `ready`、或没有可放弃的请求时返回 409 `CHECKPOINT_ABANDON_NOT_APPLICABLE`，不允许把可续做的现场当作不可用丢掉。
 - 不传该字段时行为完全不变（继续报真实断点原因），也不放宽凭据保护：命中受管凭据的断点仍然不可恢复，只能取消任务或新建任务。
 - 不恢复原生 Pi/Claude 会话，仍按「新会话 + 保存现场」边界处理；放弃现场只意味着不继承旧现场，不意味着恢复旧进程。

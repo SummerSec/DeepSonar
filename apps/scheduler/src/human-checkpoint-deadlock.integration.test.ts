@@ -164,6 +164,27 @@ if (testDatabaseUrl) {
       const [jobAbandoned] = await sql`SELECT status FROM jobs WHERE id = ${rerunAnswered.jobId}`;
       assert.equal(jobAbandoned.status, "pending");
 
+      // 断点仍在保存（preparing）时同样不算不可恢复，拒绝且不改状态。
+      const preparing = await insertWaitingJob("answered");
+      await sql`UPDATE human_requests SET checkpoint_status='preparing', checkpoint_error_code=NULL
+        WHERE id=${preparing.requestId}`;
+      const preparingRefused = await call(preparing.jobId, "rerun-current", { abandon_checkpoint: true });
+      assert.equal(preparingRefused.statusCode, 409, preparingRefused.body);
+      assert.equal(preparingRefused.json().error_code, "CHECKPOINT_ABANDON_NOT_APPLICABLE");
+      const [preparingAfter] = await sql`SELECT status, checkpoint_status FROM human_requests WHERE id=${preparing.requestId}`;
+      assert.deepEqual({ status: preparingAfter.status, checkpoint_status: preparingAfter.checkpoint_status },
+        { status: "answered", checkpoint_status: "preparing" });
+
+      // 断点已失败但不是当前 Attempt 的请求：保守拒绝，不改状态。
+      const staleAttempt = await insertWaitingJob("answered");
+      await sql`INSERT INTO job_attempts (id, job_id, attempt_no, status, phase)
+        VALUES (${randomUUID()}, ${staleAttempt.jobId}, 2, 'active', 'agent.suspended')`;
+      const staleRefused = await call(staleAttempt.jobId, "rerun-current", { abandon_checkpoint: true });
+      assert.equal(staleRefused.statusCode, 409, staleRefused.body);
+      assert.equal(staleRefused.json().error_code, "CHECKPOINT_ABANDON_NOT_APPLICABLE");
+      const [staleAfter] = await sql`SELECT status FROM human_requests WHERE id=${staleAttempt.requestId}`;
+      assert.equal(staleAfter.status, "answered");
+
       // 现场仍可用时不允许放弃，避免把可续做的现场当作不可用丢掉。
       const usable = await insertWaitingJob("answered");
       await sql`UPDATE human_requests SET checkpoint_status='ready', checkpoint_error_code=NULL,

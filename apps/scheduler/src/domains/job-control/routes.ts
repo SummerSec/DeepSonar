@@ -942,13 +942,14 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         status: "pending",
         execution: "current_snapshot",
         snapshot_refreshed: true,
-        ...(abandonCheckpoint ? { abandoned_checkpoint: true } : {}),
+        ...(result.abandoned_checkpoint ? { abandoned_checkpoint: true } : {}),
       },
     });
     return {
       ...result.job,
       execution: "current_snapshot",
       snapshot_refreshed: true,
+      abandoned_checkpoint: result.abandoned_checkpoint,
       provenance: result.provenance,
       message: "已按当前配置重冻快照并重新入队；画布与历史 Attempt/effect 保持不变",
     };
