@@ -875,7 +875,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   执行账本
                 </div>
                 <ExecutionLedgerView detail={detail} />
-                <DeviceBindingView binding={detail.device_binding} attempts={detail.attempts} />
+                <DeviceBindingView binding={detail.device_binding} />
                 <RuntimeProcessEvidenceView rows={detail.process_diagnostics} />
               </section>
 

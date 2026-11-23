@@ -19,8 +19,8 @@ const unbound: DeviceBinding = {
 };
 
 test("未绑定、未领取、角色不适用与缺失诊断分别呈现", () => {
-  const render = (binding?: DeviceBinding) => renderToStaticMarkup(createElement(DeviceBindingView, { binding, attempts: [] }));
-  assert.match(panel, /DeviceBindingView binding=\{detail.device_binding\} attempts=\{detail.attempts\}/);
+  const render = (binding?: DeviceBinding) => renderToStaticMarkup(createElement(DeviceBindingView, { binding }));
+  assert.match(panel, /<DeviceBindingView binding=\{detail.device_binding\} \/>/);
   assert.equal(render(), "");
   assert.match(render(unbound), /未绑定设备（未声明需求）/);
   const declared = { ...unbound, state: "not_attempted" as const, canvas_requirement: { transport: "hdc" } };
@@ -31,7 +31,7 @@ test("未绑定、未领取、角色不适用与缺失诊断分别呈现", () =>
   assert.match(render({ ...frozen, state: "not_applying" }), /当前角色无需设备/);
 });
 
-test("执行错误按 ID 对齐，截断的租约列表不改变历史执行的分档", () => {
+test("设备诊断只展示分类原因，截断的租约列表不改变历史分档", () => {
   const binding: DeviceBinding = {
     ...unbound, snapshot_requirement: { transport: "hdc" }, role_matched: true,
     state: "attempted_no_lease", attempts_truncated: true, leases_truncated: true, lease_count: 33,
@@ -43,13 +43,15 @@ test("执行错误按 ID 对齐，截断的租约列表不改变历史执行的�
     ],
     leases: [{ attempt_id: null, device_key: "emulator", rig_id: "lab", state: "released" }],
   };
-  const html = renderToStaticMarkup(createElement(DeviceBindingView, { binding,
-    attempts: [{ id: "c", error: "资产准备错误" }, { id: "b", error: "设备申请未获授权" }],
-  }));
+  const props = { binding, attempts: [
+    { id: "c", error: "资产准备错误" },
+    { id: "b", error: "DatabaseError: INTERNAL_DB_DIAGNOSTIC" },
+  ] };
+  const html = renderToStaticMarkup(createElement(DeviceBindingView, props));
   assert.match(html, /<summary[^>]*>设备绑定 · 本次执行暂无租约记录/);
   assert.match(html, /第 3 次执行 · 未记录租约申请结果/);
-  assert.match(html, /第 2 次执行 · 设备租约申请失败[\s\S]*?设备申请未获授权/);
-  assert.doesNotMatch(html, /资产准备错误/);
+  assert.match(html, /第 2 次执行 · 设备租约申请失败<\/strong><p>申请被拒<\/p>/);
+  assert.doesNotMatch(html, /资产准备错误|DatabaseError|INTERNAL_DB_DIAGNOSTIC/);
   assert.match(html, /第 1 次执行 · 已记录租约，连接未验证/);
   assert.match(html, /执行归属未知 · lab \/ emulator · 已释放/);
   assert.match(html, /最近 4 次执行/);

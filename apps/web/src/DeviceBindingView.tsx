@@ -1,4 +1,3 @@
-import type { JobAttemptSummary } from "./api";
 import { leaseStateLabel } from "./devices";
 
 const labels = {
@@ -32,10 +31,7 @@ function bindingLabel(state: Verdict["state"], binding: DeviceBinding) {
   return labels[state];
 }
 
-export function DeviceBindingView({ binding, attempts }: {
-  binding?: DeviceBinding;
-  attempts: ReadonlyArray<Pick<JobAttemptSummary, "id" | "error">>;
-}) {
+export function DeviceBindingView({ binding }: { binding?: DeviceBinding }) {
   if (!binding) return null;
   const attemptNumbers = new Map(binding.attempts.map(row => [row.attempt_id, row.attempt_no]));
   return (
@@ -43,16 +39,12 @@ export function DeviceBindingView({ binding, attempts }: {
       <summary className="cursor-pointer">设备绑定 · {bindingLabel(binding.state, binding)}</summary>
       {binding.attempts.length === 0 && <p className="mt-2">{binding.reason}</p>}
       <ol className="mt-2 space-y-2">
-        {binding.attempts.map(row => {
-          const error = row.state === "acquire_failed" && attempts.find(attempt => attempt.id === row.attempt_id)?.error;
-          return (
-            <li key={row.attempt_id} className="break-words">
-              <strong>第 {row.attempt_no ?? "?"} 次执行 · {bindingLabel(row.state, binding)}</strong>
-              <p>{row.reason}</p>
-              {error && <p>{error}</p>}
-            </li>
-          );
-        })}
+        {binding.attempts.map(row => (
+          <li key={row.attempt_id} className="break-words">
+            <strong>第 {row.attempt_no ?? "?"} 次执行 · {bindingLabel(row.state, binding)}</strong>
+            <p>{row.reason}</p>
+          </li>
+        ))}
       </ol>
       {binding.attempts_truncated && <p>仅显示最近 {binding.attempts.length} 次执行的诊断。</p>}
       {binding.leases.length > 0 && <ul className="mt-2 space-y-1">
