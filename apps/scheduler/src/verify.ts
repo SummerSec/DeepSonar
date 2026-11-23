@@ -7,6 +7,8 @@
  */
 import { VerificationEvidence, type VerificationEvidence as VerificationEvidenceType } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
+import { gateVerifyRoundDeviceCapability } from "./domains/device/capability-observe.js";
+import { ensureHumanBlocker, insertEdgeIfAbsent } from "./verify-human-blocker.js";
 import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { planCompletionBlockers } from "./domains/plan-protocol/decision.js";
 import { invalidVerification } from "./control-input.js";
@@ -656,6 +658,17 @@ export async function createVerifyRound(
   const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
     // SAFETY: postgres.js transaction handles have the same tagged-template interface.
     tx as unknown as typeof sql, { projectId: opts.projectId, type: "verify_finding" }, snapshot);
+  // #1179：只有已证实不可用才提前收口；观察失败、空集合、暂忙与未知保持原路径。
+  if (!opts.manualOverride) {
+    const capability = await gateVerifyRoundDeviceCapability(tx, { canvasId: opts.canvasId,
+      roleName: String((runtimeSnapshot as Record<string, unknown>).name ?? "verify_finding") });
+    if (capability.verdict.state === "unavailable") {
+      await settleFindingVerifyByReason(tx, findingId, "missing_device", { extraBody: { capability_state: "unavailable",
+        capability_reason: capability.verdict.reason, device_requirement: capability.requirement } });
+      return null;
+    }
+  }
+
   const priority = fixedPriorityForJob({ type: "verify_finding", purpose: "verify", severity });
 
   let verifyJob: { id: string };
@@ -1666,21 +1679,6 @@ export async function evaluateAnalysisCompleteGate(
 
 // ---------- internals ----------
 
-async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: string) {
-  const existing = await tx`
-    SELECT 1 FROM canvas_edges
-    WHERE canvas_id = ${canvasId} AND from_node_id = ${fromId} AND to_node_id = ${toId} AND edge_type = ${edgeType}
-    LIMIT 1`;
-  if (existing.length > 0) return;
-  await tx`
-    INSERT INTO canvas_edges ${tx({
-      canvas_id: canvasId,
-      from_node_id: fromId,
-      to_node_id: toId,
-      edge_type: edgeType,
-    })}`;
-}
-
 async function finishRound(
   tx: Tx,
   roundId: string,
@@ -1863,51 +1861,6 @@ async function markFindingBelowMinVerifySeverity(
     await tx`
       UPDATE canvas_nodes SET status = 'open', updated_at = now()
       WHERE id = ${finding.node_id as string}`;
-  }
-}
-
-async function ensureHumanBlocker(
-  tx: Tx,
-  canvasId: string,
-  findingId: string,
-  findingNodeId: string | null,
-  body: Record<string, unknown>,
-) {
-  const existing = await tx`
-    SELECT id FROM canvas_nodes
-    WHERE canvas_id = ${canvasId} AND node_type = 'human'
-      AND body_json->>'finding_id' = ${findingId}
-      AND body_json->>'kind' = 'verification_blocker'
-    LIMIT 1`;
-  if (existing.length > 0) return;
-
-  let x = 200;
-  let y = 400;
-  if (findingNodeId) {
-    const [n] = await tx`SELECT x, y FROM canvas_nodes WHERE id = ${findingNodeId}`;
-    if (n) {
-      x = (n.x as number) + 40;
-      y = (n.y as number) + 180;
-    }
-  }
-  const [human] = await tx`
-    INSERT INTO canvas_nodes ${tx({
-      canvas_id: canvasId,
-      job_id: null,
-      node_type: "human",
-      title: `验证阻塞：${String(body.reason ?? "needs_human").slice(0, 80)}`,
-      body_json: {
-        kind: "verification_blocker",
-        finding_id: findingId,
-        ...body,
-      } as never,
-      x,
-      y,
-      status: "open",
-    })}
-    RETURNING id`;
-  if (findingNodeId) {
-    await insertEdgeIfAbsent(tx, canvasId, findingNodeId, human.id as string, "next");
   }
 }
 
