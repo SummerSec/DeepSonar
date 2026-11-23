@@ -80,7 +80,7 @@ usage、effect settlement 和 token counter 在同一事务内写入。账本事
 
 ## 透明传输后的持久确认（#923）
 
-受审 wrapper 每次请求创建 UUID，通过 `x-deepsonar-request-id` 交给 Gateway；该控制头不出站，UUID 登记在原 effect intent。模型终止结果先由 wrapper 持有，只有冻结 Gateway 的 `GET /gateway/_settlement/:id` 返回同 Job/当前 Attempt/token/workload 的 settled 才可提交。pending/not_found 只能有界等待，unknown、查询失败或超时硬失败；never_started 必须来自宿主持久账本，不能从 Provider 文案推断。查询不新增模型请求计数，不绕过 token 失效或终态撤销。
+受审 wrapper 每次请求创建 UUID，通过 `x-deepsonar-request-id` 交给 Gateway；该控制头不出站，UUID 登记在原 effect intent。模型终止结果先由 wrapper 持有，只有冻结 Gateway 的 `GET /gateway/_settlement/:id` 返回同 Job/token/workload（有活动 Attempt 时并入该 Attempt，Attempt 终态后按记录该请求的 Attempt 定位）的 settled 才可提交。pending/not_found 只能有界等待，unknown、查询失败或超时硬失败；never_started 必须来自宿主持久账本，不能从 Provider 文案推断。查询不新增模型请求计数，不绕过 token 失效或终态撤销。
 
 有限输出预算由受审 wrapper 在请求生成前读取 `_allowance` 的 `remaining_tokens` 提示并显式限制 SDK `options.maxTokens`；SDK 最小输出要求无法满足时明确拒绝。OM 用当前后台 token/活动 Attempt 读取自己的额度；接口也服务 main 生成层但不混用两种 workload。查询不预留、不消耗模型请求配额，pending/unknown 保持拒绝；并发下最终请求仍由 Gateway 锁内复核，不能以旧提示绕过额度。Gateway 只准入或拒绝，不修改原 body。请求流仍有界收全，响应及时透传和旁路观察；范围、限制、回归入口及待验状态见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)与 [ADR 0017](architecture/adr/0017-transparent-gateway-settlement.md)。以下既有本地通过记录属于历史版本，不能作为 #923 最终 SHA 验收。
 

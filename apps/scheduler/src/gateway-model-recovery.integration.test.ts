@@ -203,6 +203,21 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
     const unresolvedHistory = await readEffects(isolatedJob.id);
     assert.equal(unresolvedHistory.length, 2);
     assert.equal(unresolvedHistory.some(e => e.status === "unknown"), true);
+
+    // #1230: the settlement probe must stay answerable while the owning Attempt is terminal,
+    // because the Job can still be running (and the client is inside the same request).
+    spoof = false;
+    const terminalJob = await createJob(), terminalToken = await issue(terminalJob.id);
+    const settledId = randomUUID();
+    assert.equal((await send(terminalToken.plaintext, settledId)).statusCode, 200);
+    await sql`UPDATE job_attempts SET status='failed', phase='terminal', finished_at=now() WHERE id=${terminalJob.attemptId}`;
+    const settledProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(settledProbe.statusCode, 200, `settled receipt after terminal Attempt: ${settledProbe.body}`);
+    assert.equal(settledProbe.json().status, "settled");
+    const unknownProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${randomUUID()}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(unknownProbe.statusCode, 404, "an unknown request id is still not found");
   } finally {
     try { await close(); } finally { await admin.unsafe(`DROP DATABASE "${name}" WITH (FORCE)`); await admin.end({ timeout: 5 }); }
   }
