@@ -45,7 +45,7 @@ export type TaskAction = {
     detailStatus: "loading" | "error" | "loaded";
     detailVersionMatches: boolean;
     subjectLabel: string;
-    safetyMessage?: string | null;
+    subjectKind?: string | null;
   };
 };
 

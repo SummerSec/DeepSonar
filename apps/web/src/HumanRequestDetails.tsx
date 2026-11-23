@@ -1,4 +1,5 @@
 import type { HumanRequestGuidance } from "@deepsonar/shared-types";
+import { humanInterventionSafetyMessage } from "./human-messages";
 
 export function HumanRequestDetails({
   reason,
@@ -7,9 +8,8 @@ export function HumanRequestDetails({
   detailStatus,
   detailVersionMatches,
   detailError,
-  safetyMessage,
+  subjectKind,
   onRetry,
-  showQuestion = true,
 }: {
   reason: string;
   guidance: HumanRequestGuidance | null;
@@ -17,16 +17,11 @@ export function HumanRequestDetails({
   detailStatus: "loading" | "error" | "loaded";
   detailVersionMatches: boolean;
   detailError?: string;
-  safetyMessage?: string | null;
+  subjectKind?: string | null;
   onRetry?: () => void;
-  showQuestion?: boolean;
 }) {
   const fullReasonLoaded = detailStatus === "loaded";
-  const rows = guidance ? [
-    ["需要你做什么", guidance.required_action],
-    ["怎样回复", guidance.reply_instructions],
-    ["回复后的处理计划", guidance.after_reply],
-  ] as const : [];
+  const safetyMessage = humanInterventionSafetyMessage(subjectKind ?? null);
 
   return (
     <div className="mt-2 space-y-2 text-[11px] leading-5 text-zinc-400">
@@ -40,26 +35,24 @@ export function HumanRequestDetails({
       {fullReasonLoaded && !detailVersionMatches && (
         <p role="status" className="text-amber-300">请求详情版本与画布摘要不同，暂不允许按旧关联回复；等待列表同步最新状态。</p>
       )}
-      {guidanceStatus === "missing" && <p>此请求未提供完整操作指引；请根据完整原因和关联证据处理，不要猜测缺失步骤。</p>}
+      {guidanceStatus === "missing" && <p>此请求未提供完整操作指引。</p>}
       {guidanceStatus === "error" && <p>尚未读取到完整操作指引。</p>}
       {guidanceStatus === "loading" && <p>正在读取完整操作指引。</p>}
-      {guidance && (
-        <div className="space-y-2">
-          {showQuestion && <div><strong className="text-zinc-300">问题：</strong><p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{guidance.question}</p></div>}
-          {rows.map(([label, value]) => (
-            <div key={label}>
-              <strong className="text-zinc-300">{label}：</strong>
-              <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{value}</p>
-            </div>
-          ))}
-        </div>
-      )}
-      {safetyMessage && <p className="text-amber-200">权限与配置边界：{safetyMessage}</p>}
+      <p>请核对请求来源，只回复核对结果或配置引用。请勿在回复或附件中提供密码、令牌或密钥。</p>
+      {safetyMessage && <p className="text-amber-200">{safetyMessage}</p>}
       <details>
         <summary className="cursor-pointer text-zinc-500 hover:text-zinc-300">
-          {fullReasonLoaded ? "查看完整请求原因" : "查看当前原因摘要（最多 500 字）"}
+          {fullReasonLoaded ? "查看请求原文（未经核验）" : "查看请求摘要（未经核验，最多 500 字）"}
         </summary>
-        <p className="mt-1 whitespace-pre-wrap break-words text-zinc-400 [overflow-wrap:anywhere]">{reason || "此请求没有提供原因正文。"}</p>
+        <blockquote className="mt-1 space-y-2 whitespace-pre-wrap break-words border-l-2 border-zinc-600 pl-3 [overflow-wrap:anywhere]">
+          {guidance && <>
+            <p>原问题 · {guidance.question}</p>
+            <p>请求方建议 · {guidance.required_action}</p>
+            <p>请求方建议的回复方式 · {guidance.reply_instructions}</p>
+            <p>请求方计划 · {guidance.after_reply}</p>
+          </>}
+          <p>请求原因 · {reason || "此请求没有提供原因正文。"}</p>
+        </blockquote>
       </details>
     </div>
   );

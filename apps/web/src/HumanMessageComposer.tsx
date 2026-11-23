@@ -9,7 +9,7 @@ import {
   humanMessageTargetForNode,
   isReplyableHumanMessageTarget,
   humanInterventionKindLabel,
-  humanInterventionSafetyMessage,
+  humanInterventionSubjectKind,
   type HumanInterventionItem,
   type HumanMessageJobRef,
 } from "./human-messages";
@@ -149,7 +149,8 @@ export function HumanMessageComposer({
                 detailStatus={canvasDetailFailed ? "error" : showCurrentRequest ? request.status : intervention?.detailStatus ?? "loading"}
                 detailVersionMatches={showCurrentRequest ? request.status === "loaded" && (!intervention || intervention.detailVersionMatches === true) : intervention?.detailVersionMatches === true}
                 detailError={canvasDetailFailed ? intervention.detailError : showCurrentRequest ? request.error : intervention?.detailError}
-                safetyMessage={intervention ? humanInterventionSafetyMessage(intervention.node) : null}
+                subjectKind={currentPayload ? (currentPayload.subject?.type === "platform_blocker" ? currentPayload.subject.kind : null)
+                  : intervention ? humanInterventionSubjectKind(intervention.node) : null}
                 onRetry={showCurrentRequest ? retryRequest : onRetryIntervention}
               />
               <p className="mt-2 text-[10px] leading-5 text-zinc-500">

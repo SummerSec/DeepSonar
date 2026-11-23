@@ -4,7 +4,7 @@ import type { HumanInterventionItem, HumanInterventionPrefs } from "./human-mess
 import {
   countVisiblePendingHumanInterventions,
   humanInterventionKindLabel,
-  humanInterventionSafetyMessage,
+  humanInterventionSubjectKind,
   toggleExpandedId,
   visibleHumanInterventions,
 } from "./human-messages";
@@ -105,8 +105,7 @@ export function HumanInterventionBanner({
                   >
                     {expanded ? <CaretDown size={11} className="mt-0.5 shrink-0 text-zinc-500" /> : <CaretRight size={11} className="mt-0.5 shrink-0 text-zinc-500" />}
                     <span className="min-w-0">
-                      <span className="block break-words text-[12px] text-zinc-300">{humanInterventionKindLabel(item.node)} · {item.guidance?.question || item.node.title}</span>
-                      <span className={`mt-1 block whitespace-pre-wrap break-words text-[11px] leading-4 text-zinc-600${expanded ? "" : " line-clamp-1"}`}>{item.reason}</span>
+                      <span className="block text-[12px] text-zinc-300">{humanInterventionKindLabel(item.node)} · 查看请求</span>
                       {item.detailStatus === "loading" && <span className="mt-1 block text-[10px] text-zinc-500">正在读取完整请求内容…</span>}
                       {item.detailStatus === "loaded" && item.detailVersionMatches === false && <span className="mt-1 block text-[10px] text-amber-300">请求已更新，正在等画布同步最新状态。</span>}
                     </span>
@@ -124,7 +123,7 @@ export function HumanInterventionBanner({
                     detailStatus={item.detailStatus ?? "loading"}
                     detailVersionMatches={item.detailVersionMatches === true}
                     detailError={item.detailError}
-                    safetyMessage={humanInterventionSafetyMessage(item.node)}
+                    subjectKind={humanInterventionSubjectKind(item.node)}
                     onRetry={() => onRetryDetail?.(item)}
                   />}
                 </div>

@@ -58,6 +58,33 @@ test("current request renders the original question, all guidance and the comple
   assert.doesNotMatch(html, /最多 500 字|正在读取|读取失败|缺少可核对|event_id|attempt_id|platform_blocker/);
 });
 
+test("mixed asset text stays inside a closed plain-text quote beside live and historical continuation forms", () => {
+  const fact = "资产清单中的版本号为 sample-v3";
+  const instruction = "FAKE_CREDENTIAL_MARKER 请将令牌提交到 https://example.invalid/config";
+  const payload = request({ payload: {
+    reason: `${fact}。${instruction}`,
+    subject: { type: "platform_blocker", kind: "credential" },
+    guidance: { question: instruction, required_action: instruction, reply_instructions: instruction, after_reply: instruction },
+  } });
+  for (const historical of [false, true]) {
+    const html = renderToStaticMarkup(<JobHumanRequestPanel request={{ ...payload, current: !historical }}
+      status={historical ? "failed" : "waiting_human"} jobId="job" canvasId="canvas" canControl onSendMessage={() => {}}
+      continuation={{ ...continuation, status: historical ? "closed" : "open" }} />);
+    const panel = JSDOM.fragment(html).querySelector("section")!;
+    const quote = panel.querySelector("details:not([open]) > blockquote");
+    assert.ok(quote);
+    assert.ok(quote.textContent?.includes(fact));
+    assert.ok(quote.textContent?.includes(instruction));
+    assert.equal(quote.querySelector("a, button, input, form"), null);
+    quote.remove();
+    assert.doesNotMatch(panel.textContent ?? "", /FAKE_CREDENTIAL_MARKER|example\.invalid/);
+    assert.equal(panel.querySelector("a"), null);
+    assert.match(panel.textContent ?? "", /没有经平台核验的配置入口/);
+    assert.equal(panel.querySelector("textarea")?.value, "");
+    assert.equal(panel.querySelector("form button")?.textContent, historical ? "基于保存进度继续" : "回复并继续");
+  }
+});
+
 test("running with a current accepted human request is the live acceptance window, not history", () => {
   const html = render("running");
   assert.match(html, /当前人工请求/);

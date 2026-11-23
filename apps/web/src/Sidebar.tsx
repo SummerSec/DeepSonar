@@ -128,7 +128,7 @@ export function Sidebar({
   const forceExit = async () => {
     if (!node.job_id || !canForceExit) return;
     if (!await confirm({
-      title: `强制退出「${node.title}」对应的 Job？`,
+      title: node.node_type === "human" ? "强制退出此人工请求对应的 Job？" : `强制退出「${node.title}」对应的 Job？`,
       description: "将立即取消调度、回收沙箱并标记为 cancelled，当前执行不可恢复。",
       confirmLabel: "强制退出",
       tone: "danger",
@@ -167,7 +167,7 @@ export function Sidebar({
             )}
           </div>
           <h2 className="mt-1 break-words text-[16px] font-semibold leading-snug text-zinc-100">
-            {node.title}
+            {node.node_type === "human" ? "人工请求" : node.title}
           </h2>
           {forceMsg && (
             <div className={`mt-1.5 break-words font-mono text-[11px] ${forceMsg === "已强制退出" ? "text-acc-300" : "text-red-300"}`}>
@@ -307,7 +307,11 @@ export function Sidebar({
                   <p className="broadcast-sidebar-note">“已注入 Agent 会话”仅表示传输完成，不表示 Agent 已阅读或处理。</p>
                 </section>
               )}
-              {Boolean(node.body_json?.severity) && (
+              {node.node_type === "human" && <details className="mb-3">
+                <summary>查看节点原文（未经核验）</summary>
+                <blockquote className="whitespace-pre-wrap break-words">{node.title}{"\n"}{JSON.stringify(body, null, 2)}</blockquote>
+              </details>}
+              {node.node_type !== "human" && Boolean(node.body_json?.severity) && (
                 <div className="mb-2 flex items-center gap-2 rounded-lg border border-ink-800 bg-ink-850 px-3 py-2">
                   <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">severity</span>
                   <span
@@ -319,7 +323,7 @@ export function Sidebar({
                 </div>
               )}
               {/* 正文优先：fact.description / finding.summary 等 */}
-              {primaryEntries.length > 0 && (
+              {node.node_type !== "human" && primaryEntries.length > 0 && (
                 <div className="mb-3 divide-y divide-ink-800/70 rounded-lg border border-ink-800/80 bg-ink-900/40 px-3">
                   {primaryEntries.map(([k, v]) => (
                     <Field key={k} k={k} v={typeof v === "string" ? v : JSON.stringify(v, null, 2)} />
@@ -327,11 +331,11 @@ export function Sidebar({
                 </div>
               )}
               <div className="divide-y divide-ink-800/70">
-                {bodyEntries.map(([k, v]) => (
+                {node.node_type !== "human" && bodyEntries.map(([k, v]) => (
                   <Field key={k} k={k} v={typeof v === "string" ? v : JSON.stringify(v, null, 2)} />
                 ))}
               </div>
-              {primaryEntries.length === 0 && bodyEntries.length === 0 && (
+              {node.node_type !== "human" && primaryEntries.length === 0 && bodyEntries.length === 0 && (
                 <div className="py-6 text-center font-mono text-[13px] text-zinc-600">
                   该节点暂无正文内容
                 </div>
@@ -370,7 +374,9 @@ export function Sidebar({
                         {e.type}
                       </span>
                     </div>
-                    <MarkdownView markdown={summarize(e.payload_json)} controls={false} scrollable={false} className="mt-0.5 text-zinc-400" />
+                    {e.type === "human" ? <details><summary>查看请求原文（未经核验）</summary>
+                      <blockquote className="whitespace-pre-wrap break-words">{summarize(e.payload_json)}</blockquote>
+                    </details> : <MarkdownView markdown={summarize(e.payload_json)} controls={false} scrollable={false} className="mt-0.5 text-zinc-400" />}
                   </li>
                 ))}
               </ol>
