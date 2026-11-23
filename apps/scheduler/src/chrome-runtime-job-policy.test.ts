@@ -97,7 +97,9 @@ test("normal createJob validates the frozen canvas policy before insertion", () 
   assert.ok(insert > guard, "createJob must validate before handing off to the Job insertion primitive");
   assert.match(createJob.slice(0, insert), /resolveAgentSnapshotForJob/);
   assert.match(createJob.slice(0, insert), /freezeAgentSnapshotNetworkPolicy[\s\S]*input\.canvasId/);
-  assert.match(coreSource, /export async function createJob\(input: CreateJobInput\)[\s\S]*?sql\.begin\(\(tx\) => createJobInTransaction\(/);
+  assert.match(coreSource, /export async function createJob\(input: CreateJobInput, task\?: EnsureCanvasInput\)[\s\S]*?sql\.begin\(async \(txRaw\)/);
+  assert.match(coreSource, /if \(!task\) return createJobInTransaction\(tx, input\)/);
+  assert.match(coreSource, /await ensureCanvasForTaskInTransaction\(tx,[\s\S]*?return createJobInTransaction\(tx, \{ \.\.\.input, canvasId, payload \}\)/);
   assert.match(jobCreationSource, /export async function persistPreparedJob[\s\S]*?INSERT INTO jobs/);
   assert.equal(createJob.indexOf("assertFrozenRuntimeImageLocal"), -1);
 });
