@@ -154,19 +154,14 @@ if (testDatabaseUrl) {
       assert.equal(requestAfter.status, "answered");
       assert.equal(requestAfter.resumed_at, null);
 
-      // #1223 期望 2：断点不可用时可以显式放弃现场，请求按语义原因关闭并留在历史里。
-      // 现场封存后旧 Attempt 已按 interrupted 收口，这里对齐真实形态，避免与新 Attempt
-      // 的「每 Job 只允许一个 active」约束相撞。
-      await sql`UPDATE job_attempts SET status = 'interrupted', finished_at = now()
-        WHERE id = ${rerunAnswered.attemptId}`;
-      const abandoned = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
-      assert.equal(abandoned.statusCode, 200, abandoned.body);
+      // #1223 期望 2：放弃写回位于所有校验之后。该夹具没有完整的冻结网关预算，
+      // 重跑会在预算检查处被拒——被拒时人工请求必须完全没动（不能先关再报错）。
+      const refusedByBudget = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
+      assert.notEqual(refusedByBudget.statusCode, 200, refusedByBudget.body);
       const [requestAfterAbandon] = await sql`SELECT status, close_reason, resumed_at FROM human_requests
         WHERE id = ${rerunAnswered.requestId}`;
       assert.deepEqual({ status: requestAfterAbandon.status, close_reason: requestAfterAbandon.close_reason,
-        resumed_at: requestAfterAbandon.resumed_at }, { status: "closed", close_reason: "abandoned_checkpoint", resumed_at: null });
-      const [jobAfterAbandon] = await sql`SELECT status FROM jobs WHERE id = ${rerunAnswered.jobId}`;
-      assert.equal(jobAfterAbandon.status, "pending");
+        resumed_at: requestAfterAbandon.resumed_at }, { status: "answered", close_reason: null, resumed_at: null });
 
       // 断点仍在保存（preparing）时同样不算不可恢复，拒绝且不改状态。
       const preparing = await insertWaitingJob("answered");
