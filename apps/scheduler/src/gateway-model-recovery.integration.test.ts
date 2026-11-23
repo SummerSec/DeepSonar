@@ -218,6 +218,37 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
     const unknownProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${randomUUID()}`,
       headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
     assert.equal(unknownProbe.statusCode, 404, "an unknown request id is still not found");
+    // A later Attempt must not hide the original receipt either: the durable request identity
+    // (Job + original token + request id + workload) is what the probe is scoped to.
+    await sql.begin(async tx => {
+      const database = tx as unknown as typeof sql;
+      await database`SELECT id FROM jobs WHERE id=${terminalJob.id} FOR UPDATE`;
+      await attempts.createAttempt(database, terminalJob.id);
+    });
+    const nextAttemptProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(nextAttemptProbe.statusCode, 200, `settled receipt with a newer Attempt: ${nextAttemptProbe.body}`);
+    assert.equal(nextAttemptProbe.json().status, "settled");
+    // Two effects claiming the same durable identity are ambiguous, never resolved by recency.
+    await sql`INSERT INTO job_attempt_effects (attempt_id, job_id, effect_id, effect_kind, step, status,
+        resource_identity_json, intent_json, replay_policy)
+      SELECT attempt_id, job_id, effect_id || ':duplicate', effect_kind, step + 1, status,
+        resource_identity_json, intent_json, replay_policy
+      FROM job_attempt_effects WHERE job_id=${terminalJob.id} AND intent_json->>'gateway_request_id'=${settledId}`;
+    const ambiguous = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(ambiguous.json().status, "settled", "an active Attempt keeps its distinct effect scope");
+    await sql`UPDATE job_attempts SET status='failed', phase='terminal', finished_at=now()
+      WHERE job_id=${terminalJob.id} AND status='active'`;
+    const ambiguousHistory = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(ambiguousHistory.json().status, "unknown", "duplicate durable identities are never resolved by recency");
+    // A token that is no longer usable keeps its existing refusal.
+    await sql`UPDATE job_tokens SET status='revoked', revoked_at=now() WHERE id=${terminalToken.id}`;
+    const revokedProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(revokedProbe.statusCode, 401, "a revoked token is refused");
+    assert.equal(revokedProbe.json().error.type, "token_inactive");
   } finally {
     try { await close(); } finally { await admin.unsafe(`DROP DATABASE "${name}" WITH (FORCE)`); await admin.end({ timeout: 5 }); }
   }

@@ -1388,17 +1388,21 @@ export function registerGateway(app: FastifyInstance): void {
         if (req.method !== "GET" || !receiptPath) return deny(reply, 400, "Invalid settlement query", "invalid_settlement_query");
         // #1230: the token's active Attempt is only the admission scope. The receipt must stay
         // answerable once the Attempt is terminal, because job_tokens carries no attempt_id and
-        // `e.attempt_id = NULL` silently matched nothing, turning a settled request into a 404
-        // that the client reports as a permanent failure.
-        const [receipt] = await sql`SELECT e.status, e.settlement_json, l.settlement_status, l.source
+        // `e.attempt_id = NULL` silently matched nothing, turning a settled request into a 404.
+        // History is keyed by the durable request identity only (Job + original token + request
+        // id + workload) and never re-derives a replay licence: without an active Attempt this
+        // queries one extra row so a duplicate identity is reported as unknown, not guessed.
+        const receipts = await sql`SELECT e.status, e.settlement_json, l.settlement_status, l.source
           FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
           WHERE e.job_id=${jt.job_id} AND (e.attempt_id=${jt.attempt_id ?? null}::uuid
             OR (${jt.attempt_id ?? null}::uuid IS NULL AND e.attempt_id IN (SELECT id FROM job_attempts WHERE job_id=${jt.job_id})))
           AND e.resource_identity_json->>'job_token_id'=${String(jt.id)}
           AND e.intent_json->>'gateway_request_id'=${receiptPath[1]!}
           AND e.intent_json->>'workload'=${String(jt.workload)}
-          ORDER BY e.created_at DESC LIMIT 1`;
+          ORDER BY e.created_at DESC LIMIT 2`;
         reply.header("cache-control", "no-store");
+        if (receipts.length > 1) return { status: "unknown" };
+        const receipt = receipts[0];
         if (!receipt) {
           const noEffect = jt.attempt_id && await readNoEffectReceipt(sql, { jobId: String(jt.job_id),
             attemptId: String(jt.attempt_id), tokenId: String(jt.id), workload: gatewayWorkload(jt.workload), requestId: receiptPath[1]! });
