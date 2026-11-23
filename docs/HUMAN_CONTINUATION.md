@@ -4,6 +4,12 @@
 > 同步日期：2026-11-21
 > 需求：FR-JOB-008、FR-CTRL-006；决策：[ADR 0022](architecture/adr/0022-human-continuation.md)
 
+### 断点凭据候选的来源（#1223）
+
+封存文件与导入原生历史共用 `checkpointManagedSecrets`。显式 Control、Gateway 与记忆 Gateway 令牌保留完整值。环境变量及 JSON 的顶层 `env.CLAUDE_CODE_MAX_OUTPUT_TOKENS` 是 `prepareClaudeLaunch` 已定义并校验的正整数配置，只有符合该具体路径与类型时才从凭据候选中排除。非法值、嵌套同名字段、数组及其他含凭据词的字段继续受保护，原生文本中的秘密赋值继续解析。
+
+命中时日志仅记录稳定错误码、请求 ID 和集合中的候选序号。文件路径与候选值均由输入决定，相关内容保留在原有受保护范围。文件封存和原生历史导入的数值配置、短凭据负例已接既有 bounded-contexts 与 platform-api Actions。现场历史五次命中的具体来源仍未确认，本次工程回归使用合成值验证。
+
 当前回复与历史续做界面均可展开未经核验的请求原文。保存进度不会将其中的资产说明、配置地址或凭据索取转成平台操作。详见[人工请求展示边界](architecture/10-security-and-trust-boundaries.md#人工断点业务文件权限)。
 
 人工等待超过响应阈值只记 overdue，Job 保持 waiting_human。有权限的用户可在 Job 详情读取完整问题并「回复并继续」。2026-11-11 的两个历史 failed Job 不自动复活，也不据历史回执重放外部效果。此实现不部署现场，不更换用户运行配置。

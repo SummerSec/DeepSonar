@@ -5,18 +5,18 @@ import { humanSnapshotDigest } from "./human-continuation-store.js";
 import { projectJobHumanRequestPayload } from "./job-human-request.js";
 import type { HumanPayload } from "@deepsonar/shared-types";
 import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
-import { collectSecretValues } from "../../credential-secret-projection.js";
+import { collectCheckpointCredentialValues } from "./human-checkpoint-secrets.js";
 import { readAcknowledgedHumanAttachments, restoreAcknowledgedHumanAttachments } from "./human-continuation-inbox.js";
 import { readAcknowledgedHumanHistory } from "./human-continuation-history.js";
 import { captureHumanSession, loadHumanSession } from "./human-checkpoint-session.js";
 
 export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[]) {
   const materialized=Object.values(files).flatMap(config=>{
-    if(typeof config==='string') {try{return collectSecretValues(JSON.parse(config));}catch{/* Native text configuration. */}}
-    return collectSecretValues({config});
+    if(typeof config==='string') {try{return collectCheckpointCredentialValues(JSON.parse(config));}catch{/* Native text configuration. */}}
+    return collectCheckpointCredentialValues({config});
   });
   return [...new Set([...direct.filter((value):value is string=>typeof value==='string'&&value.length>0),
-    ...collectSecretValues(env),...materialized])];
+    ...collectCheckpointCredentialValues(env,["env"]),...materialized])];
 }
 
 export async function prepareHumanCheckpointContext(input:{jobId:string;attemptNo:number;snapshot:unknown;host:RuntimeHost}) {
