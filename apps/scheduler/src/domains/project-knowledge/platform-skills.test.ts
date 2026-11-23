@@ -44,12 +44,19 @@ test("trial injection contains execution guidance but neither grading answers no
   assert.ok(!JSON.stringify(trial).includes("KNOWLEDGE_SCOPE_DENIED"));
 });
 
-test("#1219 工具描述要求实际应用后评价，并禁止用任务成败反推知识有效性", async () => {
+test("#1219 反馈指引与 schema 允许值对齐：不提交 unknown，缺评就是未知", async () => {
   const { PLATFORM_OPERATION_REGISTRY } = await import("../platform-api/operations.js");
-  const record = PLATFORM_OPERATION_REGISTRY.record_knowledge_feedback;
-  assert.match(record.description, /实际使用|real usage/u);
-  assert.match(record.description, /never be inferred from task success/u);
+  // 允许的 outcome 只有这三个；指引里不得出现「提交 unknown」这种会被 schema 拒绝的写法。
+  const allowed = ["success", "failure", "inapplicable"];
+  const record = PLATFORM_OPERATION_REGISTRY.record_knowledge_feedback.description;
+  for (const value of allowed) assert.match(record, new RegExp(value, "u"), value);
+  assert.match(record, /there is no 'unknown' value to submit/u);
+  assert.match(record, /omitting the call is how unknown is recorded/u);
   for (const operation of ["search_project_knowledge", "read_project_memory"]) {
-    assert.match(PLATFORM_OPERATION_REGISTRY[operation].description, /usage_ref/u, operation);
+    const text = PLATFORM_OPERATION_REGISTRY[operation].description;
+    assert.doesNotMatch(text, /submit (an )?unknown|outcome unknown/u, operation);
   }
+  assert.match(PLATFORM_OPERATION_REGISTRY.search_project_knowledge.description, /Searching is not use/u);
+  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_memory.description, /do not call the tool/u);
+  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_memory.description, /usage_ref/u);
 });
