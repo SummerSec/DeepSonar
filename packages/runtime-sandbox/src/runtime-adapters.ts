@@ -593,7 +593,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     return [];
   }
   if (type === "message_start") {
-    // #1141: Pi 1.5.2 对 assistant / user / toolResult 都发 message_start。只有 assistant
+    // #1141: Pi 1.6.0 对 assistant / user / toolResult 都发 message_start。只有 assistant
     // 起始用来打开消息输出基线；其它角色是纯会话边界，没有独立的 DeepSonar 语义事件
     // （工具结果仍由 tool_execution_end 产生）。未覆盖时它们会被兜成 unknown_runtime，
     // 并以原始 type 记成 unrecognized_stream_type，升级后每个 Job 都会刷大量告警。
@@ -724,7 +724,7 @@ async function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessio
 
 const pi = Object.freeze<RuntimeAdapter>({
   id: "pi",
-  version: "1.5.2",
+  version: "1.6.0",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,

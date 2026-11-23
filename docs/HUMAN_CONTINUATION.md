@@ -25,7 +25,7 @@
 
 ## 原生会话受限导入
 
-Scheduler 在旧 Attempt 证据归档后、文件封存前读取该 Attempt 唯一主会话，核对 job、attempt、session、归档 bytes/SHA-256 和冻结快照。仅支持 Pi 1.5.2 的 v3 JSONL 与 Claude 2.1.312 的主会话 JSONL。投影后的内容在原 request 的 checkpoint blob 下保存，精确身份、摘要、能力结果和原因写入原 Attempt 的 state_json.human_session。到期与删除复用原 request 的文件清理。没有新增数据库表或公开 API。
+Scheduler 在旧 Attempt 证据归档后、文件封存前读取该 Attempt 唯一主会话，核对 job、attempt、session、归档 bytes/SHA-256 和冻结快照。仅支持 Pi 1.6.0 的 v3 JSONL 与 Claude 2.1.312 的主会话 JSONL。投影后的内容在原 request 的 checkpoint blob 下保存，精确身份、摘要、能力结果和原因写入原 Attempt 的 state_json.human_session。到期与删除复用原 request 的文件清理。没有新增数据库表或公开 API。
 
 能力矩阵由 runtime-sandbox 的 nativeHumanSessionCapability 拥有。Pi/Claude 为 supported + restricted_conversation，表示可导入符合条件的文字历史。DSH 明确 unsupported + structured，原因是 adapter 没有持久 resume 协议。未核对版本、没有归档、压缩/分支/上下文编辑、OM 记忆状态、格式或摘要不满足条件时记录具体原因并使用 structured。已绑定的导入 blob 缺失、损坏或身份变化则拒绝执行。
 
@@ -39,7 +39,7 @@ Scheduler 在旧 Attempt 证据归档后、文件封存前读取该 Attempt 唯�
 
 ### 固定格式核对与受限范围
 
-Pi 1.5.2 的 `dist/main.js` 按路径打开 `SessionManager.open`，v3 header 的 id 是会话身份。`dist/migrations.js` 会先移动 agent 根目录内的 JSONL，因此导入和原生夹具均使用 `sessions/--workspace--/` 子目录。已保留的消息重接 parentId，未知记录、自定义扩展、压缩和分支拒绝原生导入。
+Pi 1.6.0 的 `dist/main.js` 按路径打开 `SessionManager.open`，v3 header 的 id 是会话身份。`dist/migrations.js` 会先移动 agent 根目录内的 JSONL，因此导入和原生夹具均使用 `sessions/--workspace--/` 子目录。已保留的消息重接 parentId，未知记录、自定义扩展、压缩和分支拒绝原生导入。
 
 Claude 2.1.312 Linux x64 固定 npm 包的原生二进制内含版本化源码。核对 transcript storage 的 `appendRequestReplay`、`last-prompt` 读取和附件转换器 `nLe`/`_ft` 后，逐类处理如下。
 
