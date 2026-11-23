@@ -1,29 +1,29 @@
 /**
- * 补证前的设备能力判定（#1179）。
+ * 补证前的设备能力**只读**判定（#1179，本阶段仅观测，不改变任何状态）。
  *
- * 目标只有一个：在有**可信依据**证明所需运行能力不可用时，才在首次补证前直接收口人工，
- * 不再建立一个注定失败的 test Job。因此这里只承认一种「不可用」证据，其余一律回报未知，
- * 交回既有护栏，绝不把「观察失败」「空列表」「离线维护」当成不可用。
+ * 评审口径：先用正面证据说话。broker 的可用集合里没有目标设备，只说明「此刻没观察到
+ * 它可用」——可能只是掉线、维护或还没对账。所以这里**不产出「不可用」结论**，
+ * 只区分「观察到可用」与「未知」，并把未知的原因说清楚：
  *
- * 判定只读两个平台侧事实：
- *  - 设备目录里的登记行（哪些 key 属于本次要求的 transport / key / model）；
- *  - 对应 rig 的 broker 观测（是否已对账、以及它当前真正可用的 key 集合）。
+ *  - 观测失败 / 未对账 / 可用集合为空  → 未知；
+ *  - 目标设备不在可用集合内            → 未知（absence，不是负面证据）；
+ *  - 目标设备在可用集合内              → 可用。
+ *
+ * 任何「提前收口人工」的动作都要求带对象、来源与时效的明确负面证据，目前平台没有
+ * 这样的来源，因此本模块不接线到 Finding 状态机，也不参与是否建立 test Job 的判定。
  */
 
-export type DeviceCapabilityState = "available" | "unavailable" | "unknown";
+export type DeviceCapabilityState = "available" | "unknown";
 
 export type DeviceCapabilityVerdict = {
   state: DeviceCapabilityState;
   /** 面向运维的一句话结论；不含设备端点、密钥或外部原文。 */
   reason: string;
+  /** 判定所依据的 rig 与它的观测状态，便于后续补齐负面证据时复用。 */
+  rigs: Array<{ rig_id: string; reconciled: boolean; usable: string[] }>;
 };
 
-export type JudgedDeviceRow = {
-  key: string;
-  transport: string;
-  model: string | null;
-  rig_id: string;
-};
+export type JudgedDeviceRow = { key: string; transport: string; model: string | null; rig_id: string };
 
 /** rig 的 broker 观测；null 表示这次读取失败（超时、401、契约不符）。 */
 export type JudgedRigAdmission = { reconciled: boolean; usable: readonly string[] } | null;
@@ -35,13 +35,7 @@ export type JudgedRequirement = {
   rig_id?: string | null;
 };
 
-/**
- * 纯判定，不做 IO，便于单测覆盖「不可用 / 未知 / 可用」三态与它们的边界。
- *
- * 只有一种情况判 `unavailable`：目录里存在符合要求的登记行，相关 rig 都读到了观测、
- * 都已对账，且 broker 的可用集合**非空**但一个都不包含这些登记 key。此时「读不到能力」
- * 不是观察失败，而是平台已经知道它有别的设备、就是没有这一台。
- */
+/** 纯判定，不做 IO：便于覆盖「目标在集合内」「目标缺席」「rig 观测缺失」「跨 rig 不互相顶替」。 */
 export function judgeRequiredDeviceCapability(input: {
   requirement: JudgedRequirement;
   devices: readonly JudgedDeviceRow[];
@@ -54,22 +48,44 @@ export function judgeRequiredDeviceCapability(input: {
   const candidates = scoped.filter((row) => row.transport === wanted.transport
     && (requestedKey ? row.key === requestedKey : !requestedModel || row.model === requestedModel));
   if (candidates.length === 0) {
-    // 空目录也可能是同步失败，因此不能据此收口（#1179 明确点名的情形）。
-    return { state: "unknown", reason: "设备目录里没有匹配本次要求的登记，无法据此断定不可用" };
+    return { state: "unknown", rigs: [],
+      reason: "设备目录里没有匹配本次要求的登记，无法据此形成任何能力结论" };
   }
-  const rigs = [...new Set(candidates.map((row) => row.rig_id))];
-  const observations: JudgedRigAdmission[] = [];
-  for (const rig of rigs) {
-    const admission = input.admitted[rig] ?? null;
-    if (!admission) return { state: "unknown", reason: `设备 rig ${rig} 的可用集合读取失败，不能断定不可用` };
-    if (!admission.reconciled) return { state: "unknown", reason: `设备 rig ${rig} 尚未完成对账，观察不算证据` };
-    observations.push(admission);
+  // 逐 rig 判定，绝不把不同 rig 的可用集合并起来：一个 rig 上的别的设备可用，
+  // 不能说明目标 rig 的状态，也不能替目标 rig 里的目标设备作证。
+  const { rigs, reasons, observedAvailable } = observePerRig(candidates, input.admitted);
+  if (observedAvailable) return { state: "available", rigs, reason: "所需设备已在 rig 可用集合内" };
+  return { state: "unknown", rigs,
+    reason: `${reasons.join("；") || "没有可用的观测"}；缺席不构成不可用证据，暂不可用与未知保持原路径` };
+}
+
+type RigObservation = { rig_id: string; reconciled: boolean; usable: string[] };
+
+function observePerRig(
+  candidates: readonly JudgedDeviceRow[],
+  admitted: Readonly<Record<string, JudgedRigAdmission>>,
+): { rigs: RigObservation[]; reasons: string[]; observedAvailable: boolean } {
+  const rigs: RigObservation[] = [];
+  const reasons: string[] = [];
+  let observedAvailable = false;
+  for (const rig of [...new Set(candidates.map((row) => row.rig_id))]) {
+    const admission = admitted[rig] ?? null;
+    if (!admission) {
+      reasons.push(`rig ${rig} 的可用集合读取失败`);
+      continue;
+    }
+    rigs.push({ rig_id: rig, reconciled: admission.reconciled, usable: [...admission.usable] });
+    if (!admission.reconciled) {
+      reasons.push(`rig ${rig} 尚未完成对账`);
+      continue;
+    }
+    if (admission.usable.length === 0) {
+      reasons.push(`rig ${rig} 未上报任何可用设备`);
+      continue;
+    }
+    const wantedHere = candidates.filter((row) => row.rig_id === rig);
+    if (wantedHere.some((row) => admission.usable.includes(row.key))) observedAvailable = true;
+    else reasons.push(`目标设备不在 rig ${rig} 当前可用集合内`);
   }
-  const usable = new Set(observations.flatMap((admission) => [...(admission?.usable ?? [])]));
-  if (candidates.some((row) => usable.has(row.key))) return { state: "available", reason: "所需设备已在 rig 可用集合内" };
-  if (usable.size === 0) {
-    // 离线、维护、broker 只上报空集合，都属于暂不可用，交给既有租约与护栏路径。
-    return { state: "unknown", reason: "设备 rig 未上报任何可用设备（离线或维护），属于暂不可用" };
-  }
-  return { state: "unavailable", reason: "已登记的匹配设备都不在 rig 的可用集合内" };
+  return { rigs, reasons, observedAvailable };
 }

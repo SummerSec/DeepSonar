@@ -6,40 +6,42 @@ const device = (key: string, rig = "rig-a", model = "P60"): { key: string; trans
   key, transport: "hdc", model, rig_id: rig });
 const requirement = { transport: "hdc", key: null, model: null, rig_id: null };
 
-test("#1179 已在可用集合内才判可用", () => {
-  const verdict = judgeRequiredDeviceCapability({ requirement,
-    devices: [device("d1"), device("d2")],
-    admitted: { "rig-a": { reconciled: true, usable: ["d2"] } } });
+test("#1179 目标设备在 rig 可用集合内才判可用", () => {
+  const verdict = judgeRequiredDeviceCapability({ requirement, devices: [device("d1")],
+    admitted: { "rig-a": { reconciled: true, usable: ["d1"] } } });
   assert.equal(verdict.state, "available");
 });
 
-test("#1179 已登记但都不在可用集合、且 rig 有别的可用设备 → 已证实不可用", () => {
-  const verdict = judgeRequiredDeviceCapability({ requirement,
-    devices: [device("d1")],
-    admitted: { "rig-a": { reconciled: true, usable: ["d9"] } } });
-  assert.equal(verdict.state, "unavailable");
-  assert.match(verdict.reason, /不在 rig 的可用集合内/u);
+test("#1179 反例一：目标暂时不在列表、别的设备可用 → 未知（不得据此收口）", () => {
+  const verdict = judgeRequiredDeviceCapability({ requirement: { ...requirement, key: "d1" },
+    devices: [device("d1")], admitted: { "rig-a": { reconciled: true, usable: ["d9"] } } });
+  assert.equal(verdict.state, "unknown");
+  assert.match(verdict.reason, /缺席不构成不可用证据/u);
 });
 
-test("#1179 观察失败、未对账、空集合、空目录一律未知，不得提前收口", () => {
-  const cases = [
-    judgeRequiredDeviceCapability({ requirement, devices: [device("d1")], admitted: { "rig-a": null } }),
-    judgeRequiredDeviceCapability({ requirement, devices: [device("d1")],
-      admitted: { "rig-a": { reconciled: false, usable: ["d1"] } } }),
-    judgeRequiredDeviceCapability({ requirement, devices: [device("d1")],
-      admitted: { "rig-a": { reconciled: true, usable: [] } } }),
-    judgeRequiredDeviceCapability({ requirement: { ...requirement, model: "P70" }, devices: [device("d1")],
-      admitted: { "rig-a": { reconciled: true, usable: ["d1"] } } }),
-  ];
-  for (const verdict of cases) assert.equal(verdict.state, "unknown", verdict.reason);
+test("#1179 反例二：目标 rig 为空、另一个 rig 非空 → 仍未知（不跨 rig 顶替）", () => {
+  const verdict = judgeRequiredDeviceCapability({ requirement: { ...requirement, key: "d1" },
+    devices: [device("d1", "rig-a"), device("d2", "rig-b")],
+    admitted: { "rig-a": { reconciled: true, usable: [] }, "rig-b": { reconciled: true, usable: ["d2"] } } });
+  assert.equal(verdict.state, "unknown");
+  // 只有承载目标设备的 rig 参与判定，另一个 rig 的可用集不会被借来顶替。
+  assert.deepEqual(verdict.rigs.map(rig => rig.rig_id), ["rig-a"]);
+  assert.match(verdict.reason, /未上报任何可用设备/u);
 });
 
-test("#1179 指定 key 或 rig 时只按该范围判定", () => {
-  const devices = [device("d1", "rig-a"), device("d2", "rig-b")];
-  const byKey = judgeRequiredDeviceCapability({ requirement: { ...requirement, key: "d2" }, devices,
-    admitted: { "rig-a": { reconciled: true, usable: ["d1"] }, "rig-b": { reconciled: true, usable: ["d2"] } } });
-  assert.equal(byKey.state, "available");
-  const byRig = judgeRequiredDeviceCapability({ requirement: { ...requirement, rig_id: "rig-b" }, devices,
-    admitted: { "rig-a": { reconciled: true, usable: [] }, "rig-b": { reconciled: true, usable: ["d9"] } } });
-  assert.equal(byRig.state, "unavailable");
+test("#1179 反例三：观测读取失败（超时/401/契约不符）与未对账 → 未知", () => {
+  const failed = judgeRequiredDeviceCapability({ requirement, devices: [device("d1")], admitted: { "rig-a": null } });
+  assert.equal(failed.state, "unknown");
+  assert.match(failed.reason, /读取失败/u);
+  const unreconciled = judgeRequiredDeviceCapability({ requirement, devices: [device("d1")],
+    admitted: { "rig-a": { reconciled: false, usable: ["d1"] } } });
+  assert.equal(unreconciled.state, "unknown");
+  assert.match(unreconciled.reason, /尚未完成对账/u);
+});
+
+test("#1179 目录无匹配登记时不形成结论", () => {
+  const verdict = judgeRequiredDeviceCapability({ requirement: { ...requirement, model: "P70" },
+    devices: [device("d1")], admitted: { "rig-a": { reconciled: true, usable: ["d1"] } } });
+  assert.equal(verdict.state, "unknown");
+  assert.match(verdict.reason, /没有匹配本次要求的登记/u);
 });
