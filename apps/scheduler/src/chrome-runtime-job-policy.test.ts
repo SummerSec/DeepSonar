@@ -167,12 +167,15 @@ test("Chrome runtimes raise stall floors without changing the global 900s defaul
 });
 
 test("human task create resolves the hub snapshot before opening a canvas", () => {
-  const createTask = projectTaskSource.slice(projectTaskSource.indexOf('app.post("/projects/:id/tasks"'));
+  const createTask = projectTaskSource.slice(
+    projectTaskSource.indexOf('app.post("/projects/:id/tasks"'),
+    projectTaskSource.indexOf('app.post("/projects/:id/events"'),
+  );
   const resolve = createTask.indexOf("resolveAgentSnapshotForJob");
-  const canvas = createTask.indexOf("ensureCanvasForTask");
-  assert.ok(resolve >= 0 && canvas > resolve, "POST /tasks must resolve the snapshot before ensureCanvasForTask");
-  assert.match(createTask.slice(resolve, canvas), /isSnapshotUnresolvableError/);
-  assert.match(createTask.slice(resolve, canvas), /currentSnapshotUnresolvableBody/);
+  const createJob = createTask.indexOf("await createJob(");
+  assert.ok(resolve >= 0 && createJob > resolve, "POST /tasks must resolve the snapshot before atomic task and Job creation");
+  assert.match(createTask.slice(resolve, createJob), /isSnapshotUnresolvableError/);
+  assert.match(createTask.slice(resolve, createJob), /currentSnapshotUnresolvableBody/);
   assert.equal(createTask.indexOf("assertFrozenRuntimeImageLocal"), -1);
 });
 
