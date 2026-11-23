@@ -654,6 +654,7 @@ export interface HumanContinuation {
 }
 
 export interface JobDetail {
+  device_binding?: import("./DeviceBindingView").DeviceBinding;
   process_diagnostics?: import("./RuntimeProcessEvidence").RuntimeProcessEvidence[];
   job: {
     execution_state?: JobExecutionState | null;

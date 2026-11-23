@@ -130,6 +130,16 @@ export type RigAdmissionView = {
   admission: { revision: number; reconciled: boolean; mode: string; usable: string[] } | null;
 };
 
+export function deviceAdmissionLabel(device: { key: string; rig_id: string }, registry?: {
+  enabled: boolean;
+  rigs: readonly RigAdmissionView[];
+}) {
+  if (registry && !registry.enabled) return "设备接入未启用";
+  const rig = registry?.rigs.find(entry => entry.id === device.rig_id);
+  if (!rig?.broker_configured || !rig.admission?.reconciled) return "代理可用状态未知";
+  return rig.admission.usable.includes(device.key) ? "代理报告可用" : "代理未列为可用";
+}
+
 /** 单个 rig 的准入状态：不可达就说不可达，不猜已同步。 */
 export function rigAdmissionLine(entry: RigAdmissionView): string {
   if (!entry.broker_configured) return "未配置 broker 凭据";

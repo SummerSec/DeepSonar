@@ -5,11 +5,58 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RuntimeProcessEvidenceView } from "./RuntimeProcessEvidence";
+import { DeviceBindingView, type DeviceBinding } from "./DeviceBindingView";
 
 const sourceRoot = path.resolve(import.meta.dirname);
 const panel = readFileSync(path.join(sourceRoot, "JobDetailPanel.tsx"), "utf8");
 const workspace = readFileSync(path.join(sourceRoot, "LiveTerminalWorkspace.tsx"), "utf8");
 const markdown = readFileSync(path.join(sourceRoot, "MarkdownView.tsx"), "utf8");
+
+const unbound: DeviceBinding = {
+  state: "not_declared", reason: "本次运行未声明设备需求", role_matched: false,
+  snapshot_requirement: null, canvas_requirement: null, attempts: [], leases: [],
+  attempts_truncated: false, leases_truncated: false, lease_count: 0,
+};
+
+test("未绑定、未领取、角色不适用与缺失诊断分别呈现", () => {
+  const render = (binding?: DeviceBinding) => renderToStaticMarkup(createElement(DeviceBindingView, { binding }));
+  assert.match(panel, /<DeviceBindingView binding=\{detail.device_binding\} \/>/);
+  assert.equal(render(), "");
+  assert.match(render(unbound), /未绑定设备（未声明需求）/);
+  const declared = { ...unbound, state: "not_attempted" as const, canvas_requirement: { transport: "hdc" } };
+  assert.match(render(declared), /运行快照未包含画布需求/);
+  const frozen = { ...declared, snapshot_requirement: declared.canvas_requirement };
+  assert.match(render(frozen), /当前角色无需设备/);
+  assert.match(render({ ...frozen, role_matched: true }), /尚未申请租约/);
+  assert.match(render({ ...frozen, state: "not_applying" }), /当前角色无需设备/);
+});
+
+test("设备诊断只展示分类原因，截断的租约列表不改变历史分档", () => {
+  const binding: DeviceBinding = {
+    ...unbound, snapshot_requirement: { transport: "hdc" }, role_matched: true,
+    state: "attempted_no_lease", attempts_truncated: true, leases_truncated: true, lease_count: 33,
+    attempts: [
+      { attempt_id: "d", attempt_no: 4, state: "attempted_no_lease", reason: "尚无记录" },
+      { attempt_id: "c", attempt_no: 3, state: "lease_unrecorded", reason: "没有设备失败码" },
+      { attempt_id: "b", attempt_no: 2, state: "acquire_failed", reason: "申请被拒" },
+      { attempt_id: "a", attempt_no: 1, state: "lease_recorded_unverified", reason: "已记录租约" },
+    ],
+    leases: [{ attempt_id: null, device_key: "emulator", rig_id: "lab", state: "released" }],
+  };
+  const props = { binding, attempts: [
+    { id: "c", error: "资产准备错误" },
+    { id: "b", error: "DatabaseError: INTERNAL_DB_DIAGNOSTIC" },
+  ] };
+  const html = renderToStaticMarkup(createElement(DeviceBindingView, props));
+  assert.match(html, /<summary[^>]*>设备绑定 · 本次执行暂无租约记录/);
+  assert.match(html, /第 3 次执行 · 未记录租约申请结果/);
+  assert.match(html, /第 2 次执行 · 设备租约申请失败<\/strong><p>申请被拒<\/p>/);
+  assert.doesNotMatch(html, /资产准备错误|DatabaseError|INTERNAL_DB_DIAGNOSTIC/);
+  assert.match(html, /第 1 次执行 · 已记录租约，连接未验证/);
+  assert.match(html, /执行归属未知 · lab \/ emulator · 已释放/);
+  assert.match(html, /最近 4 次执行/);
+  assert.match(html, /共 33 条租约，仅显示最近 1 条/);
+});
 
 test("process cleanup evidence renders distinct results and the recovery boundary", () => {
   const html = renderToStaticMarkup(createElement(RuntimeProcessEvidenceView, { rows: [{
