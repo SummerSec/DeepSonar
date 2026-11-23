@@ -3,5 +3,8 @@
   "private": true,
   "dependencies": {
     "@deepseek-ai/dsh": "0.2.2-rc.1"
+  },
+  "overrides": {
+    "undici": "8.12.4"
   }
 }
