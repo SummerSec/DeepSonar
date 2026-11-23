@@ -49,7 +49,7 @@ assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
 // Reviewed Plan v2, complete-objective bootstrap, governed completion-recovery guidance,
 // including #903 stale-grant exit, actionable human-request guidance and the #1032 P2-5
 // env-dump guard and #1094 HTTP-operation bootstrap.
-const expectedSkillSha256 = "f23cacd030e515430e368baf1c7d8e62af7075dd6c155f46e6fc187f760e2827";
+const expectedSkillSha256 = "8fb5e7b96be69553301b57acbb995eda55629cd69600ded58a8cb0aca5a0638b";
 const canonicalSkillBytes = Buffer.from(
   `{"name":"deepsonar-control","files":{"SKILL.md":${JSON.stringify(skillContent)}}}`,
   "utf8",

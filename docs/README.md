@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+#1182 的[提问前资源核对](HUMAN_CONTINUATION.md#提问前核对已授权资源1182)复用当前 Control API、冻结资产路径和有界 Canvas 查询，补齐静态/动态指导与可控 Agent 回归。晚回复和恢复的已有覆盖见同专题，最终候选 Actions 另验，真实模型判断和收益未验证。
+
 #1228 把运行时自带的 Undici 跟到已修复版本：Kali 镜像的 Node 24.22.2→24.22.3（自带 Undici 7.30.2，两架构校验和同步更新）、控制面四个 Node 镜像 digest 由 24.21.0 升到 24.22.3、agent 基础镜像换成 24.22.3-alpine/bookworm-slim 摘要、工作区 `undici` 直接依赖收到 `^7.30.2`、DSH 运行时用 `overrides` 固定 8.12.4，并在两处 Dockerfile 打印 `process.version` / `process.versions.undici` 作为候选产物证据。顺带修掉 kali 清单里指向 `v22.23.2` 的 Node 下载地址。Pi 1.6.0 另行单独验证，不在本次范围；版本取证以 Actions 镜像构建日志为准，未运行真实模型。
 
 #1211 的[设备绑定诊断](architecture/09-interface-specs.md#设备绑定诊断1211)在 `GET /jobs/:id` 增加只读 `device_binding`：区分「未声明设备需求」「已声明但无租约（含画布声明未冻结、角色不命中）」「有租约但无连接结果」，只投影平台已记录的事实，不把沙箱内探测失败当成设备不可用，也不申请或释放租约。回归见 `ci:unit:device-lease`，最终 SHA Actions 待验。

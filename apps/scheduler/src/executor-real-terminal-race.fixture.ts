@@ -16,7 +16,7 @@ export const attemptId = randomUUID();
 const projectId = randomUUID();
 const canvasId = randomUUID();
 export const rootId = randomUUID();
-const operations = ["mark_job_done", "request_human", "submit_hub_decision", "publish_shared_asset"];
+const operations = ["mark_job_done", "request_human", "submit_hub_decision", "publish_shared_asset", "list_shared_assets"];
 const snapshot = {
   name: "audit", role_kind: "role", agent_cli: "claude-code",
   model_budget: undefined as import("@deepsonar/shared-types").ModelTokenBudget | undefined,
@@ -24,6 +24,7 @@ const snapshot = {
   platform_tools: operations, network_policy: { allow_egress: false },
   env_vars: {}, env_keys: [], config_files: [], skills: [], commands: [], mcps: [], subagents: [],
   instructions_markdown: "Offline terminal race verification.",
+  shared_assets: [] as Array<Record<string, unknown>>,
   runtime_image: { image_key: "default", image_ref: "offline:fixture", image_digest: "sha256:offline" },
 };
 const job = { id: jobId, project_id: projectId, canvas_id: canvasId, sandbox_id: "offline-sandbox",
@@ -41,6 +42,8 @@ let diagnosticRows: Record<string, unknown>[] = [];
 let publication: Parameters<typeof setSharedAssetPublication>[0] = {};
 let publishedInputs: Array<Parameters<typeof import("./domains/shared-assets/index.js").createSharedAsset>[0]> = [];
 let workspaceReads = 0;
+let frozenResourceFiles: Record<string, Buffer> = {};
+let runtimeInput = "";
 const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
   const query = strings.join("?").replace(/\s+/g, " ").trim();
   if (query === "SELECT * FROM job_continuations WHERE target_job_id=?") {
@@ -69,7 +72,13 @@ const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: u
 }, { json: (value: unknown) => value });
 mock.module(new URL("./db.js", import.meta.url), { namedExports: { ...database, sql: fakeSql } });
 const runtimeModule = await import("./runtime.js");
-const host = {};
+const host = {
+  readWorkspaceFile: async (filePath: string) => {
+    const bytes = frozenResourceFiles[filePath];
+    if (!bytes) throw new Error("RESOURCE_READ_UNAVAILABLE");
+    return bytes;
+  },
+};
 mock.module(new URL("./runtime.js", import.meta.url), { namedExports: { ...runtimeModule,
   runner: { ensureHost: async () => host },
 } });
@@ -147,6 +156,7 @@ mock.module(new URL("./evidence.js", import.meta.url), { namedExports: { ...evid
 mock.module("@deepsonar/runtime-sandbox", { namedExports: { ...runtime,
   runRealAgent: async (actualHost: unknown, options: Parameters<typeof runtime.runRealAgent>[1]) => {
     assert.equal(actualHost, host);
+    runtimeInput = options.input;
     runnerCalls++;
     gate = options.completionGate;
     recoveryGuard = options.recoveryGuard; runtimeBudget = options.modelBudget;
@@ -188,6 +198,8 @@ export function setSharedAssetPublication(options: { source?: string; error?: Er
   publication = options;
 }
 export function sharedAssetPublicationState() { return { inputs: publishedInputs, reads: workspaceReads }; }
+export function readFrozenResource(filePath: string) { return host.readWorkspaceFile(filePath); }
+export function agentRuntimeInput() { return runtimeInput; }
 export async function sharedAssetControlApp() {
   const { default: Fastify } = await import("fastify");
   const { registerPlatformControlRoutes, clearPlatformApiIdempotencyCache } = await import("./domains/platform-api/routes.js");
@@ -196,11 +208,13 @@ export async function sharedAssetControlApp() {
   return { app, clearCache: clearPlatformApiIdempotencyCache };
 }
 export async function runExecutor(act: () => Promise<void | RealAgentResult>, roleKind = "role", skipRunnerDispose = false,
-  agentCli: "claude-code" | "pi" = "claude-code", modelBudget?: import("@deepsonar/shared-types").ModelTokenBudget) {
+  agentCli: "claude-code" | "pi" = "claude-code", modelBudget?: import("@deepsonar/shared-types").ModelTokenBudget,
+  resources: { assets: Array<Record<string, unknown>>; files: Record<string, Buffer> } = { assets: [], files: {} }) {
   omitRunnerDispose = skipRunnerDispose;
   snapshot.role_kind = roleKind;
   snapshot.agent_cli = agentCli; snapshot.agent_runtime = runtime.freezeAgentCliRuntime(runtime.AGENT_CLI_RUNTIME_ADAPTERS[agentCli]);
   snapshot.model_budget = modelBudget; recoveryGuard = undefined; runtimeBudget = undefined;
+  snapshot.shared_assets = resources.assets; frozenResourceFiles = resources.files; runtimeInput = "";
   publication = {}; publishedInputs = []; workspaceReads = 0;
   events = []; diagnosticRows = []; runnerCalls = 0; bundleCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
   const token = "offline-capability";
