@@ -403,12 +403,12 @@ export async function requeueJob(
         const { blocker } = await humanContinuationAdmission(tx, job, String(request.id));
         const reasons: Record<string, string> = {
           HUMAN_REPLY_REQUIRED: "请回复当前人工请求。",
-          HUMAN_CHECKPOINT_SECRET_DETECTED: "保存现场时检测到受管密钥，无法从此处继续。请取消该任务或新建任务。",
+          HUMAN_CHECKPOINT_SECRET_DETECTED: "保存现场时命中凭据保护规则，无法从此处继续。请取消该任务或新建任务。",
           HUMAN_CHECKPOINT_EXPIRED: "保存的现场已过期，请取消该任务或新建任务。",
           HUMAN_CHECKPOINT_NOT_READY: "现场仍未就绪，请查看人工请求中的断点状态。",
           HUMAN_CONTINUATION_USAGE_UNKNOWN: "模型用量仍待核对，结清后可继续。",
           HUMAN_CONTINUATION_RESOURCES_PENDING: "任务仍占用设备，等待租约释放后可继续。",
-          EXECUTION_TIME_EXHAUSTED: "执行时间已用完，请取消该任务或新建任务。",
+          EXECUTION_TIME_EXHAUSTED: "无法确认还有可用执行时间，请核对任务的计时记录和剩余预算。",
         };
         return { kind: "not_resumable" as const, status, provenance,
           error_code: blocker ?? "HUMAN_CONTINUATION_PENDING",
