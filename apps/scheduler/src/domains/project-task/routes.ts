@@ -1428,9 +1428,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           : { error: "task records must be retained", next_action: "请先确认这些记录的去向。" };
         return reply.code(409).send({
           error: guidance.error,
-          error_code: verdict.blocked ? verdict.code : "TASK_DELETE_KNOWLEDGE_RETAINED",
+          error_code: "TASK_DELETE_KNOWLEDGE_RETAINED",
           retained: retryResult.retained ?? {},
-          ...(verdict.blocked ? { retained_kinds: verdict.kinds } : {}),
+          ...(verdict.blocked ? { retained_kinds: verdict.kinds, retained_reason: verdict.reason } : {}),
           next_action: guidance.next_action,
         });
       }

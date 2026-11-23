@@ -93,11 +93,17 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 送评固定候选正文、来源和已有修订基线，复用 maker、独立试验和 evaluator。事务外解析准备来源清单和去重引用，最终授权由事务内来源复核确定。每次成功送评请求都记录操作者、请求标识和候选引用，审计中的 `reused` 区分新建与复用原评测。评测结果在原节点显示，通过与未通过都保留草稿，不进入审核或发布。来源失效时停止派发，并按现有权限限制详情读取。真实模型的质量效果尚未验证。完整设计见[任务知识沉淀设计](superpowers/specs/2026-11-21-task-knowledge-closeout-design.md)。
 
-### 重试被设备历史挡住时的错误码（#1236，2026-11-23）
+### 重试被设备历史挡住时的分类（#1236，2026-11-23）
 
-清空历史的硬重试要删除旧 Job，而 `device_leases.job_id` 是到 `jobs` 的非空外键、没有级联：设备使用记录一删就违反外键，硬删又会丢审计。所以「被设备历史挡住」不能复用知识记录的话术。
+清空历史的硬重试要删掉旧 Job，而 `device_leases.job_id` 是到 `jobs` 的非空外键、没有级联：租约仍引用旧 Job，所以删除会被拒绝，记录保持不动。**顶层错误码仍是 `TASK_DELETE_KNOWLEDGE_RETAINED`**（现有调用方只认它），新增 `retained_kinds` 与 `retained_reason` 供新客户端分支：
 
-当保留项里**只有**设备租约历史时，`POST /tasks/:canvasId/retry` 返回 409 `TASK_RETRY_BLOCKED_BY_DEVICE_HISTORY`，带 `retained` 计数、`retained_kinds: ["device_lease"]`，`next_action` 明确两条可行动作：保留该任务继续使用，或另建新任务。含知识/治理记录（工作、版本、提案、回执、评测等）时仍返回 `TASK_DELETE_KNOWLEDGE_RETAINED`，`retained_kinds` 会同时列出 `knowledge` 与 `device_lease`，调用方可据此分支。两种情形都不放宽删除守卫。
+| `retained_kinds` | `retained_reason` | 引导 |
+|---|---|---|
+| `["device_lease"]` | `device_history` | 设备使用记录引用旧 Job，请保留此任务不动；任务本来支持继续时可用「继续此任务」，确需从零开始请另建新任务 |
+| 含 `knowledge`（工作、版本、提案、回执、评测…） | `governance_records` | 沿用原有「先确认这些记录的去向」 |
+| `continuation_budget` | `governance_records` | 续做预算留痕单独成一类，不混进知识记录 |
+
+两类都不放宽删除守卫；设备历史情形下旧 Job 与 released 租约在拒绝后都仍然存在（集成测试会读回核对）。
 
 ## 验证与运维
 

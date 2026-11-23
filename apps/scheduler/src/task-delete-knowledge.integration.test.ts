@@ -99,10 +99,18 @@ if (testDatabaseUrl) {
       const retryWithLease = await app.inject({ method: "POST", url: `/tasks/${withLease.canvasId}/retry`, headers });
       assert.equal(retryWithLease.statusCode, 409, retryWithLease.payload);
       const retryBody = retryWithLease.json();
-      assert.equal(retryBody.error_code, "TASK_RETRY_BLOCKED_BY_DEVICE_HISTORY", retryWithLease.payload);
+      // 顶层错误码保持既有兼容值，分支信息放在 retained_kinds / retained_reason。
+      assert.equal(retryBody.error_code, "TASK_DELETE_KNOWLEDGE_RETAINED", retryWithLease.payload);
       assert.deepEqual(retryBody.retained_kinds, ["device_lease"]);
+      assert.equal(retryBody.retained_reason, "device_history");
       assert.match(retryBody.next_action, /另建新任务/u);
       assert.doesNotMatch(retryBody.next_action, /知识/u);
+      // 拒绝后旧 Job 与被引用的 released 租约都必须还在：这条路径不删任何记录。
+      const [jobKept] = await sql`SELECT count(*)::int AS count FROM jobs WHERE id = ${withLease.jobId}`;
+      assert.equal(Number(jobKept.count), 1, "the old Job must survive a refused retry");
+      const [leaseStill] = await sql`SELECT state, released_at FROM device_leases WHERE job_id = ${withLease.jobId}`;
+      assert.equal(leaseStill.state, "released");
+      assert.ok(leaseStill.released_at, "the released lease must keep its history");
 
       // 2. A job that produced knowledge work: deleting the task would destroy
       //    governance evidence, so the API refuses before touching anything.
@@ -118,8 +126,8 @@ if (testDatabaseUrl) {
       assert.equal(Number(canvasKept.count), 1, "a refusal must leave the task in place");
       const [notCancelled] = await sql`SELECT count(*)::int AS count FROM jobs WHERE id = ${withWork.jobId} AND status = 'failed'`;
       assert.equal(Number(notCancelled.count), 1, "the refusal rolls back, so the job keeps its status");
-      const [jobKept] = await sql`SELECT count(*)::int AS count FROM jobs WHERE id = ${withWork.jobId}`;
-      assert.equal(Number(jobKept.count), 1);
+      const [workJobKept] = await sql`SELECT count(*)::int AS count FROM jobs WHERE id = ${withWork.jobId}`;
+      assert.equal(Number(workJobKept.count), 1);
       const [workKept] = await sql`SELECT count(*)::int AS count FROM project_knowledge_work WHERE id = ${workId}`;
       assert.equal(Number(workKept.count), 1, "governance evidence is never deleted by a task delete");
 
