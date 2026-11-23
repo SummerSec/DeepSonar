@@ -27,11 +27,18 @@ test("overdue current requests offer a precise reply; saved or historical reques
   const answered=renderToStaticMarkup(<HumanContinuationReply continuation={{...continuation,status:"answered",
     resume_error_code:"REPAIR_PAUSED"}} canvasId="canvas" canReply={true}/>);
   assert.match(answered,/回复已保存/);assert.match(answered,/REPAIR_PAUSED/);assert.doesNotMatch(answered,/<textarea|<button/);
-  const readonly=renderToStaticMarkup(<HumanContinuationReply continuation={continuation} canvasId="canvas" canReply={false}/>);
-  assert.doesNotMatch(readonly,/<textarea|<button/);
   const historical=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="failed"
     continuation={continuation} canvasId="canvas" onSendMessage={()=>{}}/>);
   assert.doesNotMatch(historical,/<textarea|<button/);
+});
+
+test("overdue read-only and targetless job details show the reminder without inviting a reply", () => {
+  for (const props of [{ canvasId: "canvas" }, { onSendMessage: () => {} }]) {
+    const html = renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human"
+      continuation={continuation} {...props} />);
+    assert.match(html, /回复时间已超过提醒阈值/);
+    assert.doesNotMatch(html, /仍可回复|回复并继续|<form|<textarea|<button/);
+  }
 });
 
 test("answered blocked requests explain the checkpoint and manual exits without asking for another reply", () => {

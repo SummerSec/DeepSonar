@@ -36,6 +36,7 @@ export function HumanContinuationReply({ continuation, canvasId, canReply }: {
   const submission = useRef<{ id: string; body: string } | null>(null);
   const sendingRef = useRef(false);
   const answered = continuation.status === "answered" || saved;
+  const showReplyForm = !answered && continuation.status === "open" && canReply && Boolean(canvasId);
   const blocked = continuation.checkpoint_status === "blocked";
   const blocker = blocked ? continuation.checkpoint_error_code : continuation.resume_error_code;
   const reason = checkpointReasons.get(blocker ?? "");
@@ -58,7 +59,9 @@ export function HumanContinuationReply({ continuation, canvasId, canReply }: {
     } finally { sendingRef.current = false; setSending(false); }
   }
   return <div className="mt-3 text-[12px] leading-5 text-zinc-400">
-    {continuation.overdue_at && !answered && !blocked && continuation.status === "open" && <p>回复时间已超过提醒阈值，仍可回复此请求。</p>}
+    {continuation.overdue_at && !answered && !blocked && continuation.status === "open" && (
+      <p>回复时间已超过提醒阈值。{showReplyForm && "仍可回复此请求。"}</p>
+    )}
     {answered && <p role="status">回复已保存，无需再次回复。</p>}
     {blocked ? <div role="status" className="text-amber-300">
       <p>断点不可用。{reason ?? "当前运行无法从这个现场继续。"}
@@ -69,7 +72,7 @@ export function HumanContinuationReply({ continuation, canvasId, canReply }: {
         : "进度已保存。平台核验通过后可在新会话继续。"}</p>
       {blocker && <p role="status">续做暂受阻。{reason ? <>{reason}（{blocker}）</> : "请联系管理员核对本次运行记录。"}</p>}
     </>}
-    {!answered && canvasId && canReply && continuation.status === "open" && <form onSubmit={submit}>
+    {showReplyForm && <form onSubmit={submit}>
         <label className="mt-3 block">回复人工请求
           <textarea value={body} maxLength={8000} disabled={sending} onChange={event => setBody(event.target.value)}
             className="mt-1 block min-h-24 w-full rounded-lg bg-zinc-950 p-3 text-zinc-200 ring-1 ring-zinc-700"
