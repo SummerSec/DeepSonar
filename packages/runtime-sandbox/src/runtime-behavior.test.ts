@@ -10,7 +10,7 @@ test("human native import keeps conversation identities but excludes old runtime
     {type:"session_info",id:"metadata",parentId:"system",timestamp:"2026-11-19T00:00:00Z",name:"display name"},
     {type:"message",id:"user",parentId:"metadata",timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep the unfinished decision"}},
   ].map(value=>JSON.stringify(value)).join("\n");
-  const result=projectNativeHumanSession("pi","1.5.2",id,source);
+  const result=projectNativeHumanSession("pi","1.6.0",id,source);
   assert.equal(result.status,"supported");
   assert.ok(result.content?.includes("unfinished decision"));
   assert.ok(!result.content?.includes("old Control identity"));
@@ -19,15 +19,15 @@ test("human native import keeps conversation identities but excludes old runtime
   assert.equal(records[1].parentId,null);
   assert.equal(nativeHumanSessionCapability("dsh","0").status,"unsupported");
   assert.equal(projectNativeHumanSession("pi","0",id,source).status,"unsupported");
-  assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n{bad").status,"rejected");
+  assert.equal(projectNativeHumanSession("pi","1.6.0",id,source+"\n{bad").status,"rejected");
   for(const type of ["custom","compaction","future_context_state"])
-    assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n"+JSON.stringify({type,id:"extra",parentId:"user"})).status,"unsupported");
+    assert.equal(projectNativeHumanSession("pi","1.6.0",id,source+"\n"+JSON.stringify({type,id:"extra",parentId:"user"})).status,"unsupported");
   const claude=JSON.stringify({type:"future_state",uuid:id,sessionId:id});
   assert.equal(projectNativeHumanSession("claude-code","2.1.312",id,claude).reason,"unknown_session_record_type");
   for (const type of ["image", "future_context_block"]) {
     const content = [{type:"text",text:"Known text"},{type,data:"Context must not disappear"}];
     const pi = source + "\n" + JSON.stringify({type:"message",id:"next",parentId:"user",message:{role:"user",content}});
-    assert.equal(projectNativeHumanSession("pi","1.5.2",id,pi).reason,"unverified_session_content_block");
+    assert.equal(projectNativeHumanSession("pi","1.6.0",id,pi).reason,"unverified_session_content_block");
     const claudeMessage = {type:"user",uuid:"user",parentUuid:null,sessionId:id,message:{role:"user",content}};
     assert.equal(projectNativeHumanSession("claude-code","2.1.312",id,JSON.stringify(claudeMessage)).reason,"unverified_session_content_block");
   }

@@ -28,7 +28,7 @@ export async function installDshRequestBudget(installRoot, sourceRoot) {
   if (original.split(register).length !== 2) throw new Error('DSH_BUDGET_VENDOR_REGISTRATION_AMBIGUOUS');
   const piAiRoot = resolve(installRoot, 'node_modules/@earendil-works/pi-ai');
   const sdk = JSON.parse(await readFile(piAiRoot + '/package.json', 'utf8'));
-  if (sdk.name !== '@earendil-works/pi-ai' || sdk.version !== '1.5.2') throw new Error('DSH_BUDGET_SDK_VERSION');
+  if (sdk.name !== '@earendil-works/pi-ai' || sdk.version !== '1.6.0') throw new Error('DSH_BUDGET_SDK_VERSION');
   const verification = `
 import { readFile as readBudgetFile } from 'node:fs/promises';
 import { createHash as budgetHash } from 'node:crypto';
@@ -38,7 +38,7 @@ for (const [file, expectedHash] of [['./index.js', budgetManifest.vendorSha256],
   if (budgetHash('sha256').update(await readBudgetFile(new URL(file, import.meta.url))).digest('hex') !== expectedHash) throw new Error('DSH_BUDGET_ARTIFACT_INTEGRITY');
 }
 const budgetSdk = JSON.parse(await readBudgetFile(${JSON.stringify(piAiRoot + '/package.json')}, 'utf8'));
-if (budgetSdk.name !== '@earendil-works/pi-ai' || budgetSdk.version !== '1.5.2') throw new Error('DSH_BUDGET_SDK_VERSION');
+if (budgetSdk.name !== '@earendil-works/pi-ai' || budgetSdk.version !== '1.6.0') throw new Error('DSH_BUDGET_SDK_VERSION');
 `;
   const registration = `models.setProvider({ ...profile.piProvider, streamSimple: (model, context, options) => {
     const identity = frozenDshIdentity();
@@ -54,7 +54,7 @@ if (budgetSdk.name !== '@earendil-works/pi-ai' || budgetSdk.version !== '1.5.2')
   await writeFile(resolve(installRoot, 'deepsonar-claude-key.mjs'), privateArtifacts.CLAUDE_PRIVATE_KEY_HELPER_SOURCE);
   await writeFile(resolve(installRoot, 'deepsonar-private-reader.mjs'), privateArtifacts.PRIVATE_CREDENTIAL_READER_SOURCE);
   await writeFile(output, patched);
-  await writeFile(root + '/lib/deepsonar-request-budget.manifest.json', JSON.stringify({ version: 1, vendorVersion: manifest.version, vendorSha256: expected, artifactSha256: hash(patched), helperSha256: hash(helper), sdkVersion: '1.5.2' }, null, 2) + '\n');
+  await writeFile(root + '/lib/deepsonar-request-budget.manifest.json', JSON.stringify({ version: 1, vendorVersion: manifest.version, vendorSha256: expected, artifactSha256: hash(patched), helperSha256: hash(helper), sdkVersion: '1.6.0' }, null, 2) + '\n');
   return output;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

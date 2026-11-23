@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+#1228 把 Pi 从 1.5.2 升到 1.6.0：三份 harness lockfile、`runtime-images.json` 与 kali 清单的版本/摘要、Kali `PI_CODING_AGENT_VERSION`/`PI_CODING_AGENT_INTEGRITY`、预算补丁与镜像守卫的 SDK 身份校验、adapter 版本、运行时手册目录与 RPC 夹具断言一起更新。静态核对的兼容点：`--mode rpc` 等被 adapter 使用的参数仍在、`PromptDisposition` 集合（`started`/`queued`/`handled`）未变、会话格式仍为 v3、`@earendil-works/pi-ai/compat` 子路径仍在、`message_start` 发射点与 1.5.2 相同，且 Pi 依赖的 Undici 已是 8.12.4。真实 RPC、会话恢复、预算统计与 Provider 路由由 `ci:smoke:pi-rpc`、`pi-om-acceptance` 与 `runtime-images` 原生双架构在 Actions 上验证，本机未运行（Node 26 的 `stripTypeScriptTypes` 只接受 `strip`，相关 SDK 回归在本机无法加载）。
+
 #1211 的[设备绑定诊断](architecture/09-interface-specs.md#设备绑定诊断1211)在 `GET /jobs/:id` 增加只读 `device_binding`：区分「未声明设备需求」「已声明但无租约（含画布声明未冻结、角色不命中）」「有租约但无连接结果」，只投影平台已记录的事实，不把沙箱内探测失败当成设备不可用，也不申请或释放租约。回归见 `ci:unit:device-lease`，最终 SHA Actions 待验。
 
 #1206 的[Finding 重复候选与重复处置](architecture/09-interface-specs.md#finding-重复候选与重复处置1206)只增加读取侧能力：同项目跨 canvas 的候选查询（fingerprint 精确、location 双向前缀、同 canvas cluster）、`distinct_by_fingerprint` / `distinct_by_cluster` 去重口径与 `duplicate`+`duplicate_of` 处置；记录仍不可变，不合并、不改写 `emit_finding` 冲突语义，也不把 fingerprint 升为跨任务身份。在 schema 78 引入，复合外键与成对约束兜底；真实 PG 回归接 `ci:integration:verify-eligibility`，最终 SHA Actions 待验。

@@ -86,7 +86,7 @@ test("production lifecycle identities match all install-script entries in the co
   assert.deepEqual(frozen.hooks, {
     "@anthropic-ai/claude-code": { version: "2.1.312", scripts: { postinstall: "node install.cjs" },
       files: { "install.cjs": "32a7b2429d7447c5aa043e383bcf9a72e0b233dff66336ea4b5b32531da981ad" } },
-    "@google/genai": { version: "2.21.0", scripts: { preinstall: "echo 'preinstall: no-op'" }, files: {} },
+    "@google/genai": { version: "2.32.0", scripts: { preinstall: "echo 'preinstall: no-op'" }, files: {} },
     protobufjs: { version: "7.6.6", scripts: { postinstall: "node scripts/postinstall" },
       files: { "scripts/postinstall.js": "5af8463b97ee8e309b4a2111f9479bacdf0c180de0ca0155527679b1fc6d9e6c" } },
   });
