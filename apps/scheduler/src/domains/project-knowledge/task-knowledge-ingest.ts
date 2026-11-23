@@ -59,47 +59,13 @@ export async function ingestTaskKnowledgeSuggestions(
     const governanceHash = sha256(canonical({ project_id: owner.projectId, job_id: owner.jobId,
       attempt_id: owner.attemptId, operation: "submit_task_knowledge_suggestion", logical_key: logicalKey,
       content_hash: blob.hash }));
-    // 标题归一化只是「同一条知识」的候选键，不能凭它接管别人的条目：只有显式指定
-    // 修订目标（调用方已按 usage_ref 校验过归属、版本与 active 状态）才追加版本。
-    // 先在数据库里按 (项目,kind,逻辑键) 串行化：对新行 FOR UPDATE 加不上锁，
-    // 两个不同画布的投稿会同时通过存在性查询再撞唯一键。事务级 advisory lock 覆盖两者。
-    await tx`SELECT pg_advisory_xact_lock(hashtext(${`knowledge-ingest:${owner.projectId}:memory:${logicalKey}`}))`;
-    const target = targets[index] ?? null;
-    const [existing] = await tx`SELECT i.id, i.status, i.active_version_id, v.content_sha256 AS active_hash
-      FROM project_knowledge_items i
-      LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
-      WHERE i.project_id=${owner.projectId} AND i.kind='memory' AND i.logical_key=${logicalKey}
-      FOR UPDATE OF i`;
-    if (existing) {
-      if (String(existing.active_hash ?? "") === blob.hash) {
-        outcomes.push({ item_ref: String(existing.id), version_ref: String(existing.active_version_id),
-          version: 0, logical_key: logicalKey, outcome: "unchanged" });
-        continue;
-      }
-      // 同名但不是显式修订目标，或条目已退出生命周期（retired/revoked/stale）：
-      // 一律不动它，交给后续的显式治理流程，避免同名投稿复活撤销条目。
-      const revivable = existing.status === "active" || existing.status === "draft";
-      if (!target || target.item_ref !== String(existing.id) || !revivable) {
-        outcomes.push({ item_ref: String(existing.id), version_ref: String(existing.active_version_id ?? ""),
-          version: 0, logical_key: logicalKey,
-          outcome: target ? "skipped" : "unchanged",
-          reason: target ? "同名条目存在但不是本次修订目标，或已退出生命周期" : "同名条目已存在且内容不同，需显式修订目标" });
-        continue;
-      }
+    const resolution = await resolveIngestItem(tx, owner, { target: targets[index] ?? null,
+      logicalKey, title: item.title, scope: item.scope, hash: blob.hash });
+    if (resolution.kind === "skip") {
+      outcomes.push(resolution.outcome);
+      continue;
     }
-    let itemId: string;
-    let version = 1;
-    if (existing) {
-      itemId = String(existing.id);
-      const [number] = await tx`SELECT COALESCE(MAX(version),0)+1 AS next
-        FROM project_knowledge_versions WHERE item_id=${itemId}`;
-      version = Number(number?.next ?? 1);
-    } else {
-      const [created] = await tx`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,keywords_json)
-        VALUES(${owner.projectId},'memory',${logicalKey},${item.title.slice(0, 200)},${tx.json([item.scope.slice(0, 80)])})
-        RETURNING id`;
-      itemId = String(created?.id);
-    }
+    const { itemId, itemKey, version, mode } = resolution;
     const [created] = await tx`INSERT INTO project_knowledge_versions
       (project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
       VALUES(${owner.projectId},${itemId},${version},${blob.hash},${owner.jobId},${owner.attemptId},
@@ -108,7 +74,71 @@ export async function ingestTaskKnowledgeSuggestions(
       title=${item.title.slice(0, 200)},generation=generation+1,updated_at=now()
       WHERE project_id=${owner.projectId} AND id=${itemId}`;
     outcomes.push({ item_ref: itemId, version_ref: String(created?.id), version,
-      logical_key: logicalKey, outcome: existing ? "revised" : "created" });
+      logical_key: itemKey, outcome: mode });
   }
   return outcomes;
+}
+
+type ItemResolution =
+  | { kind: "skip"; outcome: IngestOutcome }
+  | { kind: "use"; itemId: string; itemKey: string; version: number; mode: "created" | "revised" };
+
+/**
+ * 决定这次沉淀落到哪一条目：显式 target 走修订（条目锁内按基线复核），
+ * 否则按逻辑键判重并新建。返回 skip 表示这次不该写，原因写进 outcome。
+ */
+async function resolveIngestItem(
+  tx: KnowledgeDb,
+  owner: IngestOwner,
+  input: { target: IngestTarget | null; logicalKey: string; title: string; scope: string; hash: string },
+): Promise<ItemResolution> {
+  if (input.target) return resolveRevisionTarget(tx, owner, input.target, input.logicalKey);
+  // 先在数据库里按 (项目,kind,逻辑键) 串行化：对新行 FOR UPDATE 加不上锁，
+  // 两个不同画布的投稿会同时通过存在性查询再撞唯一键。事务级 advisory lock 覆盖两者。
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${`knowledge-ingest:${owner.projectId}:memory:${input.logicalKey}`}))`;
+  const [existing] = await tx`SELECT i.id, i.status, i.active_version_id, v.content_sha256 AS active_hash
+    FROM project_knowledge_items i
+    LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
+    WHERE i.project_id=${owner.projectId} AND i.kind='memory' AND i.logical_key=${input.logicalKey}
+    FOR UPDATE OF i`;
+  if (existing) {
+    const itemRef = String(existing.id);
+    const versionRef = String(existing.active_version_id ?? "");
+    if (String(existing.active_hash ?? "") === input.hash) {
+      return { kind: "skip", outcome: { item_ref: itemRef, version_ref: versionRef, version: 0,
+        logical_key: input.logicalKey, outcome: "unchanged" } };
+    }
+    return { kind: "skip", outcome: { item_ref: itemRef, version_ref: versionRef, version: 0,
+      logical_key: input.logicalKey, outcome: "skipped", reason: "同名条目已存在且内容不同；修订需要显式 target 基线" } };
+  }
+  const [created] = await tx`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,keywords_json)
+    VALUES(${owner.projectId},'memory',${input.logicalKey},${input.title.slice(0, 200)},${tx.json([input.scope.slice(0, 80)])})
+    RETURNING id`;
+  return { kind: "use", itemId: String(created?.id), itemKey: input.logicalKey, version: 1, mode: "created" };
+}
+
+/** 显式修订：条目锁内按 (item_ref, version_ref) 复核，基线过期或撤销一律 skip。 */
+async function resolveRevisionTarget(
+  tx: KnowledgeDb,
+  owner: IngestOwner,
+  target: IngestTarget,
+  logicalKey: string,
+): Promise<ItemResolution> {
+  const [current] = await tx`SELECT i.id, i.status, i.active_version_id, i.logical_key, v.revoked_at
+    FROM project_knowledge_items i
+    LEFT JOIN project_knowledge_versions v ON v.id=${target.version_ref} AND v.item_id=i.id
+    WHERE i.project_id=${owner.projectId} AND i.id=${target.item_ref} AND i.kind='memory'
+    FOR UPDATE OF i`;
+  const skip = (reason: string, key = logicalKey): ItemResolution => ({ kind: "skip",
+    outcome: { item_ref: target.item_ref, version_ref: target.version_ref, version: 0,
+      logical_key: key, outcome: "skipped", reason } });
+  if (!current || current.status !== "active") return skip("修订目标条目已不处于 active");
+  const currentKey = String(current.logical_key ?? logicalKey);
+  // 同一基线被两个任务同时修订时，只有先取得锁的那份能生效。
+  if (String(current.active_version_id ?? "") !== target.version_ref) return skip("修订基线已被别的版本取代", currentKey);
+  if (current.revoked_at) return skip("修订基线版本已撤销", currentKey);
+  const [number] = await tx`SELECT COALESCE(MAX(version),0)+1 AS next
+    FROM project_knowledge_versions WHERE item_id=${target.item_ref}`;
+  return { kind: "use", itemId: target.item_ref, itemKey: currentKey,
+    version: Number(number?.next ?? 1), mode: "revised" };
 }
