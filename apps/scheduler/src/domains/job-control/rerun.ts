@@ -337,7 +337,7 @@ export async function requeueTargetAuthorizationBlockers(tx: typeof sql, job: Re
  * 返回 `{ ok: true, requestId }` 表示可以放弃；返回 `{ ok: false, reason }` 表示拒绝。
  * 真正的关闭发生在所有校验通过、且事务内剩余步骤失败会整体回滚的位置。
  */
-async function validateAbandonableCheckpoint(
+export async function validateAbandonableCheckpoint(
   tx: typeof sql,
   jobId: string,
 ): Promise<{ ok: true; requestId: string } | { ok: false; reason: string }> {
@@ -363,7 +363,7 @@ async function validateAbandonableCheckpoint(
 }
 
 /** 关掉被放弃的人工请求；由调用方在事务内、所有校验通过之后调用。 */
-async function closeAbandonedCheckpoint(tx: typeof sql, requestId: string): Promise<void> {
+export async function closeAbandonedCheckpoint(tx: typeof sql, requestId: string): Promise<void> {
   await tx`UPDATE human_requests SET status='closed', revision=revision+1, closed_at=now(),
     close_reason='abandoned_checkpoint'
     WHERE id=${requestId} AND status IN ('open','answered') AND resumed_at IS NULL`;

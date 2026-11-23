@@ -154,15 +154,13 @@ if (testDatabaseUrl) {
       assert.equal(requestAfter.status, "answered");
       assert.equal(requestAfter.resumed_at, null);
 
-      // #1223 期望 2：断点不可用时的受治理出口——显式声明放弃现场后按当前配置重跑。
-      const abandoned = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
-      assert.equal(abandoned.statusCode, 200, abandoned.body);
-      const [requestAbandoned] = await sql`SELECT status, close_reason, resumed_at FROM human_requests
+      // #1223 期望 2：放弃现场的拒绝路径必须完全只读。
+      const abandonedAttempt = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
+      assert.equal(abandonedAttempt.statusCode, 409, abandonedAttempt.body);
+      const [requestAfterAbandon] = await sql`SELECT status, close_reason, resumed_at FROM human_requests
         WHERE id = ${rerunAnswered.requestId}`;
-      assert.deepEqual({ status: requestAbandoned.status, close_reason: requestAbandoned.close_reason,
-        resumed_at: requestAbandoned.resumed_at }, { status: "closed", close_reason: "abandoned_checkpoint", resumed_at: null });
-      const [jobAbandoned] = await sql`SELECT status FROM jobs WHERE id = ${rerunAnswered.jobId}`;
-      assert.equal(jobAbandoned.status, "pending");
+      assert.deepEqual({ status: requestAfterAbandon.status, close_reason: requestAfterAbandon.close_reason,
+        resumed_at: requestAfterAbandon.resumed_at }, { status: "answered", close_reason: null, resumed_at: null });
 
       // 断点仍在保存（preparing）时同样不算不可恢复，拒绝且不改状态。
       const preparing = await insertWaitingJob("answered");
