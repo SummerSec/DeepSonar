@@ -107,11 +107,14 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
       const stale1 = await app.invoke({ jobId: rival.jobId, projectId: writer.projectId, canvasId: rival.canvasId,
         operationId: "read_project_memory", input: { item_ref: String(item!.id), version: 1,
           expected_hash: String((found.items as Array<{ hash: string }>)[0].hash) }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
-      const staleRevision = await submit(db as never, rival, { title: "构建要先升 SDK", content: "基于旧基线的另一份修订",
-        factRef: rivalFact, target: { usage_ref: String(stale1.usage_ref) } });
-      assert.equal(staleRevision.accepted, true);
+      await assert.rejects(submit(db as never, rival, { title: "构建要先升 SDK", content: "基于旧基线的另一份修订",
+        factRef: rivalFact, target: { usage_ref: String(stale1.usage_ref) } }),
+      (error: { error_code?: string; message: string }) => {
+        assert.match(error.message, /target version is unavailable/u);
+        return true;
+      }, "a baseline superseded by a newer version must not be revisable");
       const versionsAfterRival = await sql`SELECT version FROM project_knowledge_versions WHERE item_id=${item!.id} ORDER BY version`;
-      assert.deepEqual(versionsAfterRival.map(row => Number(row.version)), [1, 2], "a stale baseline must not append a version");
+      assert.deepEqual(versionsAfterRival.map(row => Number(row.version)), [1, 2]);
 
       // 撤销后同名投稿不复活，也不追加版本。
       await sql`UPDATE project_knowledge_items SET status='revoked' WHERE id=${item!.id}`;
