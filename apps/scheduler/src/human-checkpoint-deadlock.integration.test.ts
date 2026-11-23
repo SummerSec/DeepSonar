@@ -154,9 +154,11 @@ if (testDatabaseUrl) {
       assert.equal(requestAfter.status, "answered");
       assert.equal(requestAfter.resumed_at, null);
 
-      // #1223 期望 2：放弃现场的拒绝路径必须完全只读。
-      const abandonedAttempt = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
-      assert.equal(abandonedAttempt.statusCode, 409, abandonedAttempt.body);
+      // #1223 期望 2：不可用现场在「其他前置检查失败」时同样不得先关请求。
+      // 该夹具没有可用的冻结网关预算，重跑会在预算检查处被拒；这正好证明放弃写回
+      // 位于所有校验之后——被拒时人工请求必须完全没动。
+      const refusedByBudget = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
+      assert.notEqual(refusedByBudget.statusCode, 200, refusedByBudget.body);
       const [requestAfterAbandon] = await sql`SELECT status, close_reason, resumed_at FROM human_requests
         WHERE id = ${rerunAnswered.requestId}`;
       assert.deepEqual({ status: requestAfterAbandon.status, close_reason: requestAfterAbandon.close_reason,
