@@ -2,7 +2,7 @@ import { PI_MAIN_REQUEST_BUDGET_SOURCE, redactPiContextSecrets } from "./pi-main
 import { stripTypeScriptTypes } from "node:module";
 
 // CI and runtime images use Node 24, whose transform API is absent from @types/node 26.
-// https://nodejs.org/download/release/v24.22.2/docs/api/module.html#modulestriptypescripttypescode-options
+// https://nodejs.org/download/release/v24.22.3/docs/api/module.html#modulestriptypescripttypescode-options
 declare module "node:module" {
   function stripTypeScriptTypes(code: string, options: {
     mode: "transform";

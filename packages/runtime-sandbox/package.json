@@ -14,7 +14,7 @@
     "@alibaba-group/opensandbox": "1.2.0",
     "@deepsonar/runtime-manual-contract": "workspace:*",
     "@deepsonar/shared-types": "workspace:*",
-    "undici": "^7.29.0",
+    "undici": "^7.30.2",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

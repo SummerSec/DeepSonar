@@ -1,5 +1,5 @@
 # DeepSonar official Agent runtime. Build with TOOLSET=base or TOOLSET=audit.
-ARG BASE_IMAGE=node:24-bookworm-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9
+ARG BASE_IMAGE=node:24-bookworm-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 FROM ${BASE_IMAGE} AS runtime-rootfs
 
 ARG TOOLSET=base
@@ -89,6 +89,10 @@ RUN set -eu; \
   test -x node_modules/@deepseek-ai/dsh/lib/bin.js; \
   ln -sf /opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh; \
   npm cache clean --force
+
+# 候选构建产物里记录 Node 内置与 npm 实际装入的 Undici 版本（#1228）。进程内绑定版本
+# 只能证明 Node 自带的副本，所以另读 DSH vendor 实际安装的 package.json。
+RUN node -p 'JSON.stringify({node: process.version, undici_bundled: process.versions.undici, undici_dsh: require("/opt/deepsonar/dsh/node_modules/undici/package.json").version})'
 
 RUN set -eu; \
   test "$TOOLSET" = base -o "$TOOLSET" = audit; \
