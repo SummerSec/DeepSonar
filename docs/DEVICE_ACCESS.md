@@ -11,6 +11,8 @@ DeepSonar 的 Job 跑在硬化容器沙箱里，沙箱内**没有任何物理设
 
 ## 1. 现状（代码事实）
 
+设备页在登记状态下显示所属设备代理最近报告的可用情况。任务详情的「结果 → 执行账本 → 设备绑定」单独显示这次运行的设备需求、各次执行的租约诊断和已记录的设备。普通任务未声明需求时只显示折叠摘要。重试后仍可核对对应执行的申请错误，已有租约时连接情况显示为未验证。状态依据见[设备绑定诊断](architecture/09-interface-specs.md#设备绑定诊断1211)。
+
 | 事实 | 位置 |
 | --- | --- |
 | 沙箱资源与硬化是冻结快照的一部分：cpu/memory/pids、`capDropAll`、`noNewPrivileges` | `apps/scheduler/src/config.ts` `sandboxLimits`、`jobs.agent_snapshot_json.sandbox_limits` |

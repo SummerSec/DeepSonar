@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   deviceActionLabel,
+  deviceAdmissionLabel,
   deviceCanManage,
   deviceErrorCode,
   deviceRemedyHint,
@@ -73,6 +74,18 @@ const syncedRig = {
   admission: { revision: 3, reconciled: true, mode: "platform", usable: ["rig-1", "rig-2"] },
 };
 const unreachableRig = { id: "rig-b", broker_configured: true, admission: null };
+
+test("登记设备只使用所属代理已确认的可用清单", () => {
+  const registry = { enabled: true, rigs: [syncedRig, unreachableRig] };
+  const device = { key: "rig-1", rig_id: syncedRig.id };
+  assert.equal(deviceAdmissionLabel(device, registry), "代理报告可用");
+  assert.equal(deviceAdmissionLabel({ ...device, key: "other" }, registry), "代理未列为可用");
+  assert.equal(deviceAdmissionLabel({ ...device, rig_id: unreachableRig.id }, registry), "代理可用状态未知");
+  assert.equal(deviceAdmissionLabel(device, { enabled: true, rigs: [
+    { ...syncedRig, admission: { ...syncedRig.admission, reconciled: false } },
+  ] }), "代理可用状态未知");
+  assert.equal(deviceAdmissionLabel(device, { ...registry, enabled: false }), "设备接入未启用");
+});
 
 test("rig admission summary reports configuration gaps instead of pretending synced", () => {
   assert.match(rigAdmissionSummary(null), /未知/);

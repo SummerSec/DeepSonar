@@ -6,6 +6,7 @@ import { canAccessAnyScope } from "../permissions";
 import {
   DEVICE_TRANSPORT_OPTIONS,
   deviceActionLabel,
+  deviceAdmissionLabel,
   deviceCanManage,
   deviceErrorCode,
   deviceRemedyHint,
@@ -307,6 +308,7 @@ export function DevicesPage() {
                   <td className={tdCls}>{device.model ?? "-"}</td>
                   <td className={tdCls}>
                     <ToneBadge tone={deviceStatusTone(device.status)}>{deviceStatusLabel(device.status)}</ToneBadge>
+                    <p className="mt-1 text-[11px] text-zinc-400">{deviceAdmissionLabel(device, registry?.rig)}</p>
                   </td>
                   <td className={tdCls}>
                     {device.lease_id ? (
