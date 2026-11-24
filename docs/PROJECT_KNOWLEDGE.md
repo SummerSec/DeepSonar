@@ -55,6 +55,16 @@ project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请
 
 本切片不改变鉴权、lease/Attempt fencing、预算、幂等或未知效果门；跨 Attempt 新执行代际、Recovery Hub ownership、完成门和 Web 恢复投影仍属 #903 后续范围。
 
+## 用后必评（#1219 第二步，2026-11-23）
+
+评价写进工具契约本身，而不是另加一道门。三处描述现在说清同一件事：
+
+- `search_project_knowledge`：搜索不是使用，本身不产生反馈；
+- `read_project_knowledge`：只有**实际应用且能给出可核对证据**时才调用反馈工具，带上该次读取返回的 `usage_ref` 与真实 `evidence_refs`；效果不明或没有证据就**不要调用**（旧名 `read_project_memory` 只作为迁移窗口内的只读别名存在，仅对快照已列出该名的在飞任务可用，反馈口径相同）；
+- `record_knowledge_feedback`：`outcome` 只有 `success` / `failure` / `inapplicable` 三选一，**没有 `unknown` 可提交**——缺评就是平台记录的「未知」，不得用任务成败反推知识有效性。
+
+因此「缺评＝无样本」与「提交 unknown」是两件事：前者是统计口径，后者不存在。评价失败只登记，不阻塞主任务；覆盖率不得自动用于候选、评分或退役判定，旧的后台整理链仍按既有条件接收合格来源。本轮只改指引，不声称反馈率会因此提高。
+
 ## 工作与结算
 
 `project_knowledge_work` 保存触发去重、stage、generation、当前 Job 和累计预算。Scheduler 为 work 创建独立标准 Canvas；maker、每个 case×arm trial、evaluator、reviewer 都是既有角色的普通 Job，使用现有 Dispatcher、Attempt、沙箱、Model Gateway、归档和终态恢复路径。知识 Job 的终态不触发业务 Hub/Report。
