@@ -139,7 +139,7 @@ if (!databaseUrl) {
             if (context.completionPhase === "abort") return {};
             try {
               await ingestFactSemanticEvent({ v: 1, event_id: context.eventId, type: "fact", payload: context.input }, null,
-                event => ingestEvent(job.jobId, event));
+                async event => { await ingestEvent(job.jobId, event); });
               return { accepted: true };
             } catch (error) {
               if (error instanceof ControlInputError) throw controlInputRuntimeRejection(error);
@@ -147,8 +147,8 @@ if (!databaseUrl) {
             }
           }, ["emit_fact", "mark_job_done"]);
           const post = (operation: string, payload: unknown) => app.inject({ method: "POST",
-            url: `/control/v1/jobs/${job.jobId}/operations/${operation}`, payload,
-            headers: { authorization: `Bearer ${grant.token}`, "idempotency-key": randomUUID(), "x-deepsonar-proposal-revision": "0" },
+            url: `/control/v1/jobs/${job.jobId}/operations/${operation}`, payload: JSON.stringify(payload),
+            headers: { authorization: `Bearer ${grant.token}`, "idempotency-key": randomUUID(), "x-deepsonar-proposal-revision": "0", "content-type": "application/json" },
           });
           const declare = (proposal: TaskResultProposal) => post("emit_fact", { title: "Bounded parser result",
             description: "The scoped parser result records its evidence, method and limitations for independent review.", artifact: { task_result: proposal } });
