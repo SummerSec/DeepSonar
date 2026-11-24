@@ -5,6 +5,10 @@
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
+## 清空重试的确认前检查（#1236）
+
+`GET /tasks/:canvasId/retry-availability` 是使用 `jobs:control` 和现有项目范围校验的只读入口。它检查归档、活动执行及历史保留引用，返回 `allowed`，阻塞时返回具体原因和既有保留分类。Web 列表及详情在清空确认前调用它，保留分类及下一步同时用于处理实际 POST 的 409。查询通过后，重试仍按原事务内的当前事实、设备和执行配置准入。使用任务工作台的「下达任务」另建任务时继续使用原创建权限和设备授权。回归接既有 recovery 和 web-facts Actions，最终候选另验。
+
 Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用途、当前 Finding 实际引用及待处理原因（#1019）。列表采用有界范围查询，详情再读取既有留存证据与当前 Plan 判据；截断与无法确认明确呈现未知。投影不提供写入权限，人工信任、技术验证与完成判据仍走原契约。详见[证据追踪](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
 
 ## 任务发现的状态显示与筛选（#1199）
@@ -227,6 +231,20 @@ Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过
 [#776 A 基线](../REPAIR_FEEDBACK_BASELINE.md)冻结当前字段完整性与 operation/error/effect 恢复矩阵；进程内幂等缓存和广告预算不构成持久修正链。
 
 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)给 mark_job_done 增加必填 proposal revision header、原 key 的只读回执查询和持久拒绝计数。原 Control 权限仍有效；accepted/persisted_deferred 不是终态或效果结算。
+
+## 任务声明的前置条件反馈（#1245，2026-11-23）
+
+普通任务允许不提供 `task_contract`，该契约只在创建期由宿主冻结。`emit_fact` 的工具说明与拒绝反馈因此按前置条件分档：
+
+| 情形 | 工具说明 | 拒绝码 | 反馈分类 | `next_action` |
+| --- | --- | --- | --- | --- |
+| 快照带冻结契约 | 相关交付/阴性结果走 `artifact.task_result` | 契约内校验失败 | `model_correctable` | 按 `expected` 修正 |
+| 快照无冻结契约 | 明确不支持 `artifact.task_result`，改用普通 Fact 记录有界结果 | `task_result_contract_missing`（409） | `permanent_failure` | 停止提交 task_result，改用普通 Fact 并按完成协议收口 |
+| 快照存在无效冻结契约 | 记录当前契约不可用的阻塞 | `task_result_contract_invalid`（409） | `permanent_failure` | 由创建方核对当前契约并创建有效新任务，保留本次事实与历史 |
+
+`task_result_contract_missing` 不进入 Agent 可修复集合，反馈不携带 `expected`，也不给出「改 payload / 换 Idempotency-Key」这类在宿主冻结面上不可能成功的下一步。契约存在时的严格校验、证据绑定、预算、权限与不可变历史不变。
+
+正常省略契约和已经冻结但不符合当前 TaskContract 的数据分别返回上述永久前置条件码。正常创建、冻结快照、生产工具说明、实际 Control HTTP、执行器的拒绝转换和事件入账由 `task-result-review.integration.test.ts` 联合验证。无契约 Job 的任务声明拒绝后仍可保存普通 Fact 并通过原完成回执，目标评审保持 `not_assessed`；合法契约的声明仍绑定原始证据，摘要不匹配继续拒绝。现有无效契约的历史样本仅在隔离测试库构造。最终候选 Actions 另验。
 
 ## Pi RPC 完整归档回读（#990 切片）
 

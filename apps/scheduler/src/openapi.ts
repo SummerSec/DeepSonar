@@ -1356,6 +1356,20 @@ const OPS: Op[] = [
     tags: ["Tasks"],
   },
   {
+    method: "get",
+    path: "/tasks/{canvasId}/retry-availability",
+    summary: "查询清空重试的当前阻塞原因",
+    description: "只读查询归档状态、活动执行和历史保留引用。使用与重试相同的 jobs:control 和项目范围。allowed 表示本次查询通过这些检查，实际重试仍在事务内重新校验保留引用及当前执行配置。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    responses: { "200": { type: "object", required: ["allowed"], properties: {
+      allowed: { type: "boolean" }, error_code: { type: "string" }, error: { type: "string" },
+      retained: { type: "object", additionalProperties: { type: "integer", minimum: 0 } },
+      retained_kinds: { type: "array", items: { type: "string", enum: ["knowledge", "continuation_budget", "device_lease"] } },
+      retained_reason: { type: "string", enum: ["device_history", "governance_records"] }, next_action: { type: "string" },
+    } } },
+  },
+  {
     method: "patch",
     path: "/tasks/{canvasId}",
     summary: "更新任务标题、内容或授权用户目标（不改写已冻结 Job 快照）",

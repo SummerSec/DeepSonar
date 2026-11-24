@@ -3,6 +3,7 @@ import test from "node:test";
 import { normalizeTaskContract, type ArtifactInput } from "@deepsonar/shared-types";
 import type { sql } from "./db.js";
 import { prepareTaskResult } from "./task-result-ingestion.js";
+import { ControlInputError } from "./control-input.js";
 import { assertNoGoalReviewAuthority } from "./task-goal-review-input.js";
 import { taskContractDigest } from "./task-outcome-snapshot.js";
 import { goalReviewDigest } from "./task-goal-review-source.js";
@@ -57,5 +58,32 @@ test("task result host namespaces and mixed review identity cannot be forged", (
   for (const input of [{ kind: "task.result" }, { artifact_key: "task-result:forged" }, { extensions: { task_result: {} } },
     { task_result: proposal, artifact_key: "user-key" }, { task_result: proposal, goal_review: {} }]) {
     assert.throws(() => assertNoGoalReviewAuthority(input as ArtifactInput));
+  }
+});
+
+test("无冻结契约时按宿主前置条件拒绝，而不是要求 Agent 改写 payload", async () => {
+  const { db } = fixture();
+  const withoutContract = { ...job, agent_snapshot_json: {} };
+  await assert.rejects(prepareTaskResult(db, withoutContract, id(3), "event", proposal), (error: unknown) => {
+    assert.ok(error instanceof ControlInputError);
+    assert.equal(error.code, "task_result_contract_missing");
+    assert.equal(error.retryable, false, "宿主冻结的契约缺失不是 Agent 可修复的输入错误");
+    assert.equal(error.path, "artifact.task_result");
+    assert.match(error.message, /普通 Fact 记录本次有界结果/u);
+    assert.doesNotMatch(error.message, /expected/u);
+    return true;
+  });
+});
+
+test("存在但无效的冻结契约与正常省略分别拒绝", async () => {
+  const { db } = fixture();
+  for (const value of [null, {}, { ...contract, schema_version: 99 }]) {
+    await assert.rejects(prepareTaskResult(db, { ...job, agent_snapshot_json: { task_contract: value } }, id(3), "event", proposal), (error: unknown) => {
+      assert.ok(error instanceof ControlInputError);
+      assert.equal(error.code, "task_result_contract_invalid");
+      assert.equal(error.retryable, false);
+      assert.doesNotMatch(error.message, /没有 task_contract/);
+      return true;
+    });
   }
 });

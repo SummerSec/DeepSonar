@@ -157,6 +157,7 @@ GET /schema.md
 GET /shared-assets/:id/content
 GET /skill-sources
 GET /skill-sources/:id
+GET /tasks/:canvasId/retry-availability
 GET /terminal-ws
 GET /tokens
 GET /users
@@ -409,6 +410,7 @@ GET /runtime-images/{id}
 GET /schema
 GET /schema.md
 GET /shared-assets/{id}/content
+GET /tasks/{canvasId}/retry-availability
 GET /skill-sources
 GET /skill-sources/{id}
 GET /tokens

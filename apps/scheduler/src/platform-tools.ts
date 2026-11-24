@@ -1,5 +1,5 @@
 import { SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/catalog.js";
-import { PLATFORM_CONTROL_HTTP_BOOTSTRAP } from "./platform-control-skill.js";
+import { HUMAN_RESOURCE_PREFLIGHT_GUIDANCE, PLATFORM_CONTROL_HTTP_BOOTSTRAP } from "./platform-control-skill.js";
 
 const PLATFORM_TOOL_USAGE: Record<string, string> = {
   submit_task_knowledge_suggestion: [
@@ -96,7 +96,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   emit_fact: [
     "### `emit_fact` — 增量提交可验证事实",
-    "- 无 Finding 的工程交付或有界阴性结果用 artifact.task_result：schema_version:1、kind(delivery/negative_result/blocked/not_executed)、task_contract_sha256、target、与契约一致的baseline、criterion_ids、method、observed、limitations、evidence_refs。先保存本 Job/Attempt 含留存文件 URI/hash 的原始证据，再引用其 Fact；delivery/negative_result 必须有证据，未执行或受阻写对应 kind 和限制。结果是待评声明，不是成功；不得将预算耗尽、工具失败写成阴性，也不必创建假 Finding。不能混用 goal_review/verification 或自选 artifact_key。",
+    "- 仅当本 Job 的冻结快照带 task_contract 时，无 Finding 的工程交付或有界阴性结果才用 artifact.task_result（无契约的普通任务不支持 task_result，改用普通 Fact 记录有界结果并按完成协议收口，不要改写 payload 或换 key 去补契约）：schema_version:1、kind(delivery/negative_result/blocked/not_executed)、task_contract_sha256、target、与契约一致的baseline、criterion_ids、method、observed、limitations、evidence_refs。先保存本 Job/Attempt 含留存文件 URI/hash 的原始证据，再引用其 Fact；delivery/negative_result 必须有证据，未执行或受阻写对应 kind 和限制。结果是待评声明，不是成功；不得将预算耗尽、工具失败写成阴性，也不必创建假 Finding。不能混用 goal_review/verification 或自选 artifact_key。",
     "- 独立目标评审使用冻结 task_goal_review 指派，通过 artifact.goal_review 提交整个指定判据的 expected/actual/rationale、限制和本 Job Fact 引用；先保存含本 Attempt 保留文件 URI/hash 的独立证据。没有指派不能自评，satisfied 不等于整体完成或赏金资格。",
     "- 直接参数：`title`（至少 2 个非空白字符）；`description`（至少 16 个非空白字符）；`quantities`（可选，最多 20 条 `{value, unit, basis, ref?}` 数值口径，承重数字必须声明）；`artifact`（可选，通用 Artifact：kind/schema_version/claims/evidence/relations/extensions）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
     "- 长内容先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；明确大小/截断拒绝按 repair 修正，结果未知按该 operation 契约查询回执或状态；禁止用故意缩短的语义内容重试。",
@@ -155,6 +155,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   request_human: [
     "### `request_human` — 请求人工介入并结束本轮",
+    HUMAN_RESOURCE_PREFLIGHT_GUIDANCE,
     "- 必填参数：`reason`（8-2000 字符）、结构化 `subject`，以及严格 `guidance` 对象；guidance 只能含 `question`（8-240 字符）、`required_action`（8-2000）、`reply_instructions`（8-2000）和 `after_reply`（8-1000）。未知字段、空值和缺字段均拒绝。",
     "- Finding 阻塞：`subject={type:\"finding\",finding_id,subject_revision}`；只允许当前项目、当前画布且未被最低严重度策略豁免的 canonical Finding。",
     "- 平台阻塞：`subject={type:\"platform_blocker\",kind}`；kind 只能是 authorization|credential|high_risk_action|business_decision。",
