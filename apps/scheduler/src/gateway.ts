@@ -1386,20 +1386,34 @@ export function registerGateway(app: FastifyInstance): void {
       const receiptPath = /^\/gateway\/_settlement\/([0-9a-f-]{36})$/u.exec(req.url);
       if (req.url.startsWith("/gateway/_settlement/")) {
         if (req.method !== "GET" || !receiptPath) return deny(reply, 400, "Invalid settlement query", "invalid_settlement_query");
-        const [receipt] = await sql`SELECT e.status, e.settlement_json, l.settlement_status, l.source
+        // #1230: job_tokens carries no attempt_id, so the receipt used to be located through the
+        // ACTIVE Attempt. Once that Attempt reached a terminal state the filter became
+        // `e.attempt_id = NULL`, which never matches, so a settled request reported 404 and the
+        // client turned it into a permanent failure. The receipt is now located by its durable
+        // identity only — Job + original token + request id + workload — and two rows claiming
+        // that identity are reported as unknown instead of resolved by recency. Admission,
+        // budget and replay rules still key off the active Attempt and are unchanged.
+        const receipts = await sql`SELECT e.status, e.settlement_json, l.settlement_status, l.source, e.attempt_id
           FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
-          WHERE e.job_id=${jt.job_id} AND e.attempt_id=${jt.attempt_id ?? null}
+          WHERE e.job_id=${jt.job_id}
+          AND e.effect_kind='gateway_model_request'
           AND e.resource_identity_json->>'job_token_id'=${String(jt.id)}
           AND e.intent_json->>'gateway_request_id'=${receiptPath[1]!}
-          AND e.intent_json->>'workload'=${String(jt.workload)}`;
+          AND e.intent_json->>'workload'=${String(jt.workload)}
+          ORDER BY e.created_at DESC LIMIT 2`;
         reply.header("cache-control", "no-store");
+        if (receipts.length > 1) return { status: "unknown" };
+        const receipt = receipts[0];
         if (!receipt) {
           const noEffect = jt.attempt_id && await readNoEffectReceipt(sql, { jobId: String(jt.job_id),
             attemptId: String(jt.attempt_id), tokenId: String(jt.id), workload: gatewayWorkload(jt.workload), requestId: receiptPath[1]! });
           return noEffect || reply.code(404).send({ status: "not_found" });
         }
         if (receipt.status === "settled" && receipt.settlement_status === "settled") {
-          if (receipt.source === "gateway_error" && receipt.settlement_json?.external_effect === false) {
+          // #1230：只有当前活动 Attempt 自己的 no-start 结算才构成"未开始"证据；
+          // 历史 Attempt 的 gateway_error 记录只回答"已结算"，绝不升级成新的 not_started 证明。
+          const ownActiveAttempt = jt.attempt_id !== null && String(receipt.attempt_id) === String(jt.attempt_id);
+          if (receipt.source === "gateway_error" && receipt.settlement_json?.external_effect === false && ownActiveAttempt) {
             return { status: "not_started", reason: "gateway_transient" };
           }
           return { status: "settled" };

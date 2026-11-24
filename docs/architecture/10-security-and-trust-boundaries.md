@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-21
+> 同步日期：2026-11-24
 
 #1082 的[用量形态诊断](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)只投影固定分类、字段类型和有界计数，未知键及 event/type 原值丢弃，SHA-256 仅计算该非秘密投影。原始帧、业务文本、header、URL、秘密及其原文哈希不得持久化。诊断不授予用量可信度或重放权限，main/OM 真实 SQL/HTTP 回归由最终 SHA Actions 验收。
 
@@ -194,7 +194,7 @@ FR-FIND-008 只信任经过权限校验的操作员材料准入和独立评审�
 
 ## 透明代理的最小边界（#923）
 
-未知业务头默认保留，不能以泛前缀过滤代替权限检查。认证载体由 Gateway 消费并以绑定凭据重新生成；目标 authority 只来自服务器 base URL，Connection 指定字段和非法 framing 在 HTTP 边界处理，重定向不改变目标。配置头继续绑定 #921 选定 endpoint/profile。usage 与原始响应分离；客户端收到业务数据不表示 durable settlement，OM wrapper 必须查当前 Job/Attempt/token/workload 的宿主回执，Provider 内容不能冒充 settled 或 not_started。冻结模型、主后台预算、终态撤销和未知效果规则保持。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)，本分支最终 SHA Actions 待验。
+未知业务头默认保留，不能以泛前缀过滤代替权限检查。认证载体由 Gateway 消费并以绑定凭据重新生成；目标 authority 只来自服务器 base URL，Connection 指定字段和非法 framing 在 HTTP 边界处理，重定向不改变目标。配置头继续绑定 #921 选定 endpoint/profile。usage 与原始响应分离；客户端收到业务数据不表示 durable settlement，OM wrapper 必须按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一身份查宿主回执，回执账本仍关联原 Attempt/effect。历史结算只证明账本状态，恢复继续核验当前活动 Attempt 和原授权（#1230），Provider 内容不能冒充 settled 或 not_started。冻结模型、主后台预算、终态撤销和未知效果规则保持。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)，本分支最终 SHA Actions 待验。
 
 #923 同时拒绝重复认证字段和业务字段中的入站 Job token；上游 header/trailer 与跨 chunk 原始 body 的绑定 key 明文回显会中止。gzip/deflate/br 在每段原压缩字节转发前由独立解码观察扫描，未知编码、非法压缩或解码超限断流；该机制不能推定任意业务自定义编码/变换的 key echo 已受保护；限制见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
 

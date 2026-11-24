@@ -203,6 +203,87 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
     const unresolvedHistory = await readEffects(isolatedJob.id);
     assert.equal(unresolvedHistory.length, 2);
     assert.equal(unresolvedHistory.some(e => e.status === "unknown"), true);
+
+    // #1230: the settlement probe must stay answerable while the owning Attempt is terminal,
+    // because the Job can still be running (and the client is inside the same request).
+    spoof = false;
+    const terminalJob = await createJob(), terminalToken = await issue(terminalJob.id);
+    const settledId = randomUUID();
+    assert.equal((await send(terminalToken.plaintext, settledId)).statusCode, 200);
+    for (const terminalStatus of ["failed", "succeeded"]) {
+      await sql`UPDATE job_attempts SET status=${terminalStatus}, phase='terminal', finished_at=now() WHERE id=${terminalJob.attemptId}`;
+      const settledProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+        headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+      assert.equal(settledProbe.statusCode, 200, `settled receipt after ${terminalStatus} Attempt: ${settledProbe.body}`);
+      assert.deepEqual(settledProbe.json(), { status: "settled" });
+      assert.equal(settledProbe.headers["cache-control"], "no-store");
+    }
+    const unknownProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${randomUUID()}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(unknownProbe.statusCode, 404, "an unknown request id is still not found");
+    // A later Attempt must not hide the original receipt either: the durable request identity
+    // (Job + original token + request id + workload) is what the probe is scoped to.
+    await sql.begin(async tx => {
+      const database = tx as unknown as typeof sql;
+      await database`SELECT id FROM jobs WHERE id=${terminalJob.id} FOR UPDATE`;
+      await attempts.createAttempt(database, terminalJob.id);
+    });
+    const nextAttemptProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(nextAttemptProbe.statusCode, 200, `settled receipt with a newer Attempt: ${nextAttemptProbe.body}`);
+    assert.equal(nextAttemptProbe.json().status, "settled");
+    const otherToken = await issue(terminalJob.id);
+    for (const deniedToken of [otherToken.plaintext, isolatedToken.plaintext]) {
+      const isolatedProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+        headers: { authorization: `Bearer ${deniedToken}` } });
+      assert.equal(isolatedProbe.statusCode, 404, "another token or Job cannot read the original receipt");
+    }
+    // Historical no-start evidence is read while the durable identity is still unique.
+    await sql`UPDATE job_attempt_effects SET settlement_json = ${sql.json({ result: "never_started", external_effect: false,
+        response_status: "not_started", total_tokens: 0, source: "gateway_error" })}
+      WHERE job_id=${terminalJob.id} AND intent_json->>'gateway_request_id'=${settledId}`;
+    await sql`UPDATE job_usage_ledger SET source='gateway_error', total_tokens=0
+      WHERE job_id=${terminalJob.id} AND effect_id LIKE ${`gateway_model_request:%`}`;
+    const historicalErrorProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(historicalErrorProbe.statusCode, 200, historicalErrorProbe.body);
+    assert.deepEqual(historicalErrorProbe.json(), { status: "settled" },
+      "a historical Attempt's gateway_error row never becomes a fresh not_started proof");
+    for (const workload of ["observational_memory", "main"]) {
+      await sql`UPDATE job_attempt_effects SET intent_json=jsonb_set(intent_json,'{workload}',${sql.json(workload)})
+        WHERE job_id=${terminalJob.id} AND intent_json->>'gateway_request_id'=${settledId}`;
+      const workloadProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+        headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+      assert.equal(workloadProbe.statusCode, workload === "main" ? 200 : 404, "receipt workload must match the token");
+    }
+    // Two effects claiming the same durable identity are ambiguous, never resolved by recency,
+    // and that holds whether or not an active Attempt exists.
+    await sql`INSERT INTO job_attempt_effects (attempt_id, job_id, effect_id, effect_kind, step, status,
+        resource_identity_json, intent_json, replay_policy)
+      SELECT attempt_id, job_id, effect_id || ':duplicate', effect_kind, step + 1, status,
+        resource_identity_json, intent_json, replay_policy
+      FROM job_attempt_effects WHERE job_id=${terminalJob.id} AND intent_json->>'gateway_request_id'=${settledId}`;
+    const ambiguous = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(ambiguous.statusCode, 200, ambiguous.body);
+    assert.equal(ambiguous.json().status, "unknown", "duplicate durable identities are never resolved by recency");
+    // A token that is no longer usable keeps its existing refusal.
+    await sql`UPDATE job_tokens SET status='revoked', revoked_at=now() WHERE id=${terminalToken.id}`;
+    const revokedProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(revokedProbe.statusCode, 401, "a revoked token is refused");
+    assert.equal(revokedProbe.json().error.type, "token_inactive");
+    await sql`UPDATE job_tokens SET expires_at=now()-interval '1 second' WHERE id=${otherToken.id}`;
+    const expiredProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${otherToken.plaintext}` } });
+    assert.equal(expiredProbe.statusCode, 401, "an expired token is refused");
+    assert.equal(expiredProbe.json().error.type, "token_expired");
+    const closedJobToken = await issue(terminalJob.id);
+    await sql`UPDATE jobs SET status='failed' WHERE id=${terminalJob.id}`;
+    const closedJobProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${closedJobToken.plaintext}` } });
+    assert.equal(closedJobProbe.statusCode, 401, "a terminal Job is refused");
+    assert.equal(closedJobProbe.json().error.type, "job_inactive");
   } finally {
     try { await close(); } finally { await admin.unsafe(`DROP DATABASE "${name}" WITH (FORCE)`); await admin.end({ timeout: 5 }); }
   }
