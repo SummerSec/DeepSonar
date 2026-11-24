@@ -26,7 +26,7 @@ Job 创建时冻结两类目录：
 | --- | --- |
 | `request_project_knowledge` | 普通 Job 用真实可读来源启动第一次整理，无需已有 work |
 | `search_project_knowledge` | 查询冻结目录的有界 metadata |
-| `read_project_memory` | 本项目精确版本及 hash 的 Memory 正文 |
+| `read_project_knowledge` | 本项目精确版本及 hash 的 Memory 正文（旧名 `read_project_memory` 仅在迁移窗口内、且只对冻结快照本来就允许旧名的在途 Job 生效；两者执行同一实现与同一项目/版本/撤权检查） |
 | `read_knowledge_input` | 当前 Scheduler 分配的 work/stage/audience 输入 |
 | `propose_project_knowledge` | maker 提出 reuse/revise/create/merge/retire |
 | `submit_knowledge_evaluation` | evaluator 提交独立 trial 的结构化结果 |
