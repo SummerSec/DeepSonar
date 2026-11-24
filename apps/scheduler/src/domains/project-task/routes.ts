@@ -81,6 +81,7 @@ import { taskContractPreflight, taskContractRuntimeBlockers } from "../../task-c
 import type { TargetAuthorizationSnapshot } from "../target-authorization/contract.js";
 import { recordTargetAuthorizationGrant, targetAuthorizationRequired } from "../target-authorization/index.js";
 import { applyPlanObjectivePatch, PlanObjectivePatch, readPersistedPlanObjective } from "../plan-protocol/objective.js";
+import { classifyRetryRetention, retryRetentionGuidance } from "./retry-retention.js";
 
 const CreateProjectBody = z.object({
   name: z.string().min(1),
@@ -1404,11 +1405,17 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         return reply.code(409).send({ error: "该任务仍有活动 Job，请先取消后再重试" });
       }
       if (retryResult.reason === "retained") {
+        // #1236：设备租约历史与知识/治理记录是两种不同的阻塞，给不同错误码与可行动引导。
+        const verdict = classifyRetryRetention(retryResult.retained ?? {});
+        const guidance = verdict.blocked
+          ? retryRetentionGuidance(verdict)
+          : { error: "task records must be retained", next_action: "请先确认这些记录的去向。" };
         return reply.code(409).send({
-          error: "task records must be retained",
+          error: guidance.error,
           error_code: "TASK_DELETE_KNOWLEDGE_RETAINED",
           retained: retryResult.retained ?? {},
-          next_action: "该任务留下了不可删除的治理/审计记录；重试会清空运行数据，因此请先确认这些记录的去向。",
+          ...(verdict.blocked ? { retained_kinds: verdict.kinds, retained_reason: verdict.reason } : {}),
+          next_action: guidance.next_action,
         });
       }
       return reply.code(404).send({ error: "canvas not found" });
