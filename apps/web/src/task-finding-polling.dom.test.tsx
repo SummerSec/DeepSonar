@@ -72,8 +72,14 @@ async function setup(context: TestContext, paginated = false) {
     assert.ok(button, `${label} exists`);
     await act(async () => button.click());
   };
-  context.after(async () => {
+  let mounted = true;
+  const unmount = async () => {
+    if (!mounted) return;
     await act(async () => root.unmount());
+    mounted = false;
+  };
+  context.after(async () => {
+    await unmount();
     router.dispose();
     Object.assign(api, original);
     dom.window.close();
@@ -84,7 +90,7 @@ async function setup(context: TestContext, paginated = false) {
       else delete (globalThis as Record<string, unknown>)[key];
     }
   });
-  return { dom, router, render, click, findingCalls, jobs: () => jobCalls,
+  return { dom, router, render, click, unmount, findingCalls, jobs: () => jobCalls,
     failFindings: (value: boolean) => { failFindings = value; },
     failJobs: (value: boolean) => { failJobs = value; },
     findingId: (value: string) => { findingId = value; },
@@ -146,4 +152,79 @@ test("task relationship options retain discoveries displaced from the live first
   for (const id of ["discovered-after-index-load", "newer-first-page-finding", "first-page-finding"]) {
     assert.ok(options.includes(`${id} · ${id.slice(0, 8)}`), `${id} remains available for relationships`);
   }
+});
+
+test("task detail checks retry retention before requesting destructive confirmation", async context => {
+  const env = await setup(context);
+  await env.render();
+  await env.tick();
+  await env.tick();
+  context.mock.method(api, "taskRetryAvailability", async () => ({ allowed: false,
+    error_code: "TASK_DELETE_KNOWLEDGE_RETAINED", retained_reason: "device_history", retained_kinds: ["device_lease"] }));
+  let retried = 0;
+  context.mock.method(api, "retryTask", async () => { retried++; return { id: "task-a", status: "pending" }; });
+  const more = env.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="更多"]');
+  assert.ok(more);
+  await act(async () => more.click());
+  await env.click("重试任务");
+  assert.equal(retried, 0);
+  assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null);
+  assert.match(env.dom.window.document.body.textContent ?? "", /设备使用历史.*下达任务/);
+});
+
+test("detail retry isolates A to B to A responses and keeps the current operation busy", async context => {
+  const env = await setup(context);
+  await env.render();
+  await env.tick();
+  await env.tick();
+  const checks: Array<{ id: string; signal: AbortSignal; resolve: (value: { allowed: boolean }) => void }> = [];
+  context.mock.method(api, "taskRetryAvailability", (id: string, signal?: AbortSignal) => new Promise<{ allowed: boolean }>(resolve => {
+    assert.ok(signal);
+    checks.push({ id, signal, resolve });
+  }));
+  const retried: string[] = [];
+  context.mock.method(api, "retryTask", async (id: string) => { retried.push(id); return { id, status: "pending" }; });
+  const retry = async () => {
+    const more = env.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="更多"]');
+    assert.ok(more);
+    assert.equal(more.disabled, false, "old task work does not keep this task busy");
+    if (![...env.dom.window.document.querySelectorAll("button")].some(node => node.textContent?.trim() === "重试任务")) {
+      await act(async () => more.click());
+    }
+    await env.click("重试任务");
+  };
+  await retry();
+  await act(async () => { await env.router.navigate("/projects/project-a/tasks/task-b?tab=findings"); });
+  await retry();
+  assert.equal(checks[0].signal.aborted, true);
+  await act(async () => checks[0].resolve({ allowed: true }));
+  assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null);
+  assert.equal(env.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="更多"]')!.disabled, true, "late A completion leaves B busy");
+  await act(async () => checks[1].resolve({ allowed: true }));
+  assert.match(env.dom.window.document.querySelector('[role="alertdialog"]')?.textContent ?? "", /任务编号 task-b/);
+  await act(async () => { await env.router.navigate("/projects/project-a/tasks/task-a?tab=findings"); });
+  assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null, "switching tasks aborts the old confirmation");
+  await retry();
+  await act(async () => checks[2].resolve({ allowed: true }));
+  assert.match(env.dom.window.document.querySelector('[role="alertdialog"]')?.textContent ?? "", /任务编号 task-a/);
+  await env.click("清空并重试");
+  assert.deepEqual(checks.map(check => check.id), ["task-a", "task-b", "task-a"]);
+  assert.deepEqual(retried, ["task-a"]);
+});
+
+test("detail retry ignores a late check after unmount", async context => {
+  const env = await setup(context);
+  await env.render();
+  await env.tick();
+  await env.tick();
+  let resolve!: (value: { allowed: boolean }) => void;
+  context.mock.method(api, "taskRetryAvailability", () => new Promise<{ allowed: boolean }>(done => { resolve = done; }));
+  let retried = 0;
+  context.mock.method(api, "retryTask", async () => { retried++; return { id: "task-a", status: "pending" }; });
+  await act(async () => env.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="更多"]')!.click());
+  await env.click("重试任务");
+  await env.unmount();
+  await act(async () => resolve({ allowed: true }));
+  assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null);
+  assert.equal(retried, 0);
 });

@@ -5,6 +5,10 @@
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
+## 清空重试的确认前检查（#1236）
+
+`GET /tasks/:canvasId/retry-availability` 是使用 `jobs:control` 和现有项目范围校验的只读入口。它检查归档、活动执行及历史保留引用，返回 `allowed`，阻塞时返回具体原因和既有保留分类。Web 列表及详情在清空确认前调用它，保留分类及下一步同时用于处理实际 POST 的 409。查询通过后，重试仍按原事务内的当前事实、设备和执行配置准入。使用任务工作台的「下达任务」另建任务时继续使用原创建权限和设备授权。回归接既有 recovery 和 web-facts Actions，最终候选另验。
+
 Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用途、当前 Finding 实际引用及待处理原因（#1019）。列表采用有界范围查询，详情再读取既有留存证据与当前 Plan 判据；截断与无法确认明确呈现未知。投影不提供写入权限，人工信任、技术验证与完成判据仍走原契约。详见[证据追踪](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
 
 ## 任务发现的状态显示与筛选（#1199）

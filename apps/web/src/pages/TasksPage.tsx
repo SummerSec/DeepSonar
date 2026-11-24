@@ -19,6 +19,7 @@ import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import { formatBeijingTime, nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
 import { SEED_SEVERITY_OPTIONS, composeRetryErrorMessage, COMPOSE_SEED_VERIFY_OPTIONS, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
+import { useTaskRetry } from "../use-task-retry";
 import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatDate, formatElapsed, formatTime, relativeTime } from "../ui";
 
 type Filter = "" | "active" | "findings" | "archived" | "knowledge_history";
@@ -449,6 +450,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
 export function TasksPage() {
   const confirm = useConfirmDialog();
   const { projectId } = useParams<{ projectId: string }>();
+  const retryAction = useTaskRetry(projectId, confirm);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialSeedIds = useMemo(
@@ -751,16 +753,15 @@ export function TasksPage() {
                     <button
                       title="清空历史后从意图重新执行"
                       onClick={async () => {
-                        if (!await confirm({
-                          title: "清空历史并重新执行？",
-                          description: isCompose
-                            ? "将清空本画布的运行数据，并按冻结种子重新投影后执行。项目历史 Finding 库存不会删除；若种子已失效，系统会拒绝重试。"
-                            : "将删除本任务的全部运行历史和本轮 Finding，并按原意图从零重跑。此操作不可撤销。",
-                          confirmLabel: "清空并重试",
-                          tone: "danger",
-                        })) return;
                         try {
-                          await api.retryTask(canvas.id);
+                          if (!await retryAction.run(canvas.id, {
+                            title: `清空「${canvas.title}」的历史并重新执行？`,
+                            description: isCompose
+                              ? "将清空本画布的运行数据，并按冻结种子重新投影后执行。项目历史 Finding 库存不会删除；若种子已失效，系统会拒绝重试。"
+                              : "将删除本任务的全部运行历史和本轮 Finding，并按原意图从零重跑。此操作不可撤销。",
+                            confirmLabel: "清空并重试",
+                            tone: "danger",
+                          })) return;
                           flash("已清空历史并重新开始执行");
                         } catch (e) {
                           flash(composeRetryErrorMessage(e), "error");
