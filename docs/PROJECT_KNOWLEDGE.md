@@ -64,6 +64,14 @@ project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请
 - `record_knowledge_feedback`：`outcome` 只有 `success` / `failure` / `inapplicable` 三选一，**没有 `unknown` 可提交**——缺评就是平台记录的「未知」，不得用任务成败反推知识有效性。
 
 因此「缺评＝无样本」与「提交 unknown」是两件事：前者是统计口径，后者不存在。评价失败只登记，不阻塞主任务；覆盖率不得自动用于候选、评分或退役判定，旧的后台整理链仍按既有条件接收合格来源。本轮只改指引，不声称反馈率会因此提高。
+## 项目知识卡片投影（#1256，2026-11-24）
+
+项目知识页的列表一次分页请求就够渲染卡片，不需要为每条再发请求：
+
+- `summary`：当前生效版本的 `content` 截断为 240 字；版本没有正文（例如纯 Skill）时为 `null`；
+- `feedback`：按该条目当前版本的 `content_sha256` 聚合 `project_knowledge_usages`，分 `success` / `failure` / `inapplicable` / `unrated` 与 `total`，**没有记录时各计数为 0**，页面写「当前版本暂无评价」，不得把 0 说成「无用」。
+
+投影只读：不写 usage、不改评价、不影响排序与权重，也不延长闲置期。人的页面浏览**不**写入 `project_knowledge_usages`（该表要求真实 Job 与 Attempt），因此浏览不会增加采纳票或「最后一次 Agent 使用时间」；人类访问账本与按版本/评价类型的反馈明细属后续切片。
 
 ## 工作与结算
 

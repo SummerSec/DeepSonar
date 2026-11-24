@@ -55,6 +55,17 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       res = await app.inject({ method: "GET", url: `${path}?query=skill&limit=1` });
       assert.equal(res.statusCode, 200);
       assert.deepEqual(res.json().items.map((item: { kind: string }) => item.kind), ["skill"]);
+      // #1256：列表卡片一次请求就要带上评价计数；没有评价时明确零样本。
+      res = await app.inject({ method: "GET", url: path });
+      assert.deepEqual(res.json().items.map((item: { feedback: { total: number } }) => item.feedback.total), [0, 0]);
+      await db`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,owner_project_id,version_id,feedback_json)
+        VALUES(${owner.projectId},${owner.jobId},${owner.attemptId},'project-memory:card@1',${hash},${owner.projectId},${memoryVersion},
+          '{"outcome":"success"}'::jsonb)`;
+      res = await app.inject({ method: "GET", url: path });
+      const card = res.json().items.find((item: { id: string }) => item.id === memoryItem);
+      assert.equal(card.feedback.success, 1);
+      assert.equal(card.feedback.total, 1);
+      assert.equal(typeof card.feedback.failure, "number");
       res = await app.inject({ method: "GET", url: `${path}/${skillItem}` });
       assert.equal(res.statusCode, 200);
       assert.equal(res.json().versions[0].id, skillVersion);

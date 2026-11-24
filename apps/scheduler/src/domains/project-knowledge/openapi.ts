@@ -21,7 +21,7 @@ export const KNOWLEDGE_MANAGEMENT_OPERATIONS: Op[] = [
     type: "object", additionalProperties: false, required: ["candidate_ref"],
     properties: { candidate_ref: { type: "string", pattern: "^[a-f0-9]{64}$" } },
   }),
-  get(prefix, "项目知识目录（包含候选和历史状态，无人工激活入口）", { ...page, kind: { type: "string", enum: ["memory", "skill"] }, status: { type: "string", enum: ["draft", "active", "stale", "retired", "revoked"] }, query: { type: "string", maxLength: 200 } }),
+  get(prefix, "项目知识目录（包含候选和历史状态，无人工激活入口；每项附带当前版本短文摘要 summary 与按该版本聚合的 feedback 计数，含 unrated，零记录时各计数为 0）", { ...page, kind: { type: "string", enum: ["memory", "skill"] }, status: { type: "string", enum: ["draft", "active", "stale", "retired", "revoked"] }, query: { type: "string", maxLength: 200 } }),
   { ...get(prefix + "/receipts", "按原 Job 读取持久操作回执，适用于终态与重启后", { ...page, job_id: { type: "string", format: "uuid" } }), requiredQuery: ["job_id"] },
   get(prefix + "/receipts/{receiptId}", "读取项目范围内持久回执"),
   get(prefix + "/{itemId}", "知识详情、版本、来源、评测审查和使用记录"),

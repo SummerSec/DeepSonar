@@ -103,6 +103,41 @@ async function itemDetail(db: Db, projectId: string, itemId: string) {
     proposals, evaluations, usages };
 }
 
+/** #1256：卡片要的一句话结论与三类评价计数；都是可选投影，不改变权重、排序与权限过滤。 */
+type FeedbackCounts = { total: number; success: number; failure: number; inapplicable: number; unrated: number };
+async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promise<{
+  summaries: Map<string, string>; feedback: Map<string, FeedbackCounts>;
+}> {
+  const hashes = [...new Set(rows.map((row) => row.content_sha256).filter((hash): hash is string => typeof hash === "string"))];
+  const feedback = new Map<string, FeedbackCounts>();
+  const summaries = new Map<string, string>();
+  if (!hashes.length) return { summaries, feedback };
+  const grouped = await db<Array<{ content_sha256: string; outcome: string | null; count: number }>>`
+    SELECT content_sha256, feedback_json->>'outcome' AS outcome, count(*)::int AS count
+    FROM project_knowledge_usages WHERE project_id=${projectId} AND content_sha256 = ANY(${hashes})
+    GROUP BY content_sha256, feedback_json->>'outcome'`;
+  for (const hash of hashes) feedback.set(hash, { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 });
+  for (const row of grouped) {
+    const counts = feedback.get(row.content_sha256);
+    if (!counts) continue;
+    counts.total += Number(row.count);
+    if (row.outcome === "success") counts.success += Number(row.count);
+    else if (row.outcome === "failure") counts.failure += Number(row.count);
+    else if (row.outcome === "inapplicable") counts.inapplicable += Number(row.count);
+    else counts.unrated += Number(row.count);
+  }
+  for (const hash of hashes) {
+    try {
+      const candidate: unknown = await readKnowledgeBlob(db, hash);
+      // 版本 CAS 字节是完整 KnowledgeCandidate；这里只读可选的 content 作为卡片摘要。
+      const content = typeof candidate === "object" && candidate !== null && "content" in candidate
+        ? candidate.content : undefined;
+      if (typeof content === "string") summaries.set(hash, content.replace(/\s+/gu, " ").trim().slice(0, 240));
+    } catch { /* 摘要缺失不影响列表本身 */ }
+  }
+  return { summaries, feedback };
+}
+
 /** Routes are locally scoped too; auth.ts must additionally register their route scopes. */
 export function registerProjectKnowledgeRoutes(
   app: FastifyInstance,
@@ -128,7 +163,16 @@ export function registerProjectKnowledgeRoutes(
           AND (${input.status ?? null}::text IS NULL OR i.status=${input.status ?? null})
           AND (${pattern}::text IS NULL OR i.title ILIKE ${pattern} ESCAPE '\\' OR i.logical_key ILIKE ${pattern} ESCAPE '\\')
         ORDER BY i.updated_at DESC,i.id DESC LIMIT ${input.limit + 1} OFFSET ${input.offset}`;
-      return { items: rows.slice(0, input.limit), next_offset: rows.length > input.limit ? input.offset + input.limit : null };
+      const page = rows.slice(0, input.limit);
+      const { summaries, feedback } = await knowledgeCardFacts(db, projectId, page);
+      const items = page.map((row) => ({
+        ...row,
+        summary: typeof row.content_sha256 === "string" ? summaries.get(row.content_sha256) ?? null : null,
+        feedback: typeof row.content_sha256 === "string"
+          ? feedback.get(row.content_sha256) ?? { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 }
+          : { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 },
+      }));
+      return { items, next_offset: rows.length > input.limit ? input.offset + input.limit : null };
     } catch (error) { return errorReply(reply, error); }
   });
 
