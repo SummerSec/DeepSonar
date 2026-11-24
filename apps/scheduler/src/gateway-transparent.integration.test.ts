@@ -81,6 +81,10 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
   const sseFirst = Buffer.from('event: extension\r\ndata: {"unknown":true}\r\n\r\n');
   const sseLast = Buffer.from('data: {"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}\n\ndata: [DONE]\n\n');
   let usageShapeBody: string | undefined;
+  let releaseResponsesCompletion: (() => void) | undefined;
+  let responsesEnded = false;
+  const responsesPrefix = 'data: {"type":"response.output_text.delta","delta":"fixture"}\n\n';
+  const responsesCompletion = 'event: response.completed\ndata: {"type":"response.completed","response":{"object":"response","status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}\n\n';
   const upstream = createServer((req, res) => {
     void (async () => {
       const body = await read(req);
@@ -90,7 +94,25 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       res.setHeader("x-request-id", "synthetic-request");
       res.setHeader("x-unknown-response", ["first", "second"]);
       res.setHeader("set-cookie", ["fixture=a", "fixture=b"]);
-      if (usageShapeBody !== undefined) {
+      if (req.headers["x-policy-fixture"] === "responses-terminal") {
+        res.setHeader("content-type", "text/event-stream");
+        res.write(responsesPrefix);
+        releaseResponsesCompletion = () => {
+          releaseResponsesCompletion = undefined;
+          res.write(responsesCompletion);
+          setTimeout(() => { responsesEnded = true; res.end("data: [DONE]\n\n"); }, 25);
+        };
+      } else if (req.headers["x-policy-fixture"] === "responses-cancel") {
+        res.setHeader("content-type", "text/event-stream");
+        res.write(responsesPrefix);
+      } else if (["responses-interrupted", "responses-echo"].includes(String(req.headers["x-policy-fixture"]))) {
+        res.setHeader("content-type", "text/event-stream");
+        res.write(responsesPrefix + responsesCompletion);
+        setTimeout(() => {
+          if (req.headers["x-policy-fixture"] === "responses-echo") res.end(`data: ${secret}\n\n`);
+          else res.destroy();
+        }, 25);
+      } else if (usageShapeBody !== undefined) {
         res.setHeader("content-type", "text/event-stream");
         res.setHeader("transfer-encoding", "chunked");
         const bytes = Buffer.from(usageShapeBody);
@@ -250,6 +272,107 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
             }
           } finally { usageShapeBody = undefined; }
         }
+      }
+    });
+
+    await t.test("#1252 Responses tails retain exact bytes and final usage without reopening rejected streams", async () => {
+      for (const fixture of [
+        { name: "completion alone", tail: "", known: true },
+        { name: "one DONE", tail: "data: [DONE]\n\n", known: true },
+        { name: "duplicate DONE", tail: "data: [DONE]\n\ndata: [DONE]\n\n", known: false },
+        { name: "late error", tail: 'event: error\ndata: {"error":{"message":"fixture"}}\n\n', known: false },
+        { name: "late content", tail: responsesPrefix, known: false },
+        { name: "partial error", tail: 'event: response.failed\ndata: {"type":"response.failed"}', known: false },
+        { name: "partial completion", tail: responsesCompletion.trimEnd(), known: false },
+        { name: "partial content", tail: responsesPrefix.trimEnd(), known: false },
+      ]) {
+        const shapeJobId = randomUUID();
+        await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+          VALUES(${shapeJobId},${projectId},'audit','running',${sql.json({ name: "audit", agent_cli: "pi", pi_extensions: [],
+            runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} },
+            credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},
+            now(),3600,now()+interval '1 hour')`;
+        const attempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, shapeJobId));
+        const grant = await gateway.mintJobToken({ jobId: shapeJobId, projectId, credentialId, maxRequests: 0, maxTokens: 50 });
+        usageShapeBody = responsesCompletion + fixture.tail;
+        try {
+          const response = await send(gatewayPort, "/gateway/responses", "POST",
+            ["authorization", `Bearer ${grant.plaintext}`, "content-type", "application/json"],
+            [Buffer.from(JSON.stringify({ model: "fixture", input: [], stream: true, max_output_tokens: 5 }))]);
+          assert.equal(response.status, 200, fixture.name);
+          assert.deepEqual(response.body, Buffer.from(usageShapeBody), fixture.name);
+          const [ledger] = await sql`SELECT * FROM job_usage_ledger WHERE job_id=${shapeJobId}`;
+          assert.equal(ledger.attempt_id, attempt.id);
+          assert.equal(ledger.settlement_status, fixture.known ? "settled" : "not_reported", fixture.name);
+          assert.equal(Number(ledger.total_tokens), fixture.known ? 5 : 0);
+          const allowance = await send(gatewayPort, "/gateway/_allowance", "GET", ["authorization", `Bearer ${grant.plaintext}`]);
+          assert.equal(allowance.status, fixture.known ? 200 : 409, fixture.name);
+          const policy = JSON.parse(allowance.body.toString());
+          if (fixture.known) assert.equal(policy.remaining_tokens, 45);
+          else assert.equal(policy.error.type, "JOB_TOKEN_USAGE_UNKNOWN");
+        } finally { usageShapeBody = undefined; }
+      }
+    });
+
+    await t.test("#1252 Pi-style close on Responses completion follows durable settlement", async () => {
+      responsesEnded = false;
+      const before = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${jobId}`;
+      const body = await new Promise<Buffer>((resolve, reject) => {
+        const outgoing = request({ host: "127.0.0.1", port: gatewayPort, path: "/gateway/responses", method: "POST",
+          headers: ["host", `127.0.0.1:${gatewayPort}`, ...auth, "content-type", "application/json", "x-policy-fixture", "responses-terminal"] }, response => {
+          const chunks: Buffer[] = [];
+          response.on("error", reject);
+          response.on("data", chunk => {
+            chunks.push(Buffer.from(chunk));
+            const received = Buffer.concat(chunks);
+            if (received.includes(Buffer.from(responsesCompletion))) {
+              assert.equal(responsesEnded, true, "completion cannot escape before the original upstream ends");
+              response.destroy();
+              resolve(received);
+            } else releaseResponsesCompletion?.();
+          });
+        });
+        outgoing.on("error", reject);
+        outgoing.setTimeout(5_000, () => outgoing.destroy(new Error("Responses completion deadline exceeded")));
+        outgoing.end(JSON.stringify({ model: "fixture", input: [], stream: true }));
+      });
+      const expectedBody = Buffer.from(responsesPrefix + responsesCompletion + "data: [DONE]\n\n");
+      assert.deepEqual(body, expectedBody.subarray(0, body.length));
+      const ledger = await sql`SELECT * FROM job_usage_ledger WHERE job_id=${jobId} ORDER BY request_no DESC LIMIT 1`;
+      assert.equal(ledger[0].settlement_status, "settled");
+      assert.equal(Number(ledger[0].total_tokens), 5);
+      const after = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${jobId}`;
+      assert.equal(after[0].n, before[0].n + 1, "the same model call is settled exactly once");
+    });
+
+    await t.test("#1252 cancellation, upstream interruption and credential echo retain unknown settlement", async () => {
+      for (const fixture of ["responses-cancel", "responses-interrupted", "responses-echo"]) {
+        const [before] = await sql`SELECT coalesce(max(request_no),0)::int AS n FROM job_usage_ledger WHERE job_id=${jobId}`;
+        const received = await new Promise<Buffer>((resolve, reject) => {
+          const outgoing = request({ host: "127.0.0.1", port: gatewayPort, path: "/gateway/responses", method: "POST",
+            headers: ["host", `127.0.0.1:${gatewayPort}`, ...auth, "content-type", "application/json", "x-policy-fixture", fixture] }, response => {
+            const chunks: Buffer[] = [];
+            response.on("error", () => { /* Expected aborted response in these rejection fixtures. */ });
+            response.on("close", () => resolve(Buffer.concat(chunks)));
+            response.on("data", chunk => {
+              chunks.push(Buffer.from(chunk));
+              if (fixture === "responses-cancel") response.destroy();
+            });
+          });
+          outgoing.on("error", reject);
+          outgoing.setTimeout(5_000, () => outgoing.destroy(new Error("Responses rejection deadline exceeded")));
+          outgoing.end(JSON.stringify({ model: "fixture", input: [], stream: true }));
+        });
+        assert.equal(received.includes(Buffer.from(responsesCompletion)), false, fixture);
+        assert.equal(received.includes(Buffer.from(secret)), false, fixture);
+        let ledger;
+        for (let i = 0; i < 100; i++) {
+          [ledger] = await sql`SELECT * FROM job_usage_ledger WHERE job_id=${jobId} AND request_no>${before.n}`;
+          if (ledger) break;
+          await delay(20);
+        }
+        assert.ok(ledger, fixture);
+        assert.equal(ledger.settlement_status, "unknown", fixture);
       }
     });
 
