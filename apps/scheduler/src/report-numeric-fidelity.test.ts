@@ -369,6 +369,29 @@ test("scheduler prepends frozen plan gaps to both accepted and fallback markdown
 });
 
 
+test("#1251 有审计数据时整篇报告顺序为结果→审计摘要→原始投影→模型正文（下载文件同源）", async () => {
+  const { projectPlanGaps } = await import("./domains/plan-protocol/gap-projection.js");
+  const { PlanAuditRecord } = await import("@deepsonar/shared-types");
+  const plan = { v: 1 as const, goal: "确认当前鉴权边界的实际范围", assumptions: [], tasks: [{ id: "collect", title: "收集当前鉴权边界证据并留档", role: "test",
+    description: "收集当前鉴权边界的证据", prompt: "收集已授权的边界证据，保留原始输出与来源记录，供后续独立评审使用并复核。", from: [], depends_on: [], inputs: [],
+    expected_outputs: ["boundary-evidence"] }],
+    completion: { mode: "explicit_result" as const, description: "边界证据已经过独立评审并保留记录", required_outputs: ["boundary-evidence"] },
+    budget: { max_tasks: 2 }, open_questions: [] };
+  const audit = PlanAuditRecord.parse({ v: 1, source: "submit_plan", raw: plan, trimmed: null, trim_reasons: [], result: null,
+    termination_reason: null, updated_at: "2026-11-24T00:00:00.000Z" });
+  const entry = projectPlanGaps("job-gap", { plan_protocol: audit });
+  const input = reportInput({ plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: false, limit: 32 } });
+  const body = "# 任务报告\n\n## 已确认问题\n\nfinding-1\n";
+  const result = finalizeTaskReportMarkdown(input, body);
+  const markdown = result.markdown;
+  const reportHead = markdown.indexOf("# 任务报告");
+  const summary = markdown.indexOf("## 目标与缺口");
+  const detail = markdown.indexOf("### 详细审计数据");
+  assert.ok(reportHead >= 0 && reportHead < summary && summary < detail,
+    `顺序应为 可信结果→审计摘要→原始投影，实际 ${reportHead}/${summary}/${detail}`);
+  assert.match(markdown.slice(detail), /"job_id":\s*"job-gap"/u, "原始投影保留在产品投影里");
+});
+
 test("coverage-valid model tails cannot swallow the mandatory leading gap section", () => {
   const input = reportInput({ plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 } });
   const baseline = finalizeTaskReportMarkdown(input, "").markdown;
@@ -378,9 +401,46 @@ test("coverage-valid model tails cannot swallow the mandatory leading gap sectio
     assert.equal(taskReportCoverageOk(input, candidate), true, "reproduce accepted malformed tail");
     const final = finalizeTaskReportMarkdown(input, candidate);
     assert.equal(final.usedDefault, null);
-    assert.ok(final.markdown.trimStart().startsWith("## 目标与缺口"));
+    // #1251 复核：可信区块整体前置，但第一段必须是平台结论，而不是审计。
+    assert.ok(final.markdown.trimStart().startsWith("## 结论（调度器生成）"));
+    assert.ok(final.markdown.indexOf("## 结论（调度器生成）") < final.markdown.indexOf("## 目标与缺口"));
+    assert.ok(!final.markdown.includes("### 详细审计数据"), "空审计不输出机器数据");
+    assert.ok(final.markdown.includes("整体完成仍为 unknown"), "空审计仍说明完成度为未知");
     assert.ok(final.markdown.endsWith(tail));
   }
+});
+
+test("#1251 非强制目标报告：结论→审计→原始投影→保留的模型正文（模型正文不被默认报告替换）", async () => {
+  const { projectPlanGaps } = await import("./domains/plan-protocol/gap-projection.js");
+  const { PlanAuditRecord } = await import("@deepsonar/shared-types");
+  const plan = { v: 1 as const, goal: "确认当前鉴权边界的实际范围", assumptions: [], tasks: [{ id: "collect", title: "收集当前鉴权边界证据并留档", role: "test",
+    description: "收集当前鉴权边界的证据", prompt: "收集已授权的边界证据，保留原始输出与来源记录，供后续独立评审使用并复核。", from: [], depends_on: [], inputs: [],
+    expected_outputs: ["boundary-evidence"] }],
+    completion: { mode: "explicit_result" as const, description: "边界证据已经过独立评审并保留记录", required_outputs: ["boundary-evidence"] },
+    budget: { max_tasks: 2 }, open_questions: [] };
+  const audit = PlanAuditRecord.parse({ v: 1, source: "submit_plan", raw: plan, trimmed: null, trim_reasons: [], result: null,
+    termination_reason: null, updated_at: "2026-11-24T00:00:00.000Z" });
+  const input = reportInput({ plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [projectPlanGaps("job-gap", { plan_protocol: audit })], truncated: false, limit: 32 } });
+  const agentMarkdown = [
+    "# 任务报告",
+    "",
+    "## Confirmed",
+    "",
+    "- finding-1 ELF slot inventory drifted：774 Ghidra records after 37 LDDW fold（口径：811 8-byte ELF slots minus folded LDDW aliases）。",
+    "",
+    "模型自述的补充说明保留在正文，但不得被当成任务达标结论。",
+  ].join("\n");
+  assert.equal(taskReportCoverageOk(input, agentMarkdown), true);
+  const final = finalizeTaskReportMarkdown(input, agentMarkdown);
+  assert.equal(final.usedDefault, null, "通过覆盖与数值校验的模型正文必须保留，不能回退默认报告");
+  const conclusion = final.markdown.indexOf("## 结论（调度器生成）");
+  const summary = final.markdown.indexOf("## 目标与缺口");
+  const detail = final.markdown.indexOf("### 详细审计数据");
+  const body = final.markdown.indexOf("模型自述的补充说明保留在正文");
+  assert.ok(conclusion === 0, `首段必须是平台结论，实际 ${conclusion}`);
+  assert.ok(conclusion < summary && summary < detail && detail < body, `顺序应为 结论→摘要→投影→正文，实际 ${conclusion}/${summary}/${detail}/${body}`);
+  assert.ok(!final.markdown.includes("# 任务报告："), "不得复制整份默认报告");
+
 });
 
 test("contracted task reports cannot promote model prose or technical confirmation to task success", async () => {

@@ -205,3 +205,41 @@ test("#945 a retryable lock conflict in the task-result scan reaches the retry b
 
   await assert.rejects(loadTaskOutcomeReport(db, "canvas", "project"), (error) => error === conflict);
 });
+
+test("#1250 摘要先说结论与下一步，术语与原始投影只在详细数据区", () => {
+  const projection = projectTaskOutcomeReport(input());
+  const rendered = renderTaskOutcomeReport(projection);
+  const summaryAt = rendered.indexOf("## 任务结果与验证状态（摘要）");
+  const nextAt = rendered.indexOf("### 下一步");
+  const detailsAt = rendered.indexOf("### 评审状态投影（详细数据）");
+  const jsonAt = rendered.indexOf("```json");
+  assert.equal(summaryAt, 0, "读者先看到的就是摘要");
+  assert.ok(nextAt > summaryAt && detailsAt > nextAt, "结论 -> 下一步 -> 详细依据的顺序");
+  assert.ok(jsonAt > detailsAt, "原始 JSON 只在详细数据区出现");
+  // 摘要必须能回答"做了什么/结果如何/是否验证/下一步谁处理"。
+  assert.match(rendered, /漏洞验证\*\*：已确认 1、已反驳 0/);
+  assert.match(rendered, /任务结果声明\*\*：本画布没有记录到 task_result 声明/);
+  assert.match(rendered, /目标评审\*\*：/);
+  assert.match(rendered, /达成情况未知/);
+  assert.match(rendered, /还缺少独立的目标评审记录/);
+  assert.match(rendered, /报告生成成功只表示报告写出来了/);
+});
+
+test("#1250 没有漏洞记录时摘要直说没有，不把未知说成失败", () => {
+  const rendered = renderTaskOutcomeReport(projectTaskOutcomeReport({ ...input(), findings: [] }));
+  assert.match(rendered, /本画布没有与目标相关的漏洞记录/);
+  assert.match(rendered, /达成情况未知/);
+});
+
+test("#1250 task_result 与漏洞状态按真实投影计数，未翻译的原因代码原样暴露", () => {
+  const projection = projectTaskOutcomeReport(input());
+  projection.findings[0]!.technical_status = "needs_human";
+  projection.task_results = [{ artifact_id: "a", fact_id: "f", source_job_id: "j", source_attempt_id: null,
+    kind: "blocked", task_contract_sha256: null, assessment: "blocked", gaps: [], limitations: ["环境不可用"] }];
+  projection.gaps = [...projection.gaps, "candidate_artifact_unavailable", "unknown_reason_code"];
+  const rendered = renderTaskOutcomeReport(projection);
+  assert.match(rendered, /需人工判断 1/);
+  assert.match(rendered, /受阻 1/);
+  assert.match(rendered, /平台继续按现有验证流程处理/);
+  assert.match(rendered, /原因代码 unknown_reason_code 暂无通俗解释/);
+});

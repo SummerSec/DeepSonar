@@ -632,6 +632,31 @@ export function buildSarifFromConfirmed(input: ReportInput): object {
   };
 }
 
+/**
+ * #1251 复核：模型正文通过覆盖与数值校验时，可信区不能是空的——
+ * 否则报告会从审计段开始，违背「结论在最前」。这里独立生成平台结论与下一步，
+ * 既不丢弃模型正文，也不复制整份默认报告。
+ */
+function platformResultSummary(input: ReportInput): string {
+  const s = input.statistics;
+  return [
+    "## 结论（调度器生成）",
+    "",
+    `- 本次共 ${s.findings_total} 条 Finding：已确认 ${s.confirmed_count}，已排除 ${s.refuted_count}，未证实 ${s.inconclusive_count}，待人工 ${s.needs_human_count}，因严重度策略未自动验证 ${s.excluded_count}。`,
+    s.confirmed_count === 0
+      ? "- 本次未形成已确认漏洞：这只表示自动验证范围内没有 confirmed 结论，不代表系统安全。"
+      : "- 已确认漏洞的编号、位置与证据链见下文的已确认清单与 Finding 详情。",
+    "- 任务是否达标不由模型自述决定：目标达成口径以任务结果投影为准，未生成时记为未知（unknown）。",
+    s.needs_human_count > 0
+      ? `- 下一步：先处理 ${s.needs_human_count} 条待人工判定项，再决定是否扩大验证范围。`
+      : `- 下一步：${s.inconclusive_count > 0
+        ? `先核对 ${s.inconclusive_count} 条未证实项的证据链。`
+        : s.confirmed_count > 0
+          ? "确认清单证据无异议后提交结论，或安排下一轮针对性验证。"
+          : "如需推进验证，先扩大测试范围，再决定是否重跑。"}`,
+  ].join("\n");
+}
+
 function defaultMarkdown(input: ReportInput): string {
   const lines: string[] = [];
   lines.push(`# 任务报告：${input.task.title}`);
@@ -795,27 +820,35 @@ export function finalizeTaskReportMarkdown(
 } {
   if (goalReportRequired(input.task_outcome)) {
     const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
-    const markdown = withPlanGapReport(goalReportMarkdown(input.task_outcome!, declared, {
+    const markdown = withPlanGapReport({ trusted: goalReportMarkdown(input.task_outcome!, declared, {
       task: input.task, scope_and_coverage: input.scope_and_coverage, technical_statistics: input.statistics,
       findings: input.findings, facts: input.facts, seed_findings: input.seed_findings, evidence: input.evidence,
-    }), input.plan_gaps);
+    }) }, input.plan_gaps);
     return { markdown, numeric: checkReportNumericFidelity(declared, { markdown }), coverageOk: true, usedDefault: "task_outcome" };
   }
-  let markdown = agentText.trim();
-  const coverageOk = taskReportCoverageOk(input, markdown);
+  const candidate = agentText.trim();
+  const coverageOk = taskReportCoverageOk(input, candidate);
+  // 模型正文即使通过覆盖与数值校验仍是不可信输入，必须排在全部可信区块之后。
+  let untrusted = candidate;
+  let trusted = "";
   let usedDefault: ReportMarkdownFallback = null;
-  if (markdown.length < 20 || !coverageOk) {
-    markdown = defaultMarkdown(input);
+  if (candidate.length < 20 || !coverageOk) {
+    trusted = defaultMarkdown(input);
+    untrusted = "";
     usedDefault = "coverage";
   }
   const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
-  let numeric = checkReportNumericFidelity(declared, { markdown });
+  const bodyText = [trusted, untrusted].filter((part) => part.length > 0).join("\n\n");
+  let numeric = checkReportNumericFidelity(declared, { markdown: bodyText });
   if (!numeric.ok && usedDefault === null && coverageOk) {
-    markdown = defaultMarkdown(input);
+    trusted = defaultMarkdown(input);
+    untrusted = "";
     usedDefault = "numeric";
-    numeric = checkReportNumericFidelity(declared, { markdown });
+    numeric = checkReportNumericFidelity(declared, { markdown: trusted });
   }
-  markdown = withPlanGapReport(markdown, input.plan_gaps);
+  // 模型正文存活时可信区为空：补一段简短的平台结论与下一步，保证「结论先于依据」。
+  if (trusted.length === 0) trusted = platformResultSummary(input);
+  const markdown = withPlanGapReport({ trusted, untrusted }, input.plan_gaps);
   return { markdown, numeric, coverageOk, usedDefault };
 }
 
