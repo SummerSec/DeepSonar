@@ -84,10 +84,47 @@ if (testDatabaseUrl) {
 
       // 1c. Device lease history is append-only audit: deleting a task must not erase it.
       const withLease = await seedJob(randomUUID());
+      const availability = () => app.inject({ method: "GET", url: `/tasks/${withLease.canvasId}/retry-availability`, headers });
+      const initiallyAllowed = await availability();
+      assert.equal(initiallyAllowed.statusCode, 200, initiallyAllowed.body);
+      assert.deepEqual(initiallyAllowed.json(), { allowed: true });
       const deviceId = randomUUID();
       await sql`INSERT INTO devices (id, project_id, key, transport) VALUES (${deviceId}, ${projectId}, 'pixel-1', 'adb')`;
       await sql`INSERT INTO device_leases (device_id, job_id, project_id, state, released_at)
         VALUES (${deviceId}, ${withLease.jobId}, ${projectId}, 'released', now())`;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const blocked = await availability();
+        assert.equal(blocked.statusCode, 200, blocked.body);
+        assert.equal(blocked.json().allowed, false);
+        assert.equal(blocked.json().retained_reason, "device_history");
+        assert.deepEqual(blocked.json().retained, { device_leases: 1 });
+        assert.deepEqual(blocked.json().retained_kinds, ["device_lease"]);
+        assert.match(blocked.json().next_action, /另建新任务/);
+      }
+      const scopedToken = async (scope: string, pid: string) => {
+        const value = generateToken();
+        await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
+          VALUES('retry availability scope',${pid},${value.prefix},${value.hash},${[scope]})`;
+        return { authorization: `Bearer ${value.plaintext}` };
+      };
+      const readOnly = await app.inject({ method: "GET", url: `/tasks/${withLease.canvasId}/retry-availability`,
+        headers: await scopedToken("tasks:read", projectId) });
+      assert.equal(readOnly.statusCode, 403, readOnly.body);
+      const foreignProject = randomUUID();
+      await sql`INSERT INTO projects(id,name) VALUES(${foreignProject},'foreign availability')`;
+      const foreign = await app.inject({ method: "GET", url: `/tasks/${withLease.canvasId}/retry-availability`,
+        headers: await scopedToken("jobs:control", foreignProject) });
+      assert.equal(foreign.statusCode, 403, foreign.body);
+      await sql`UPDATE jobs SET status='running' WHERE id=${withLease.jobId}`;
+      assert.equal((await availability()).json().error_code, "TASK_HAS_ACTIVE_JOBS");
+      await sql`UPDATE jobs SET status='failed' WHERE id=${withLease.jobId}`;
+      await sql`UPDATE canvases SET status='archived' WHERE id=${withLease.canvasId}`;
+      assert.equal((await availability()).json().error_code, "TASK_ARCHIVED");
+      await sql`UPDATE canvases SET status='active' WHERE id=${withLease.canvasId}`;
+      await sql`INSERT INTO device_leases(device_id,job_id,project_id,state,released_at)
+        VALUES(${deviceId},${withReceipt.jobId},${projectId},'released',now())`;
+      const mixed = await app.inject({ method: "GET", url: `/tasks/${withReceipt.canvasId}/retry-availability`, headers });
+      assert.deepEqual(mixed.json().retained_kinds, ["knowledge", "device_lease"]);
       const refusedLease = await app.inject({ method: "DELETE", url: `/tasks/${withLease.canvasId}`, headers });
       assert.equal(refusedLease.statusCode, 409, refusedLease.payload);
       assert.equal(refusedLease.json().retained.device_leases, 1);

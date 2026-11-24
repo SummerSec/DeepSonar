@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import type { FindingSummary } from "./api";
+import { api, type FindingSummary } from "./api";
+import { ApiRequestError } from "./login-error";
 import {
   composeRetryErrorMessage,
+  requireTaskRetryAllowed,
   composeSeedTaskUrl,
   filterComposeSeedCandidates,
   isComposeSeedCandidate,
@@ -73,6 +75,34 @@ test("compose retry errors turn stale seeds into an actionable next step", () =>
     "冻结种子当前已不可用。请回到 Findings 重新选择可代入项并新建组合任务。",
   );
   assert.equal(composeRetryErrorMessage(new Error("network down")), "重试失败：network down");
+});
+
+test("retry POST keeps all retention details and displays each retained category", async context => {
+  const body = { error: "task records must be retained", error_code: "TASK_DELETE_KNOWLEDGE_RETAINED",
+    retained: { device_leases: 1, receipts: 2, continuation_budget_chain: 1 },
+    retained_kinds: ["knowledge", "continuation_budget", "device_lease"], retained_reason: "governance_records",
+    next_action: "请保留原任务，在任务工作台通过「下达任务」新建任务。" };
+  context.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify(body), {
+    status: 409, headers: { "content-type": "application/json" },
+  }));
+  await assert.rejects(api.retryTask("task"), error => {
+    assert.ok(error instanceof ApiRequestError);
+    assert.equal(error.retryFeedback.retained_reason, body.retained_reason);
+    assert.deepEqual(error.retryFeedback.retained, body.retained);
+    assert.deepEqual(error.retryFeedback.retained_kinds, body.retained_kinds);
+    const message = composeRetryErrorMessage(error);
+    for (const text of ["设备使用历史", "知识治理记录", "续做预算记录", body.next_action]) assert.ok(message.includes(text));
+    assert.doesNotMatch(message, /POST \/tasks|TASK_DELETE_KNOWLEDGE_RETAINED|task records/);
+    return true;
+  });
+});
+
+test("retry availability reports device history before confirmation and lets empty history pass", async context => {
+  context.mock.method(api, "taskRetryAvailability", async () => ({ allowed: false,
+    error_code: "TASK_DELETE_KNOWLEDGE_RETAINED", retained_reason: "device_history", retained_kinds: ["device_lease"] }));
+  await assert.rejects(requireTaskRetryAllowed("task"), /设备使用历史.*下达任务/);
+  context.mock.method(api, "taskRetryAvailability", async () => ({ allowed: true }));
+  await requireTaskRetryAllowed("task");
 });
 
 test("compose task query always carries a concrete unique bounded ID list", () => {

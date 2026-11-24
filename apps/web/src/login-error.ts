@@ -6,7 +6,14 @@ import type { TaskContractFeedback } from "./task-contract-editor";
  * this module turns that into a clear Chinese UX message.
  */
 
-export type ApiErrorBody = TaskContractFeedback & {
+export type TaskRetryFeedback = {
+  retained?: Record<string, number>;
+  retained_kinds?: string[];
+  retained_reason?: string;
+  next_action?: string;
+};
+
+export type ApiErrorBody = TaskContractFeedback & TaskRetryFeedback & {
   error?: string;
   message?: string;
   error_code?: string;
@@ -21,9 +28,11 @@ export class ApiRequestError extends Error {
   readonly errorCode: string | null;
   readonly retryAfterSec: number | null;
   readonly serverMessage: string | null;
+  readonly retryFeedback: TaskRetryFeedback;
 
   constructor(input: {
     taskContractFeedback?: TaskContractFeedback;
+    retryFeedback?: TaskRetryFeedback;
     method: string;
     path: string;
     status: number;
@@ -53,6 +62,7 @@ export class ApiRequestError extends Error {
     this.errorCode = errorCode;
     this.retryAfterSec = retryAfterSec;
     this.serverMessage = serverMessage;
+    this.retryFeedback = input.retryFeedback ?? {};
   }
 }
 

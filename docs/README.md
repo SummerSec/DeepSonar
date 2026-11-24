@@ -2,7 +2,7 @@
 
 #1211 的[任务设备入口](DEVICE_ACCESS.md#1-现状代码事实)支持显式 adb/hdc 需求与匹配角色，沿用现有项目和网络授权。任务工作台、快捷创建及正常 HTTP 到 broker grant 回归接既有 Actions，最终候选结果另验。
 #1223 的[断点凭据来源](HUMAN_CONTINUATION.md#断点凭据候选的来源1223)按现有输出额度字段的精确路径与类型识别普通配置，文件和原生历史共用短凭据保护。合成回归接既有 Actions，历史现场的具体命中来源仍未确认。
-#1236 区分了重试的两种删除阻塞：只有设备租约历史时返回 409 `TASK_RETRY_BLOCKED_BY_DEVICE_HISTORY`（`retained_kinds: ["device_lease"]`，引导为保留任务继续或另建新任务），含知识/治理记录时仍是 `TASK_DELETE_KNOWLEDGE_RETAINED` 并同时列出两类保留项。
+#1236 的[重试确认前检查](architecture/09-interface-specs.md#清空重试的确认前检查1236)让任务列表和详情在清空确认前读取具体保留原因，实际 POST 的 409 同样消费结构化分类和下一步。设备、知识治理及续做预算记录分别展示，保留原任务后可通过任务工作台的「下达任务」按原目标新建任务。最终候选 Actions 另验。
 #1236 在保持顶层错误码 `TASK_DELETE_KNOWLEDGE_RETAINED` 兼容的前提下，用 `retained_kinds` / `retained_reason` 区分「设备历史引用旧 Job」与「知识/治理记录」，并把续做预算留痕单列一类；设备历史情形下拒绝后旧 Job 与 released 租约都保持不动。
 
 #1228 把运行时自带的 Undici 跟到已修复版本：Kali 镜像的 Node 24.22.2→24.22.3（自带 Undici 7.30.2，两架构校验和同步更新）、控制面四个 Node 镜像 digest 由 24.21.0 升到 24.22.3、agent 基础镜像换成 24.22.3-alpine/bookworm-slim 摘要、工作区 `undici` 直接依赖收到 `^7.30.2`、DSH 运行时用 `overrides` 固定 8.12.4，并在两处 Dockerfile 打印 `process.version` / `process.versions.undici` 作为候选产物证据。顺带修掉 kali 清单里指向 `v22.23.2` 的 Node 下载地址。Pi 1.6.0 另行单独验证，不在本次范围；版本取证以 Actions 镜像构建日志为准，未运行真实模型。

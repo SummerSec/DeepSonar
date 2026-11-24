@@ -1,5 +1,7 @@
 # DeepSonar Design
 
+#1236 的[重试确认前检查](docs/architecture/09-interface-specs.md#清空重试的确认前检查1236)在列表和任务详情先查询当前历史保留原因。网页保留结构化分类和下一步，确认后实际重试仍按事务内的当前状态拒绝或执行。PG 与两页 DOM 回归接既有 Actions，最终候选另验。
+
 #1211 的[设备需求入口](docs/DEVICE_ACCESS.md#1-现状代码事实)在任务工作台与快捷创建复用现有创建契约。用户显式声明需求后，Scheduler 冻结到画布和 Job，按匹配角色重新授权并申请租约。网页提交与真实 HTTP 到 broker grant 回归接既有 Actions，最终候选结果另验。
 #1223 的[断点凭据来源](docs/HUMAN_CONTINUATION.md#断点凭据候选的来源1223)按已有 Claude 配置契约区分正整数输出额度，并在文件封存与原生历史导入共用精确受管凭据集合。短凭据、自定义歧义字段与显式平台令牌继续保护，最终候选 Actions 结果另验。
 

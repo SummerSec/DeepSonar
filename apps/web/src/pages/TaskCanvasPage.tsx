@@ -33,7 +33,7 @@ import { canEditTaskIntent, taskIntentContentFromTarget } from "../task-intent";
 import { CanvasView } from "../CanvasView";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage, type PageProgress } from "../canvas-page-sync";
 import { useConfirmDialog } from "../components/ConfirmDialog";
-import { composeRetryErrorMessage } from "../composeTaskModel";
+import { composeRetryErrorMessage, requireTaskRetryAllowed } from "../composeTaskModel";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { FactEvidenceTable } from "../FactEvidenceTable";
 import { FactDetailPanel } from "../FactDetailPanel";
@@ -635,6 +635,12 @@ export function TaskCanvasPage() {
 
   const retryTaskHard = async () => {
     if (!canvasId) return;
+    try {
+      await requireTaskRetryAllowed(canvasId);
+    } catch (e) {
+      flash(composeRetryErrorMessage(e), "error");
+      return;
+    }
     const ok = await confirm({
       title: "清空历史并重新执行？",
       description: meta?.target_json?.kind === "compose"

@@ -4,6 +4,7 @@ import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { api, type CanvasSummary, type Project } from "../api";
+import { ApiRequestError } from "../login-error";
 import { EMPTY_TASK_DEVICE, parseTaskDevice } from "../components/TaskDeviceEditor";
 import { AuthProvider } from "../auth";
 import { ConfirmDialogProvider } from "../components/ConfirmDialog";
@@ -25,7 +26,7 @@ const canvas: CanvasSummary = {
   last_job_status: null, last_job_priority: null, last_job_at: null,
 };
 
-async function setup(context: TestContext, projects: Project[] = []) {
+async function setup(context: TestContext, projects: Project[] = [], task: CanvasSummary = canvas) {
   const dom = new JSDOM("<!doctype html><div id='page'></div><div id='toasts'></div>", { url: "http://127.0.0.1", pretendToBeVisual: true });
   const replacements = {
     window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
@@ -42,7 +43,7 @@ async function setup(context: TestContext, projects: Project[] = []) {
   context.mock.method(dom.window, "clearInterval", () => {});
   context.mock.method(api, "projects", async () => projects);
   context.mock.method(api, "authStatus", async () => ({ auth_required: true, has_users: true, bootstrap_available: false, default_admin_credentials_active: false, session_ttl_days: 1 }));
-  context.mock.method(api, "canvases", async () => [{ ...canvas }]);
+  context.mock.method(api, "canvases", async () => [{ ...task }]);
   const { createRoot } = await import("react-dom/client");
   const { TasksPage } = await import("./TasksPage");
   const container = dom.window.document.getElementById("page")!;
@@ -95,6 +96,31 @@ async function setup(context: TestContext, projects: Project[] = []) {
     toasts: () => [...dom.window.document.querySelectorAll(".app-toast")],
   };
 }
+
+test("task retry checks retention before opening the destructive confirmation", async context => {
+  const env = await setup(context, [], { ...canvas, active_count: 0, execution_active_count: 0, execution_state: "running" });
+  context.mock.method(api, "taskRetryAvailability", async () => ({ allowed: false,
+    error_code: "TASK_DELETE_KNOWLEDGE_RETAINED", retained_kinds: ["device_lease"], retained_reason: "device_history" }));
+  let retried = 0;
+  context.mock.method(api, "retryTask", async () => { retried++; return { id: canvas.id, status: "pending" }; });
+  await env.click("重试");
+  assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null);
+  assert.equal(retried, 0);
+  assert.match(env.container.querySelector('[role="alert"]')?.textContent ?? "", /设备使用历史.*下达任务/);
+});
+
+test("task retry handles a new retention conflict after the user confirms", async context => {
+  const env = await setup(context, [], { ...canvas, active_count: 0, execution_active_count: 0, execution_state: "running" });
+  context.mock.method(api, "taskRetryAvailability", async () => ({ allowed: true }));
+  context.mock.method(api, "retryTask", async () => { throw new ApiRequestError({ method: "POST",
+    path: `/tasks/${canvas.id}/retry`, status: 409, errorCode: "TASK_DELETE_KNOWLEDGE_RETAINED",
+    retryFeedback: { retained_kinds: ["device_lease"], next_action: "请通过「下达任务」新建任务。" } }); });
+  await env.click("重试");
+  const dialog = env.dom.window.document.querySelector('[role="alertdialog"]');
+  assert.ok(dialog);
+  await env.click("清空并重试", dialog);
+  assert.match(env.container.querySelector('[role="alert"]')?.textContent ?? "", /设备使用历史.*下达任务/);
+});
 
 for (const operation of ["archive", "pause"] as const) {
   test(`task ${operation} API rejection stays an alert until a new success replaces it`, async context => {

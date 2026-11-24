@@ -1210,6 +1210,26 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     });
   });
 
+  app.get("/tasks/:canvasId/retry-availability", async (req, reply) => {
+    const { canvasId } = req.params as { canvasId: string };
+    const result = await sql.begin(async (tx) => {
+      await tx`SET TRANSACTION READ ONLY`;
+      const [canvas] = await tx`SELECT status FROM canvases WHERE id=${canvasId}`;
+      if (!canvas) return null;
+      if (canvas.status === "archived") return { allowed: false, error_code: "TASK_ARCHIVED", error: "任务已归档，请先取消归档再重试。" };
+      const active = await tx`SELECT 1 FROM jobs WHERE canvas_id=${canvasId}
+        AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
+      if (active.length) return { allowed: false, error_code: "TASK_HAS_ACTIVE_JOBS", error: "任务仍有活动执行，请先结束活动执行。" };
+      const retained = await canvasKnowledgeRetention(tx, canvasId);
+      const verdict = classifyRetryRetention(retained);
+      if (!verdict.blocked) return { allowed: true };
+      return { allowed: false, error_code: verdict.code, ...retryRetentionGuidance(verdict), retained,
+        retained_kinds: verdict.kinds, retained_reason: verdict.reason };
+    });
+    if (!result) return reply.code(404).send({ error: "canvas not found" });
+    return result;
+  });
+
   /**
    * 重试任务 = 清空本画布历史后从意图重新执行。
    * 保留 canvas 行与 target_json（任务意图）；删除 jobs/nodes/edges/findings/events/reports。

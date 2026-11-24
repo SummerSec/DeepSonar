@@ -147,3 +147,21 @@ test("task relationship options retain discoveries displaced from the live first
     assert.ok(options.includes(`${id} · ${id.slice(0, 8)}`), `${id} remains available for relationships`);
   }
 });
+
+test("task detail checks retry retention before requesting destructive confirmation", async context => {
+  const env = await setup(context);
+  await env.render();
+  await env.tick();
+  await env.tick();
+  context.mock.method(api, "taskRetryAvailability", async () => ({ allowed: false,
+    error_code: "TASK_DELETE_KNOWLEDGE_RETAINED", retained_reason: "device_history", retained_kinds: ["device_lease"] }));
+  let retried = 0;
+  context.mock.method(api, "retryTask", async () => { retried++; return { id: "task-a", status: "pending" }; });
+  const more = env.dom.window.document.querySelector<HTMLButtonElement>('[aria-label="更多"]');
+  assert.ok(more);
+  await act(async () => more.click());
+  await env.click("重试任务");
+  assert.equal(retried, 0);
+  assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null);
+  assert.match(env.dom.window.document.body.textContent ?? "", /设备使用历史.*下达任务/);
+});

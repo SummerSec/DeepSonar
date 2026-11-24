@@ -18,7 +18,7 @@ import { useConfirmDialog } from "../components/ConfirmDialog";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import { formatBeijingTime, nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
-import { SEED_SEVERITY_OPTIONS, composeRetryErrorMessage, COMPOSE_SEED_VERIFY_OPTIONS, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
+import { SEED_SEVERITY_OPTIONS, composeRetryErrorMessage, requireTaskRetryAllowed, COMPOSE_SEED_VERIFY_OPTIONS, filterComposeSeedCandidates, MAX_COMPOSE_SEEDS, parseComposeSeedQuery } from "../composeTaskModel";
 import { DISPOSITION_OPTIONS, EmptyState, FilterSelect, PageHeader, PageSkeleton, PrimaryButton, SecondaryButton, SeverityBadge, formatDate, formatElapsed, formatTime, relativeTime } from "../ui";
 
 type Filter = "" | "active" | "findings" | "archived" | "knowledge_history";
@@ -751,6 +751,12 @@ export function TasksPage() {
                     <button
                       title="清空历史后从意图重新执行"
                       onClick={async () => {
+                        try {
+                          await requireTaskRetryAllowed(canvas.id);
+                        } catch (e) {
+                          flash(composeRetryErrorMessage(e), "error");
+                          return;
+                        }
                         if (!await confirm({
                           title: "清空历史并重新执行？",
                           description: isCompose
