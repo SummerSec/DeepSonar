@@ -103,6 +103,23 @@ async function itemDetail(db: Db, projectId: string, itemId: string) {
     proposals, evaluations, usages };
 }
 
+/** #1256：一个版本的三类评价计数与未评价数，供卡片与明细共用。 */
+async function readVersionFeedbackCounts(db: Db, projectId: string, contentSha256: string): Promise<FeedbackCounts> {
+  const rows = await db<Array<{ outcome: string | null; count: number }>>`
+    SELECT feedback_json->>'outcome' AS outcome, count(*)::int AS count
+    FROM project_knowledge_usages WHERE project_id=${projectId} AND content_sha256=${contentSha256}
+    GROUP BY feedback_json->>'outcome'`;
+  const counts: FeedbackCounts = { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 };
+  for (const row of rows) {
+    counts.total += Number(row.count);
+    if (row.outcome === "success") counts.success += Number(row.count);
+    else if (row.outcome === "failure") counts.failure += Number(row.count);
+    else if (row.outcome === "inapplicable") counts.inapplicable += Number(row.count);
+    else counts.unrated += Number(row.count);
+  }
+  return counts;
+}
+
 /** #1256：卡片要的一句话结论与三类评价计数；都是可选投影，不改变权重、排序与权限过滤。 */
 type FeedbackCounts = { total: number; success: number; failure: number; inapplicable: number; unrated: number };
 async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promise<{
@@ -112,20 +129,7 @@ async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promi
   const feedback = new Map<string, FeedbackCounts>();
   const summaries = new Map<string, string>();
   if (!hashes.length) return { summaries, feedback };
-  const grouped = await db<Array<{ content_sha256: string; outcome: string | null; count: number }>>`
-    SELECT content_sha256, feedback_json->>'outcome' AS outcome, count(*)::int AS count
-    FROM project_knowledge_usages WHERE project_id=${projectId} AND content_sha256 = ANY(${hashes})
-    GROUP BY content_sha256, feedback_json->>'outcome'`;
-  for (const hash of hashes) feedback.set(hash, { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 });
-  for (const row of grouped) {
-    const counts = feedback.get(row.content_sha256);
-    if (!counts) continue;
-    counts.total += Number(row.count);
-    if (row.outcome === "success") counts.success += Number(row.count);
-    else if (row.outcome === "failure") counts.failure += Number(row.count);
-    else if (row.outcome === "inapplicable") counts.inapplicable += Number(row.count);
-    else counts.unrated += Number(row.count);
-  }
+  for (const hash of hashes) feedback.set(hash, await readVersionFeedbackCounts(db, projectId, hash));
   for (const hash of hashes) {
     try {
       const candidate: unknown = await readKnowledgeBlob(db, hash);
