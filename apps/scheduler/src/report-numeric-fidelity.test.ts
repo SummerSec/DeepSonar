@@ -517,10 +517,12 @@ test("#1256 报告冻结本轮使用知识的精确版本，并按版本去重�
   ]);
   assert.deepEqual(refs.map((ref) => `${ref.item_id}@${ref.version}`), ["item-1@2", "item-1@3"]);
   const section = renderKnowledgeRefsSection(refs);
-  assert.match(section, /本轮使用的项目知识（精确版本）/u);
+  assert.match(section, /本轮读取的项目知识（精确版本）/u);
   assert.match(section, /时区核对 · v2 · memory/u);
+  assert.match(section, /读取 1 次/u);
   assert.match(section, /反馈 success/u);
   assert.match(section, /反馈 inapplicable/u);
+  assert.match(section, /读取不等于采用：只有显式反馈才表示实际应用与效果/u);
   assert.match(section, /知识后来被修订或下架也不改写本节/u);
   assert.equal(renderKnowledgeRefsSection([]), "");
   assert.equal(renderKnowledgeRefsSection(undefined), "");
@@ -532,20 +534,46 @@ test("#1256 报告冻结本轮使用知识的精确版本，并按版本去重�
   assert.equal(normalizeKnowledgeRefs(many).length, KNOWLEDGE_REF_LIMIT);
 });
 
+test("#1256 未评价读取不覆盖既有的显式反馈", async () => {
+  const { normalizeKnowledgeRefs, renderKnowledgeRefsSection } = await import("./report.js");
+  const base = { item_id: "item-9", version_id: "ver-9", kind: "memory", title: "同名标题", version: 1, content_sha256: "e".repeat(64) };
+  // 聚合输入已经算好；这里验证即便给了多行，也不会让后到的未评价读取覆盖既有评价。
+  const refs = normalizeKnowledgeRefs([
+    { ...base, reads: 1, outcome: "success" },
+    { ...base, reads: 3, outcome: null },
+  ]);
+  assert.equal(refs.length, 1);
+  assert.equal(refs[0]!.reads, 3);
+  assert.equal(refs[0]!.outcome, "success");
+  assert.match(renderKnowledgeRefsSection(refs), /反馈 success/u);
+});
+
+test("#1256 知识标题按纯文本渲染，不改变 Markdown 结构", async () => {
+  const { renderKnowledgeRefsSection } = await import("./report.js");
+  const section = renderKnowledgeRefsSection([{
+    item_id: "item-1", version_id: "ver-1", kind: "memory",
+    title: "[点我](note-a) 与 ![图](shot.png) ## 标题", version: 2,
+    content_sha256: "f".repeat(64), reads: 1, outcome: null,
+  }]);
+  assert.doesNotMatch(section, /(?<!\\)\[/u, "标题里的方括号必须转义");
+  assert.match(section, /\\\[点我\\\]\(note-a\)/u, "标题按纯文本保留原字符，括号不再构成链接");
+});
+
 test("#1256 非目标报告把知识引用放在结论之后、审计之前", async () => {
   const { finalizeTaskReportMarkdown } = await import("./report.js");
   const input = reportInput({
     knowledge_refs: [{ item_id: "item-1", version_id: "ver-1", kind: "memory", title: "归档日志按请求 ID 查",
-      version: 2, content_sha256: "d".repeat(64), outcome: null }],
+      version: 2, content_sha256: "d".repeat(64), reads: 3, outcome: null }],
     plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 },
   });
   const final = finalizeTaskReportMarkdown(input, "too short");
   // 覆盖不足时走默认报告：知识引用仍必须排在审计之前、正文之内。
   const body = final.markdown.indexOf("# 任务报告");
-  const knowledge = final.markdown.indexOf("## 本轮使用的项目知识");
+  const knowledge = final.markdown.indexOf("## 本轮读取的项目知识");
   const audit = final.markdown.indexOf("## 目标与缺口");
   assert.ok(body === 0, "默认报告仍是最前");
   assert.ok(body < knowledge && knowledge < audit, `顺序应为 正文→知识→审计，实际 ${body}/${knowledge}/${audit}`);
   assert.match(final.markdown, /归档日志按请求 ID 查 · v2 · memory/u);
   assert.match(final.markdown, /未评价（效果未知）/u);
+  assert.match(final.markdown, /读取 3 次/u);
 });

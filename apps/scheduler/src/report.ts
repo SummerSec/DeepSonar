@@ -9,6 +9,7 @@ import type { TransactionSql } from "postgres";
 import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { readFrozenReportInput } from "./report-input.js";
+import { CLOSEOUT_EVALUATION_PREFIX } from "./domains/project-knowledge/closeout-evaluation-key.js";
 import { isRetryableDatabaseConflict } from "./db-conflict-retry.js";
 import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { taskReportCoverageOk } from "./report-coverage.js";
@@ -178,6 +179,9 @@ export interface ReportInputKnowledgeRef {
   title: string;
   version: number;
   content_sha256: string;
+  /** 本画布对该版本的读取次数；读取不等于采用。 */
+  reads: number;
+  /** 最近一次**显式**反馈的 outcome；后续未评价读取不会把它覆盖成空。 */
   outcome: string | null;
 }
 
@@ -333,7 +337,7 @@ function enforceFindingReportInputBudget(input: FindingReportInput): FindingRepo
 /** #1256：报告里的知识引用按精确版本去重并截断，只保留可核对的身份字段。 */
 export const KNOWLEDGE_REF_LIMIT = 50;
 export function normalizeKnowledgeRefs(rows: readonly Record<string, unknown>[]): ReportInputKnowledgeRef[] {
-  const seen = new Set<string>();
+  const index = new Map<string, number>();
   const refs: ReportInputKnowledgeRef[] = [];
   for (const row of rows) {
     const itemId = typeof row.item_id === "string" ? row.item_id : null;
@@ -341,8 +345,16 @@ export function normalizeKnowledgeRefs(rows: readonly Record<string, unknown>[])
     const hash = typeof row.content_sha256 === "string" ? row.content_sha256 : null;
     if (!itemId || !versionId || !hash) continue;
     const key = `${itemId}:${versionId}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const seenAt = index.get(key);
+    if (seenAt !== undefined) {
+      // 同一版本的多行（未聚合输入）合并：读取次数取最大，显式反馈优先，绝不被未评价读取清空。
+      const prior = refs[seenAt]!;
+      prior.reads = Math.max(prior.reads, Number.isSafeInteger(Number(row.reads)) ? Number(row.reads) : 1);
+      const outcome = typeof row.outcome === "string" && row.outcome.length > 0 ? row.outcome : null;
+      if (prior.outcome === null && outcome !== null) prior.outcome = outcome;
+      continue;
+    }
+    index.set(key, refs.length);
     refs.push({
       item_id: itemId,
       version_id: versionId,
@@ -350,7 +362,9 @@ export function normalizeKnowledgeRefs(rows: readonly Record<string, unknown>[])
       title: typeof row.title === "string" ? row.title.slice(0, 200) : "（未命名知识）",
       version: Number.isSafeInteger(Number(row.version)) ? Number(row.version) : 1,
       content_sha256: hash,
-      outcome: typeof row.outcome === "string" ? row.outcome : null,
+      reads: Number.isSafeInteger(Number(row.reads)) && Number(row.reads) > 0 ? Number(row.reads) : 1,
+      // 只有显式反馈才算效果；未评价读取不覆盖既有评价。
+      outcome: typeof row.outcome === "string" && row.outcome.length > 0 ? row.outcome : null,
     });
     if (refs.length >= KNOWLEDGE_REF_LIMIT) break;
   }
@@ -360,13 +374,21 @@ export function normalizeKnowledgeRefs(rows: readonly Record<string, unknown>[])
 /** #1256：报告里的知识引用段。版本与哈希冻结在写入时，知识被更正后仍能核对原判断。 */
 export function renderKnowledgeRefsSection(refs: readonly ReportInputKnowledgeRef[] | undefined): string {
   if (!refs || refs.length === 0) return "";
-  const lines = ["## 本轮使用的项目知识（精确版本）", ""];
+  const lines = ["## 本轮读取的项目知识（精确版本）", ""];
   for (const ref of refs) {
     const feedback = ref.outcome === null ? "未评价（效果未知）" : ref.outcome;
-    lines.push(`- ${ref.title} · v${ref.version} · ${ref.kind} · \`${ref.content_sha256.slice(0, 12)}…\` · 反馈 ${feedback}`);
+    lines.push(`- ${plainRefText(ref.title)} · v${ref.version} · ${plainRefText(ref.kind)} · \`${ref.content_sha256.slice(0, 12)}…\` · 读取 ${ref.reads} 次 · 反馈 ${feedback}`);
   }
-  lines.push("", "版本与内容哈希是写入时冻结的精确引用；知识后来被修订或下架也不改写本节。");
+  lines.push("", "读取不等于采用：只有显式反馈才表示实际应用与效果，没有反馈记为未知。版本与内容哈希是写入时冻结的精确引用，知识后来被修订或下架也不改写本节；受限或已撤权的条目不写入本表。");
   return lines.join("\n");
+}
+
+/** 报告可信区的标题来自知识条目，必须按纯文本序列化，不能改变 Markdown 结构。 */
+function plainRefText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim()
+    .replaceAll("\\", "\\\\").replaceAll("`", "'").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll("[", "\\[").replaceAll("]", "\\]")
+    .replace(/(^|\s)([#>*|~-]+)/gu, "$1\\$2");
 }
 
 export async function buildReportInput(canvasId: string, db: typeof sql = sql): Promise<ReportInput> {
@@ -505,14 +527,22 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     },
     evidence: [],
     facts: await loadReportFactQuantities(canvasId, db),
+    // #1256 复核：按版本聚合读取次数，只保留最近一次**显式**反馈；受限/撤权版本整条不写。
     knowledge_refs: normalizeKnowledgeRefs(await db<Array<Record<string, unknown>>>`
       SELECT i.id::text AS item_id, v.id::text AS version_id, i.kind, i.title, v.version, v.content_sha256,
-        u.feedback_json->>'outcome' AS outcome
+        count(*)::int AS reads,
+        (array_agg(u.feedback_json->>'outcome' ORDER BY u.created_at DESC)
+          FILTER (WHERE u.feedback_json->>'outcome' IS NOT NULL))[1] AS outcome
       FROM project_knowledge_usages u
       JOIN project_knowledge_versions v ON v.project_id=u.project_id AND v.id=u.version_id
       JOIN project_knowledge_items i ON i.project_id=v.project_id AND i.id=v.item_id
       WHERE u.job_id IN (SELECT id FROM jobs WHERE canvas_id=${canvasId} AND project_id=${canvas.project_id})
-      ORDER BY u.created_at DESC
+        AND v.revoked_at IS NULL AND i.status='active'
+        AND NOT EXISTS (SELECT 1 FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
+          WHERE p.project_id=v.project_id AND p.candidate_version_id=v.id
+            AND w.trigger_key LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"})
+      GROUP BY i.id, v.id, i.kind, i.title, v.version, v.content_sha256
+      ORDER BY max(u.created_at) DESC
       LIMIT 200`),
   };
 }

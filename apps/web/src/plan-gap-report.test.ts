@@ -184,3 +184,16 @@ test("v2 Plan audits remain visible while historical v1 and native reports stay 
   assert.match(html, /running/);
   assert.equal(withPlanGapReport({ trusted: "native report" }, undefined), "native report");
 });
+
+test("#1256 报告里的知识标题在页面渲染时不会变成链接或图片", async () => {
+  const { renderKnowledgeRefsSection } = await import("../../scheduler/src/report.js");
+  const section = renderKnowledgeRefsSection([{
+    item_id: "item-1", version_id: "ver-1", kind: "memory",
+    title: "[点我](note-a) 与 ![图](shot.png)", version: 2,
+    content_sha256: "a".repeat(64), reads: 2, outcome: null,
+  }]);
+  const html = renderToStaticMarkup(createElement(MarkdownView, { markdown: `## 结论\n\n任务已完成。\n\n${section}`, controls: false }));
+  assert.doesNotMatch(html, /<a\s[^>]*href=/iu, "标题里的链接语法不能生成真实链接");
+  assert.doesNotMatch(html, /<img\s/iu, "标题里的图片语法不能生成图片");
+  assert.match(html, /点我/u, "标题文字仍要可读");
+});
