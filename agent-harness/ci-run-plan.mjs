@@ -23,7 +23,7 @@ import {
   CLASSIFIER_STATUSES,
   classifyRecords,
   isDocsOnlyPath,
-  parseGitNameStatusZ,
+  parseGitDiffRecords,
 } from "./classify-ci-changes.mjs";
 
 export const RUN_MODES = Object.freeze({
@@ -273,7 +273,7 @@ export function buildRunPlan({
   let records;
   try {
     const bytes = diffBytes ?? readGitDiff(base, head);
-    records = parseGitNameStatusZ(bytes);
+    records = parseGitDiffRecords(bytes);
     plan.reasons.push("diff_parsed");
   } catch {
     plan.status = PLAN_STATUSES.FAILED;
@@ -347,7 +347,10 @@ export function buildRunPlan({
 }
 
 function readGitDiff(base, head, cwd = process.cwd()) {
-  const output = spawnSync("git", ["diff", "--name-status", "-z", "--find-renames", `${base}...${head}`], {
+  // #1225 复核：--name-status 不携带文件模式，普通 Markdown 与符号链接无法区分，
+  // 真实工作流只能保守回退到全量，文档快车道等于没有生效。改为读 --raw -z，
+  // 与 classify-ci-changes.mjs 共用同一条「只接受 Git 普通文件（100644）」的判定。
+  const output = spawnSync("git", ["diff", "--raw", "-z", "--find-renames", `${base}...${head}`], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 16 * 1024 * 1024,

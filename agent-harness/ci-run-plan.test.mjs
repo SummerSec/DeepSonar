@@ -2,7 +2,7 @@
 // must never turn a missing/partial diff into a smaller required set.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +25,11 @@ import {
 } from "./ci-run-plan.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const diff = (...records) => Buffer.from(records.flat().join("\0") + "\0", "utf8");
+// #1221 review：运行计划现在解析 `git diff --raw -z`，夹具必须带 blob 模式。
+const diff = (...records) => Buffer.from(records.map(([status, ...paths]) => [
+  `:${status === "A" ? "000000" : "100644"} 100644 ${"0".repeat(40)} ${"0".repeat(40)} ${status}`,
+  ...paths,
+].join("\0")).join("\0") + "\0", "utf8");
 const change = (path) => ["M", path];
 const pr = { eventName: "pull_request", base: "base-sha", head: "head-sha", ciPrMode: "tiered" };
 const SUITE_PATHS = loadSuitePaths(ROOT);
@@ -443,7 +447,11 @@ test("#961 ci.yml wires the Chrome Fuzz ARM gate to the run plan", () => {
 // package.json field-level check is what allows an independent test script to
 // avoid the three heavy native matrices.
 test("#976 the run plan carries a fail-closed Reverse sub-suite decision", () => {
-  const diff = (...records) => Buffer.from(records.flat().join("\0") + "\0", "utf8");
+  // #1221 review：运行计划现在解析 `git diff --raw -z`，夹具必须带 blob 模式。
+const diff = (...records) => Buffer.from(records.map(([status, ...paths]) => [
+  `:${status === "A" ? "000000" : "100644"} 100644 ${"0".repeat(40)} ${"0".repeat(40)} ${status}`,
+  ...paths,
+].join("\0")).join("\0") + "\0", "utf8");
   const record = (status, path) => [status, path];
   const base = { ...pr, suitePaths: SUITE_PATHS };
 
@@ -594,6 +602,86 @@ test("#992 the skip sentence names the real reason for each mode", () => {
   assert.equal(unrelated.mode, "ready-full");
   assert.deepEqual(unrelated.reverseSuites, []);
   assert.match(explainRunPlan(unrelated), /（原因：改动都落在 Reverse 输入之外，已证明无关）/u);
+});
+
+test("#1221 真实 git 提交下 #1220 形状的普通 Markdown 走文档快车道", () => {
+  // 复核意见：真实工作流此前拿不到文件模式，普通 Markdown 一律回退全量。
+  // 这条用例直接跑真实 git（不用 --diff-file 夹具），证明确实走文档快车道。
+  const dir = mkdtempSync(join(tmpdir(), "plan-real-docs-"));
+  const git = (...args) => {
+    const run = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+    assert.equal(run.status, 0, `git ${args.join(" ")}: ${run.stderr}`);
+    return run.stdout.trim();
+  };
+  try {
+    git("init", "-q");
+    git("config", "user.email", "ci@example.invalid");
+    git("config", "user.name", "ci");
+    // 正例用 #1220 的形状：根目录 DESIGN.md 修改 + docs/superpowers/plans/ 下新增方案文档，
+    // 这样同一真实入口也锁住本次新增的白名单，而不只是模式接线。
+    mkdirSync(join(dir, "docs/superpowers/plans"), { recursive: true });
+    writeFileSync(join(dir, "DESIGN.md"), "first\n");
+    writeFileSync(join(dir, "README.md"), "readme\n");
+    git("add", "DESIGN.md", "README.md");
+    git("commit", "-q", "-m", "base");
+    const base = git("rev-parse", "HEAD");
+    writeFileSync(join(dir, "DESIGN.md"), "second\n");
+    writeFileSync(join(dir, "docs/superpowers/plans/2026-11-24-plan.md"), "# 方案\n");
+    git("add", "DESIGN.md", "docs/superpowers/plans/2026-11-24-plan.md");
+    git("commit", "-q", "-m", "docs");
+    const head = git("rev-parse", "HEAD");
+    const output = join(dir, "output.txt");
+    const summary = join(dir, "summary.md");
+    writeFileSync(output, "");
+    writeFileSync(summary, "");
+    const result = spawnSync(process.execPath, [join(ROOT, "agent-harness/ci-run-plan.mjs"), "--event-name", "pull_request",
+      "--base", base, "--head", head, "--draft", "false", "--ci-pr-mode", "tiered", "--root", ROOT], {
+      cwd: dir, env: { ...process.env, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary }, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const outputs = readFileSync(output, "utf8");
+    assert.match(outputs, /mode=docs/u, `#1220 形状的普通 Markdown 改动必须走文档快车道，实际输出：${outputs}`);
+    assert.match(outputs, /docs_only=true/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#1221 真实 git 提交下符号链接不会被当成普通文档", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-real-symlink-"));
+  const git = (...args) => {
+    const run = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+    assert.equal(run.status, 0, `git ${args.join(" ")}: ${run.stderr}`);
+    return run.stdout.trim();
+  };
+  try {
+    git("init", "-q");
+    git("config", "user.email", "ci@example.invalid");
+    git("config", "user.name", "ci");
+    writeFileSync(join(dir, "README.md"), "docs\n");
+    writeFileSync(join(dir, "target.md"), "target\n");
+    git("add", "README.md", "target.md");
+    git("commit", "-q", "-m", "base");
+    const base = git("rev-parse", "HEAD");
+    rmSync(join(dir, "README.md"));
+    symlinkSync("target.md", join(dir, "README.md"), "file");
+    git("commit", "-q", "-am", "docs link");
+    const head = git("rev-parse", "HEAD");
+    const output = join(dir, "output2.txt");
+    writeFileSync(output, "");
+    const result = spawnSync(process.execPath, [join(ROOT, "agent-harness/ci-run-plan.mjs"), "--event-name", "pull_request",
+      "--base", base, "--head", head, "--draft", "false", "--ci-pr-mode", "tiered", "--root", ROOT], {
+      cwd: dir, env: { ...process.env, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: join(dir, "s2.md") }, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const outputs = readFileSync(output, "utf8");
+    assert.match(outputs, /mode=ready-full/u, `符号链接必须回退全量，实际输出：${outputs}`);
+    // 原因写在计划输入与摘要里（GITHUB_OUTPUT 只带 mode/reasons 概览）。
+    const summaryText = readFileSync(join(dir, "s2.md"), "utf8");
+    assert.match(summaryText, /unsafe_file_mode|unsafe_change_status/u, `摘要必须写明判定原因，实际：${summaryText.slice(0, 1200)}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("#992 the CLI writes the explanation to GITHUB_STEP_SUMMARY", () => {
