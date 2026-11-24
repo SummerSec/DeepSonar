@@ -225,3 +225,19 @@ test("handler details containing error_code cannot overwrite the RepairFeedback 
   assert.equal(body.details && "error_code" in body.details, false);
   assert.equal(JSON.stringify(body).includes(secret), false);
 });
+
+test("契约缺失的反馈标为永久前置条件，下一步给出可执行动作而不是改 payload", () => {
+  const repair = repairFeedbackFromControlRejection({
+    operation: "emit_fact",
+    code: "task_result_contract_missing",
+    message: "本 Job 的冻结快照没有 task_contract",
+    retryable: false,
+    statusCode: 409,
+    path: "artifact.task_result",
+  });
+  assert.equal(repair.category, "permanent_failure");
+  assert.equal(repair.expected, undefined, "宿主冻结的前置条件没有可供 Agent 对齐的 expected");
+  const nextAction = String(repair.next_action);
+  assert.match(nextAction, /普通 Fact 记录本次有界结果/u);
+  assert.doesNotMatch(nextAction, /按 expected 修正/u);
+});

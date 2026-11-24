@@ -240,6 +240,18 @@ export function sharedAssetPublishControlError(error: unknown): ControlInputErro
   return invalidToolPayload("publish_shared_asset", detail, path);
 }
 
+export function controlInputRuntimeRejection(error: ControlInputError): PlatformRuntimeHandlerError {
+  return new PlatformRuntimeHandlerError("OPERATION_REJECTED", error.message, {
+    statusCode: error.retryable ? 422 : 409,
+    errorCode: error.code,
+    retryable: error.details?.accepted_terminal ? false : error.retryable,
+    ...(error.details?.accepted_terminal ? { category: "permanent_failure" as const,
+      next_action: "终态提案已接受；停止提交冲突终态，等待原提案结算并读取当前状态。" } : {}),
+    ...(error.path ? { path: error.path } : {}),
+    ...(error.details ? { details: error.details } : {}),
+  });
+}
+
 export function buildInstructionWorkspaceFiles(instructions: string): Record<string, string> {
   return {
     "/workspace/AGENTS.md": instructions,
@@ -1711,19 +1723,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         );
       }
       if (error instanceof ControlInputError) {
-        throw new PlatformRuntimeHandlerError(
-          "OPERATION_REJECTED",
-          error.message,
-          {
-            statusCode: error.retryable ? 422 : 409,
-            errorCode: error.code,
-            retryable: error.details?.accepted_terminal ? false : error.retryable,
-            ...(error.details?.accepted_terminal ? { category: "permanent_failure" as const,
-              next_action: "终态提案已接受；停止提交冲突终态，等待原提案结算并读取当前状态。" } : {}),
-            ...(error.path ? { path: error.path } : {}),
-            ...(error.details ? { details: error.details } : {}),
-          },
-        );
+        throw controlInputRuntimeRejection(error);
       }
       throw error;
     }
