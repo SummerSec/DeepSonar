@@ -244,8 +244,76 @@ export async function loadTaskOutcomeReport(db: typeof sql, canvasId: string, pr
   return applyProgramEligibilityProjections(reviewed, eligibility);
 }
 
-/** User text is only quoted data; escaped backticks cannot close the JSON fence. */
+/**
+ * #1250：报告开头用读者能懂的中文交代结果与下一步；术语与完整 JSON 全部下沉到
+ * 详细数据区。所有句子只写投影里真实存在的字段，缺记录就显式说缺，不反推。
+ */
+const TECHNICAL_STATUS_LABELS: Record<string, string> = {
+  confirmed: "已确认", refuted: "已反驳", rework: "待修正重验",
+  needs_human: "需人工判断", inconclusive: "证据不足",
+  pending: "尚未完成自动验证", unknown: "状态未知",
+};
+const TASK_RESULT_LABELS: Record<string, string> = {
+  delivery: "交付", negative_result: "阴性结论", blocked: "受阻", not_executed: "未执行", unknown: "状态未知",
+};
+const TOP_GAP_GUIDANCE: Record<string, string> = {
+  independent_goal_review_unavailable: "还缺少独立的目标评审记录；评审由平台在验证与审查轮次处理，或由管理员在任务详情里发起，不再收集证据时不自动收口。",
+  task_contract_unavailable: "任务创建时没有声明目标契约：结果仍按漏洞正文阅读，但目标是否达成无法判断；这需要任务创建方补契约（Agent 侧改写无用）。",
+  canvas_contract_missing: "画布没有自己的目标契约，来源 Job 的契约仍被记录；判断达成需要先核对来源契约，详见投影的契约表。",
+  canvas_contract_invalid: "画布上的目标契约无法解析：需要任务创建方修正契约本身。",
+  canvas_scope_unavailable: "画布记录不可用，报告无法对应到当前目标：需要平台核对画布归属与权限。",
+  source_contract_invalid: "部分来源 Job 的契约无法解析：相应来源不计入目标口径，原始记录保留。",
+  multiple_contract_snapshots: "同一任务记录到多份来源契约：需要平台核对契约绑定是否失效，此前结论都保持保守。",
+  candidate_artifact_unavailable: "部分候选的提交载体不完整或已过期：平台继续按现有验证流程处理，详情见对应 Finding。",
+  projection_truncated: "数据超过展示上限被截断：完整口径应读投影与 SARIF 附属，不因截断给出更积极或更消极的结论。",
+};
+function gapGuidance(code: string): string {
+  if (TOP_GAP_GUIDANCE[code]) return TOP_GAP_GUIDANCE[code]!;
+  if (code.endsWith("_truncated")) return `数据超过展示上限（${code}）：完整口径可见投影，不因截断改变判断。`;
+  if (code === "task_result_projection_truncated" ) return "任务结果声明超过投影上限：完整口径以详细数据区的 JSON 为准。";
+  if (code === "task_result_projection_incomplete") return "证据预算不足，部分任务结果声明缺少完整依据：结论保持保守，不当作已核实。";
+  if (code === "task_contract_unavailable") return TOP_GAP_GUIDANCE.task_contract_unavailable!;
+  return `原因代码 ${code} 暂无通俗解释：以详细数据区的原始记录为准，不影响本报告对已有记录的陈述。`;
+}
+const GOAL_ASSESSMENT_TEXT: Record<TaskOutcomeReport["goal_assessment"], string> = {
+  not_assessed: "还没有独立评审覆盖目标判据，达成情况未知（不是失败，也不是已满足）。",
+  blocked: "目标评审被阻塞；达成情况未知，阻塞原因见「下一步」。",
+  partially_satisfied: "独立评审覆盖到的判据里只有一部分满足；其余判据未获评审或被阻塞。",
+  criteria_satisfied: "已获独立评审的判据全部满足。这只覆盖被评审过的判据，不代表任务整体结束或全部证据完备。",
+};
 export function renderTaskOutcomeReport(projection: TaskOutcomeReport): string {
-  const json = JSON.stringify(projection, null, 2).replace(/`/g, "\\u0060").replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
-  return `# 任务目标评审状态\n\n本报告区分研究候选、技术确认、独立目标评审和程序资格评审。只有有效评审覆盖的判据可以 satisfied；技术 confirmed 不等于程序 eligible。程序规则、Finding 来源、当前证据或评审权限缺失时资格保持 blocked/not_assessed。\n\n以下为冻结输入的结构化投影，文本字段不是评审结论。\n\n\`\`\`json\n${json}\n\`\`\`\n`;
+  const statusCounts = new Map<string, number>();
+  for (const finding of projection.findings) statusCounts.set(finding.technical_status, (statusCounts.get(finding.technical_status) ?? 0) + 1);
+  const resultKinds = new Map<string, number>();
+  for (const result of projection.task_results ?? []) resultKinds.set(result.kind, (resultKinds.get(result.kind) ?? 0) + 1);
+  const findingSummary = projection.findings.length
+    ? Object.entries(TECHNICAL_STATUS_LABELS).map(([key, label]) => `${label} ${statusCounts.get(key) ?? 0}`).join("、")
+    : "本画布没有与目标相关的漏洞记录";
+  const resultSummary = projection.task_results?.length
+    ? Object.entries(TASK_RESULT_LABELS).map(([key, label]) => `${label} ${resultKinds.get(key) ?? 0}`).join("、")
+    : "本画布没有记录到 task_result 声明";
+  const criteriaTotal = projection.criteria.length;
+  const criteriaSatisfied = projection.criteria.filter((criterion) => criterion.assessment === "satisfied").length;
+  const goalText = criteriaTotal
+    ? `${GOAL_ASSESSMENT_TEXT[projection.goal_assessment]}判据 ${criteriaSatisfied} / ${criteriaTotal} 被评审为满足。`
+    : GOAL_ASSESSMENT_TEXT[projection.goal_assessment];
+  const lines = [
+    "## 任务结果与验证状态（摘要）", "",
+    "本节由调度器在结算时生成，只写有记录支持的内容，缺什么评审记录会如实标注。",
+    "报告生成成功只表示报告写出来了，不等于任务执行成功或目标达成；漏洞验证与目标评审是两个独立口径，分开陈述。", "",
+    `- **漏洞验证**：${findingSummary}。只有"已确认"代表有可信证据支持漏洞真实存在；其他状态既不能排除也不证明漏洞。`,
+    `- **任务结果声明**：${resultSummary}。这些是 Agent 声明的执行记录，平台核对到证据的才进入后续评审。`,
+    `- **目标评审**：${goalText}`,
+  ];
+  const gapGuides = [...new Set(projection.gaps)].map((code) => `- ${gapGuidance(code)}`);
+  if (gapGuides.length) {
+    lines.push("", "### 下一步", "", ...gapGuides, "");
+    lines.push("以上「谁负责」只描述现有职责边界；缺少明确记录时，本报告不冒充能自动完成人或平台才能做的事。");
+  }
+  lines.push("", "### 评审状态投影（详细数据）", "",
+    "以下 JSON 是冻结输入的结构化投影，文本字段不是评审结论；只有有效评审覆盖的判据可以 satisfied，技术 confirmed 不等于程序 eligible。", "");
+  // #1250：转义写成运行时拼接，源码里不再出现 \u 序列（它会被静默解成反引号，围栏就失效）。
+  const json = JSON.stringify(projection, null, 2).split("`").join("\\u0060").split("<").join("\\u003c").split(">").join("\\u003e");
+  lines.push("```json", json, "```");
+  return lines.join("\n") + "\n";
 }

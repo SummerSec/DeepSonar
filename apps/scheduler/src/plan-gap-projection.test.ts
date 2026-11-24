@@ -55,5 +55,22 @@ test("report exposes missing and truncated coverage; untrusted fences stay quote
   const rendered = renderPlanGapReport({ v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: true, limit: 32 });
   assert.match(rendered, /unknown/);
   assert.match(rendered, /覆盖不完整/);
-  assert.match(rendered, /````json/);
+  assert.match(rendered, /```json/);
+});
+
+test("#1250 空计划审计只给可读结论，不再倾倒原始 JSON", () => {
+  const rendered = renderPlanGapReport({ v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 });
+  assert.match(rendered, /没有可用的计划审计记录/);
+  assert.match(rendered, /不能证明任务未执行或没有发现/);
+  assert.match(rendered, /unknown/);
+  assert.doesNotMatch(rendered, /json/);
+});
+
+test("#1250 有计划审计时先给摘要，原始投影下沉到详细数据", () => {
+  const entry = projectPlanGaps("job", { plan_protocol: audit });
+  const rendered = renderPlanGapReport({ v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: false, limit: 32 });
+  assert.ok(rendered.indexOf("本画布关联了 1 份计划审计快照") < rendered.indexOf("### 详细审计数据"));
+  assert.match(rendered, /任务数 1，判据 1 项/);
+  assert.match(rendered, /整体 unknown（unknown 表示目前没有权威评审/);
+  assert.match(rendered, /```json/);
 });
