@@ -1,4 +1,6 @@
 import { TaskContractEditor, TaskContractFeedbackView } from "../components/TaskContractEditor";
+import { EMPTY_TASK_DEVICE, parseTaskDevice, TaskDeviceEditor } from "../components/TaskDeviceEditor";
+import { TaskNetworkEditor } from "../components/TaskNetworkEditor";
 import { SnapshotConfigurationNotice } from "../components/SnapshotConfigurationNotice";
 import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
 import { ApiRequestError } from "../login-error";
@@ -25,11 +27,6 @@ type ScheduleMode = "immediate" | "at";
 const inputCls =
   "theme-input-surface w-full border px-3.5 py-2.5 text-[13px] leading-6 text-zinc-200 outline-none transition-colors placeholder:text-zinc-600";
 const labelCls = "mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500";
-const NETWORK_OPTIONS = [
-  { value: "project" as const, label: "继承项目设置" },
-  { value: "allow" as const, label: "允许出网" },
-  { value: "deny" as const, label: "禁止出网" },
-];
 
 function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }: { projectId: string; initialSeedIds?: string[]; onDone: (canvasId: string) => void; onCancel: () => void; flash: ReturnType<typeof useOperationFeedback>["flash"] }) {
   const [form, setForm] = useState<{ title: string; content: string; kind: "standard" | "compose"; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string }>({
@@ -41,6 +38,8 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
     startAtLocal: nextBeijing8amLocalValue(),
   });
   const [contractDraft, setContractDraft] = useState("");
+  const [deviceDraft, setDeviceDraft] = useState(EMPTY_TASK_DEVICE);
+  const parsedDevice = parseTaskDevice(deviceDraft);
   const [contractFeedback, setContractFeedback] = useState<TaskContractFeedback>({});
   const [createdCanvasId, setCreatedCanvasId] = useState<string | null>(null);
   const parsedContract = parseTaskContractDraft(contractDraft);
@@ -121,6 +120,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           e.preventDefault();
           if (submitting || createdCanvasId) return;
           if (parsedContract.error) return flash(parsedContract.error, "error");
+          if (parsedDevice.error) return flash(parsedDevice.error, "error");
           setContractFeedback({});
           if (!form.title.trim()) return flash("请写明希望得到的结果", "error");
           if (!form.content.trim()) return flash("请补充必要背景或边界", "error");
@@ -140,6 +140,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           try {
             const result = await api.createTask(projectId, {
               ...(parsedContract.contract ? { task_contract: parsedContract.contract } : {}),
+              ...(parsedDevice.device ? { device: parsedDevice.device } : {}),
               title: form.title.trim(),
               content: form.content.trim(),
               kind: form.kind,
@@ -309,30 +310,9 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
             </section>
           )}
 
-          <fieldset className="m-0 min-w-0 border-0 p-0">
-            <legend className={`${labelCls} px-0`}>外部网络</legend>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="外部网络">
-              {NETWORK_OPTIONS.map((option) => {
-                const active = form.network === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    onClick={() => setForm({ ...form, network: option.value })}
-                    className={`rounded-lg border px-3.5 py-2.5 text-left text-[13px] leading-6 transition-colors ${
-                      active
-                        ? "border-acc-400/35 bg-acc-500/[.08] text-zinc-100"
-                        : "theme-input-surface text-zinc-400 hover:border-white/[.12] hover:text-zinc-200"
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </fieldset>
+          <TaskNetworkEditor value={form.network} onChange={network => setForm({ ...form, network })} />
+
+          <TaskDeviceEditor value={deviceDraft} onChange={setDeviceDraft} />
 
           {/* 执行时间：立即 / 指定时间 集中在同一面板 */}
           <section className="rounded-xl border border-white/[.06] bg-white/[.015] p-4" aria-labelledby="task-schedule-heading">
@@ -456,7 +436,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           </div>
           <div className="flex gap-2 sm:ml-auto">
             <SecondaryButton type="button" onClick={onCancel}>稍后再说</SecondaryButton>
-            {createdCanvasId ? <PrimaryButton type="button" onClick={() => onDone(createdCanvasId)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={submitting} disabled={Boolean(scheduleIssue || parsedContract.error)}>
+            {createdCanvasId ? <PrimaryButton type="button" onClick={() => onDone(createdCanvasId)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={submitting} disabled={Boolean(scheduleIssue || parsedContract.error || parsedDevice.error)}>
               交给系统
             </PrimaryButton>}
           </div>

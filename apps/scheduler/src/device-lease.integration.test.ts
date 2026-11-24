@@ -403,7 +403,8 @@ if (testDatabaseUrl) {
       const [idleHdc] =
         await sql`SELECT status FROM devices WHERE key = 'target-oh-1'`;
       assert.equal(idleHdc.status, "idle");
-      const { verifyDeviceEvidenceEntrypoints } = await import("./device-verification.fixture.js");
+      const { verifyDeviceEvidenceEntrypoints, verifyTaskDeviceCreation } = await import("./device-verification.fixture.js");
+      await verifyTaskDeviceCreation(projectId);
       await verifyDeviceEvidenceEntrypoints(projectId);
     } finally {
       if (endSql) await endSql().catch(() => {});
