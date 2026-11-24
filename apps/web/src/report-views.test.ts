@@ -399,3 +399,14 @@ test("tasks with content stay collapsed by default and only appear as context", 
   assert.equal(contexts[1]?.hasOutput, false);
   assert.equal(contexts[1]?.pendingCount, 0);
 });
+
+test("#1251 下载接线检查：页面不改写正文，只按 reportId 调服务端入口（非下载字节验收）", () => {
+  const panel = readFileSync(new URL("./ReportPanel.tsx", import.meta.url), "utf8");
+  const api = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+  // 仅接线检查：不核对下载字节，也不声称页面与文件逐字节一致（真实下载验收见 PR 说明）。
+  // 页面下载只调 api.downloadReport(reportId, format)，不得拼接或改写渲染结果。
+  assert.match(panel, /await api\.downloadReport\(reportId, format\);/u);
+  assert.doesNotMatch(panel, /api\.downloadReport\([^)]*markdown/u, "正文必须来自服务端，不得用页面文本");
+  // 服务端入口是 /reports/{id}/markdown 与 /reports/{id}/sarif，二者本来就从同一份报告投影生成。
+  assert.match(api, /\/reports\/\$\{encodeURIComponent\(reportId\)\}\/\$\{format\}/u);
+});
