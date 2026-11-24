@@ -61,7 +61,7 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       assert.deepEqual(res.json().items.map((item: { feedback: { total: number } }) => item.feedback.total), [0, 0]);
       await db`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,owner_project_id,version_id,feedback_json)
         VALUES(${owner.projectId},${owner.jobId},${owner.attemptId},'project-memory:card@1',${hash},${owner.projectId},${memoryVersion},
-          '{"outcome":"success"}'::jsonb)`;
+          '{"outcome":"success","reason":"时区与请求 ID 两条判据都用上了"}'::jsonb)`;
       res = await app.inject({ method: "GET", url: path });
       const card = res.json().items.find((item: { id: string }) => item.id === memoryItem);
       assert.equal(card.feedback.success, 1);
@@ -82,7 +82,7 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
       assert.equal(res.statusCode, 200);
       assert.ok(res.json().items[0].job_id, "tasks:read 角色应能定位来源任务");
-      assert.equal(res.json().items[0].reason, null, "未写理由时理由为 null");
+      assert.equal(res.json().items[0].reason, "时区与请求 ID 两条判据都用上了", "有 tasks:read 时必须返回真实理由原文");
       actor = { ...actor, scopes: ["projects:read"], name: "reader" };
       res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
       assert.equal(res.statusCode, 200);
