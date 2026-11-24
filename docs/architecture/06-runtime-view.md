@@ -3,7 +3,9 @@
 #1211 的任务创建将画布、根节点、冻结目标和首个 Job 放在现有 `createJob` 的同一事务中，沿用有界数据库冲突重试。设备准入与快照冻结失败回滚完整创建，提交后的统计和 Provider 模型审计继续由公共入口处理。正常 HTTP 与拒绝后记录完整性回归接既有 device-lease Actions。
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-21
+> 同步日期：2026-11-24
+
+#1252 的[Responses 完成尾部与结算时序](../MODEL_GATEWAY_TRANSPARENCY.md#responses-完成尾部与结算时序1252)在已验证完成后允许单个精确结束标记。未压缩 Responses SSE 暂存当前完成块至原流结束和 usage/effect 事务处理后再交付，原 deadline、取消、回显与未知效果规则继续生效。前序内容保持流式，现场尾帧与最终 SHA Actions 另验。
 
 #1133 的自动 Hub worker intent 与人工 Finding 补证入口，在冻结网络策略后、运行配置前统一调用设备要求冻结。显式 adb/hdc 要求重核项目 opt-in、已配置 rig、已启用 transport、独占及出网授权，进入 Job snapshot 后由既有设备租约入口再次授权并发放短期 grant。无显式设备要求的目标继续远端路径，镜像缺 SDK 或固件不用于推断设备能力。人工无定论事务、CAS 和审计见[接口边界](09-interface-specs.md#人工结束技术验证1133)。
 
@@ -319,7 +321,7 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 ## Model Gateway 透明传输与结算（#923）
 
-请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后查询同 Job/Attempt/token/workload 的持久 effect/usage 状态，仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。
+请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一身份查询原持久 effect/usage 状态，原 Attempt 终态及后续活动 Attempt 均可读，多条匹配保持 `unknown`（#1230），仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。
 
 #923 主执行启动/恢复由上传的[请求准入适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 查询自身 workload allowance，已有 cap/usage 合规才原字节转发，否则拒绝。Pi 已接 SDK 生成前逐次配置，Claude 只接启动/resume 静态 cap；DSH 共用 SDK 生成前 adapter 已接。Claude Code 2.1.312 的启动上限与运行中余额不足时明确拒绝并提示，是用户已接受的兼容限制；不修改已形成 body，不要求逐请求自动适配，该范围决定不再阻塞发布。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
 

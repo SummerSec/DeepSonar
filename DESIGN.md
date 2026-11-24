@@ -13,6 +13,8 @@
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
 > 同步日期：2026-11-21
 
+#1252 的[Responses 完成尾部与结算时序](docs/MODEL_GATEWAY_TRANSPARENCY.md#responses-完成尾部与结算时序1252)支持已验证最终完成后的单个精确结束标记。未压缩 Responses SSE 的完成块有界暂存至原上游结束和账本处理，前序内容继续流式转发。原始现场尾帧仍未捕获，最终 SHA Actions 待验。
+
 #1082 的[最终用量与安全形态诊断](docs/MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
@@ -185,6 +187,8 @@ Hub 只在当前 Job scope 内按需读图：初始 L0/overview 只提供有界 
 `plan_execution.stop_reason=complete` / objective `status=completed` 只记录工程路线输出条件已满足；任务收敛仍另过操作员判据与 Hub/Report 完成门。普通 HubIntent 继续走原 handler，不再制造新的 v1 `plan_protocol`；`applyHubPlanAdapter`、`persistPlanAudit`、副作用 writer 以及 pure legacy `adapt*` helper/type/export 已物理删除。不可变 v1 与 `hub_intent_adapter` 历史审计仍可解析，但不能作为新执行输入或实现债务依据。
 
 完成仍要求当前全判据正向操作员授权、有效来源与完整读取；普通目标评审、PlanResult、输出关联或报告均不能自行取得该 authority。报告机器整体判断保留 unknown，技术成果、任务完成和资格分别呈现。bootstrap fixture 仅用 HTTP objective 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker；这是验证方法与结果，不是所有首个提案的协议约束。v2 回放本地 SQL/HTTP fixture 已核验，但报告 provenance 为 dirty 的非 HEAD 提交，不能写成 `5619154f` 精确最终验收；该历史回放不能代替最终 SHA，分项证据见[验收矩阵](docs/TASK_DISPATCH_ACCEPTANCE.md)；工程切片已随 #831 的 `fdb55a01` 主线 Actions 验收，后续修复 SHA 仍须另验。`maxHubRounds`、token、wall time、并发和沙箱限制只提供护栏，不代替完成理由或当前判据证据。
+
+#1230 的结算回执按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一持久身份读取，账本保留原 Attempt/effect 关联。原 Attempt 终态或已有后续活动 Attempt 时仍可读，多条匹配保持 `unknown`。历史 `settled` 只表示账本已经结算，模型结果与当前恢复准入分别判定。详见[接口边界](docs/architecture/09-interface-specs.md#model-gateway)。
 
 Gateway 请求额度跨 token/Attempt 累计，含撤销和过期 token；普通 main 与 OM 的 total/main/background 请求上限各取历史与当前有限值的最小值，0/未配置不能解除旧有限上限，详见 [透明网关预算](docs/MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
 

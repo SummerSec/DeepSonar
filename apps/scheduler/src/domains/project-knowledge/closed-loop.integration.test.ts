@@ -228,7 +228,7 @@ test(evaluationOnly ? `closeout ${kind} settles behavior and stays private witho
       evidence_refs: [], remaining_checks: [] });
     await finish(db, runner, reviewerId);
     assert.equal((await db`SELECT state FROM project_knowledge_work WHERE id=${workId}`)[0]!.state, "completed");
-    const readOperation = kind === "memory" ? "read_project_memory" : "pull_skill";
+    const readOperation = kind === "memory" ? "read_project_knowledge" : "pull_skill";
     const consumer = await seedKnowledgeJob(db, origin.projectId, [readOperation, "record_knowledge_feedback", "request_project_knowledge"]);
     const catalog = await freezeProjectKnowledgeCatalog(db, origin.projectId);
     await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: [readOperation, "record_knowledge_feedback", "request_project_knowledge"], project_knowledge_catalog: catalog } as never)}

@@ -34,7 +34,7 @@ try:
     skills = [item for item in listed['skills'] if item['selector'] == config['selector']]
     memory = invoke('search_project_knowledge', {'kind': 'memory', 'query': config['memory_title']})
     assert not memory['items'], 'other project Memory entered this Job'
-    denied_memory = invoke('read_project_memory', {
+    denied_memory = invoke('read_project_knowledge', {
         'item_ref': config['memory_item_id'], 'version': 1,
         'expected_hash': config['memory_hash']}, False)
     assert denied_memory['error_code'] in ('KNOWLEDGE_SCOPE_DENIED', 'KNOWLEDGE_REVOKED'), denied_memory

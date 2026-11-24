@@ -7,7 +7,7 @@ export * from "./task-result.js";
 import { z } from "zod";
 import { CandidateOutcomeClaim } from "./task-outcome.js";
 export * from "./task-outcome.js";
-import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload, TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "./project-knowledge.js";
+import { ACTIVE_KNOWLEDGE_OPERATION_IDS, KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload, TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "./project-knowledge.js";
 export * from "./project-knowledge.js";
 import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
 import { CompletionRecoveryDecision } from "./completion-recovery.js";
@@ -1429,6 +1429,9 @@ export const AckHumanMessagePayload = z.object({
 export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
 
 export const ControlToolPayloadSchemas = {
+  // #1219 迁移窗口：旧只读别名保留在注册表里，否则旧快照的 Job 会拿到 404；
+  // 可见性由 Job 快照的 platform_tools 决定（operationIdsFromSnapshot），
+  // 新 Job 与角色可选工具只看 ALL_PLATFORM_TOOLS（已排除旧名）。
   ...KnowledgeControlPayloadSchemas,
   list_available_roles: ListAvailableRolesPayload,
   list_available_runtime_images: ListAvailableRuntimeImagesPayload,
@@ -1688,7 +1691,9 @@ export function validateModuleSelectors(values: unknown, field = "modules"): str
  * 每个 Agent 默认都可勾选其中任意项；是否真正注入以 RoleConfig 开关 + Job 快照为准。
  */
 export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
-  ...KNOWLEDGE_OPERATION_IDS,
+  // #1219 迁移窗口：read_project_memory 是只在旧快照上生效的只读别名，
+  // 不出现在新角色/新 Job 的可选工具里。
+  ...ACTIVE_KNOWLEDGE_OPERATION_IDS,
   "list_available_roles",
   "list_available_runtime_images",
   "list_available_agent_clis",
@@ -1750,6 +1755,37 @@ export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): Plat
   return ["mark_job_done", "ack_human_message"];
 }
 
+/**
+ * #1219 迁移窗口：知识读取的旧名还留在已保存的角色配置里。
+ * 新名没有单独设置时沿用旧名的显式决定，避免升级后把「已关掉读取」的角色默认打开。
+ */
+const LEGACY_PLATFORM_TOOL_DECISIONS: Readonly<Record<string, string>> = {
+  read_project_knowledge: "read_project_memory",
+};
+
+/**
+ * #1219 迁移窗口：把已保存配置里的旧工具键迁移成新键（新键优先，旧键不丢）。
+ * 未知键原样保留，交给调用方按当前白名单拒绝。
+ */
+export function normalizeLegacyPlatformTools(tools: PlatformToolConfig): PlatformToolConfig {
+  const normalized: Record<string, boolean | undefined> = { ...(tools as Record<string, boolean | undefined>) };
+  for (const [name, legacy] of Object.entries(LEGACY_PLATFORM_TOOL_DECISIONS)) {
+    if (!(legacy in normalized)) continue;
+    const decision = normalized[legacy];
+    delete normalized[legacy];
+    if (!(name in normalized)) normalized[name] = decision;
+  }
+  return normalized as PlatformToolConfig;
+}
+
+function platformToolDecision(name: PlatformToolName, config: PlatformToolConfig): boolean | undefined {
+  const own = config[name];
+  if (own !== undefined) return own;
+  const legacy = LEGACY_PLATFORM_TOOL_DECISIONS[name];
+  const inherited = legacy ? (config as Record<string, boolean | undefined>)[legacy] : undefined;
+  return inherited;
+}
+
 /** Ordinary optional tools default on; experimental knowledge tools require explicit opt-in. */
 export function resolvePlatformTools(
   roleName: string,
@@ -1759,7 +1795,7 @@ export function resolvePlatformTools(
   const required = new Set(requiredPlatformTools(roleKind));
   return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name)
     || (name === "suggest_project_skills" || name === "record_skill_choice" || name === TASK_KNOWLEDGE_SUGGESTION_OPERATION
-      ? config[name] === true : config[name] !== false));
+      ? platformToolDecision(name, config) === true : platformToolDecision(name, config) !== false));
 }
 
 /**
@@ -1774,9 +1810,12 @@ export function resolvePlatformToolsTightened(
 ): PlatformToolName[] {
   const globalTools = resolvePlatformTools(roleName, roleKind, globalConfig ?? {});
   if (projectConfig == null) return globalTools;
-  // An absent project override inherits the global opt-in; an override can only tighten it.
-  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, { ...globalConfig, ...projectConfig }));
-  return globalTools.filter((name) => projectAllowed.has(name));
+  // #1219 迁移窗口：项目层只做「显式收紧」，未设置的键继续继承全局结果
+  // （不能先合并原始键，否则全局的新键会盖掉项目用旧键做过的关闭；
+  // 也不能把项目层单独按默认值解析，否则未写的键会被当成关闭而误删全局已开的工具）。
+  // 必需工具（mark_job_done 等）不因项目旧数据里的 false 被关掉：导入路径可能绕过编辑校验。
+  const required = new Set(requiredPlatformTools(roleKind));
+  return globalTools.filter((name) => required.has(name) || platformToolDecision(name, projectConfig) !== false);
 }
 
 // fingerprint 计算：title + location + rule_id 归一化后的 sha256 前 16 位

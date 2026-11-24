@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-21
+> 同步日期：2026-11-24
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -709,6 +709,8 @@ OCI 扫描创建与凭据删除共用凭据行锁；导入事务内重验 active
 Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；仅列出 active、项目可见且在启用范围内的候选。#966 补齐同一账号下的显式默认模型选择/清除，模型候选只取账号已配置名单；账号变更不沿用旧模型，加载失败不清配置，普通保存保留未编辑选择，保存采用服务端结果。CLI 启用范围不等于模型默认值；解析继续采用显式任务/Hub 提案 → 项目默认模型 → 全局角色模型，不自动任选。任务创建在提交区保留结构化模型冲突及修复导航，不回显原始 Provider 错误、不自动重试；新回归入口为 `pnpm ci:unit:task-intent` 与既有 credential-compatibility，最终 SHA Actions 待验。单 Job 重跑错误只按结构化原因导向配置入口，不自动执行。代码见[面板](../../apps/web/src/components/ProjectCliProviderAllowlistPanel.tsx)与[错误导航](../../apps/web/src/useJobRerun.tsx)。Web 回归随 `pnpm ci:unit:credential-compatibility`，resolver/rerun 回归随 `pnpm ci:unit:capability-pack` / `pnpm ci:integration:recovery`；main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 
 ### FR-CRED-003 Model Gateway 唯一出口
+
+#1252 的[Responses 完成尾部与结算时序](../MODEL_GATEWAY_TRANSPARENCY.md#responses-完成尾部与结算时序1252)支持已验证最终完成后的单个精确结束标记。未压缩 SSE 的完成块有界保留至原流结束与结算处理，前序字节继续及时转发。异常尾部和未知效果仍拒绝，原始现场帧与最终 SHA Actions 分别核验。
 
 #1082 的模型用量看板按 Provider、模型与 workload 独立呈现已结算、未上报、待对账请求数，单列未确认请求最多的 8 项以覆盖零 Token 模型。现有账本权限和时间过滤沿用，聚合/Web 回归接 `pnpm ci:unit:dashboard-overview`，最终 SHA Actions 待验。
 

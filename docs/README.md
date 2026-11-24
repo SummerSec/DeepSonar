@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+#1252 的[Responses 完成尾部与结算时序](MODEL_GATEWAY_TRANSPARENCY.md#responses-完成尾部与结算时序1252)已补精确结束标记和未压缩完成块有界暂存，scanner 与真实 HTTP/PG 回归接既有 Actions。现场原始尾帧、历史账本恢复和生产效果另验。
+
 #1182 的[提问前资源核对](HUMAN_CONTINUATION.md#提问前核对已授权资源1182)复用当前 Control API、冻结资产路径和有界 Canvas 查询，补齐静态/动态指导与可控 Agent 回归。晚回复和恢复的已有覆盖见同专题，最终候选 Actions 另验，真实模型判断和收益未验证。
 #1211 的[任务设备入口](DEVICE_ACCESS.md#1-现状代码事实)支持显式 adb/hdc 需求与匹配角色，沿用现有项目和网络授权。任务工作台、快捷创建及正常 HTTP 到 broker grant 回归接既有 Actions，最终候选结果另验。
 #1223 的[断点凭据来源](HUMAN_CONTINUATION.md#断点凭据候选的来源1223)按现有输出额度字段的精确路径与类型识别普通配置，文件和原生历史共用短凭据保护。合成回归接既有 Actions，历史现场的具体命中来源仍未确认。
@@ -8,6 +10,10 @@
 #1223 的[断点不可用显式出口](HUMAN_CONTINUATION.md#断点不可用时的显式出口1223-期望-2)给 `POST /jobs/:id/rerun-current` 增加 `{abandon_checkpoint:true}`：仅在断点确不可用时关闭当前人工请求并按当前配置重跑，现场仍 `ready` 时返回 409 `CHECKPOINT_ABANDON_NOT_APPLICABLE`，不放宽凭据保护。
 
 任务声明的前置条件反馈（#1245）在 [接口规格](architecture/09-interface-specs.md#任务声明的前置条件反馈12452026-11-23) 中按快照分档。正常省略返回 `task_result_contract_missing`，现有无效契约返回 `task_result_contract_invalid`，均为当前 Agent 无法修正的永久前置条件。正常创建到实际 Control HTTP 与事件入账回归接既有 Actions，最终候选另验。
+#1230 的 [`GET /gateway/_settlement/:id`](architecture/09-interface-specs.md#model-gateway) 按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一持久身份读取，原 Attempt 已终态或出现后续活动 Attempt 时仍可读。多条匹配回答 `unknown`，真缺失仍为 404，失效 token 和终态 Job 仍拒绝。历史 `settled` 只表示账本已经结算，模型结果和恢复准入分别判定。PostgreSQL 回归接 `ci:integration:platform-api`，最终 SHA Actions 待验，现场 8 次失败的逐条归因与真实模型效果未验证。
+
+#1221 的[文档快车道例外](architecture/11-engineering-specs.md#4-测试分层与实际接线)把根目录 `DESIGN.md` 与 `docs/superpowers/plans/` 下直接新增/修改的普通 Markdown 纳入已评审文档白名单；仍是同一套 `docs-freshness` + `ci-summary` 门禁，不放宽成 `docs/**`，删除/改名/复制/类型变更、混合代码或未知路径继续走完整验收。回归见 `agent-harness/classify-ci-changes.test.mjs` 与 `agent-harness/ci-routing.test.mjs`，最终 SHA Actions 待验。
+#1221 的[文档快车道例外](architecture/11-engineering-specs.md#4-测试分层与实际接线)把根目录 `DESIGN.md` 与 `docs/superpowers/plans/` 下直接新增/修改的普通 Markdown 纳入已评审文档白名单；仍是同一套 `docs-freshness` + `ci-summary` 门禁，不放宽成 `docs/**`，删除/改名/复制/类型变更、混合代码或未知路径继续走完整验收。放行要求 Git blob 模式为普通文件（`100644`，修改同时核对旧模式；符号链接/子模块/缺失模式转完整检查），分类入口与 `ci-run-plan.mjs` 共用同一解析；对外主题 id 残留守卫也共享到 `docs-freshness`。回归见 `agent-harness/classify-ci-changes.test.mjs`、`ci-run-plan.test.mjs`、`ci-routing.test.mjs`（含真实符号链接新增与改向）与 `docs-freshness.test.ts`，最终 SHA Actions 待验。（#1221 复核补充）真实工作流的计划由 `ci-run-plan.mjs` 读 diff，此前它用的是不带模式信息的 `--name-status`，导致普通 Markdown 仍被判成全量；现在它改用 `git diff --raw -z --find-renames`，与分类入口共用同一份模式校验，并用真实 Git 提交的用例证明「普通 Markdown → 文档快车道」「符号链接 → 完整检查 + `unsafe_file_mode`」。
 
 #1228 把运行时自带的 Undici 跟到已修复版本：Kali 镜像的 Node 24.22.2→24.22.3（自带 Undici 7.30.2，两架构校验和同步更新）、控制面四个 Node 镜像 digest 由 24.21.0 升到 24.22.3、agent 基础镜像换成 24.22.3-alpine/bookworm-slim 摘要、工作区 `undici` 直接依赖收到 `^7.30.2`、DSH 运行时用 `overrides` 固定 8.12.4，并在两处 Dockerfile 打印 `process.version` / `process.versions.undici` 作为候选产物证据。顺带修掉 kali 清单里指向 `v22.23.2` 的 Node 下载地址。Pi 1.6.0 另行单独验证，不在本次范围；版本取证以 Actions 镜像构建日志为准，未运行真实模型。
 
@@ -38,7 +44,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 #1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，合法原 Job 的冻结恢复身份先于默认，满额时等待原账号，保留预算门；#1078 新 Job 按余量比例、真实在途数、历史及当前分配数、默认平局优先、稳定 ID 排序；三层容量、临时健康过滤、全满保留 pending 与无秘密冻结审计对齐现有 Dispatcher，5 秒合并唤醒不引入排队取消期限，跨 Provider 治理等价仍未交付，详见同一运行时视图；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-23
+> 同步日期：2026-11-24
 > **进度消费与保活（#1092）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)记录 chunk/RPC 的协作 I/O 让出和普通多行文本脱敏优化，保留完整进度、转义/畸形 OM 隐私与退出诊断。独立 Worker＋真实 Undici 的回归接既有 Actions，最终 head 见 PR #1093；无任务重跑或部署。
 > **可行动人工请求（2026-11-09）**：严格 guidance、完整 body_json、L0/L1 按需读取、waiting_human 当前 Scheduler 投影及同 Job 待办去重已同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](architecture/01-system-specification.md)、[接口/运行时视图](architecture/09-interface-specs.md#可行动人工请求2026-11-09)和[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。请求原文与平台操作的展示边界见[安全视图](architecture/10-security-and-trust-boundaries.md#人工断点业务文件权限)。消息账本、恢复准入、ACK 和完成仍独立；最终 SHA Actions 待验，注意力收益未测量。
 > **Pi 请求错误诊断（#1083）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)与[运行时视图](architecture/06-runtime-view.md#pi-请求失败诊断与恢复分类1083)记录允许名单化错误阶段/cause 投影、分类与恢复许可分离及共享 DSH reader 边界。请求包装失败不新增 CLI 重启或未知效果重放；本轮最终 SHA Actions 待验，原失败根因未全部确定。

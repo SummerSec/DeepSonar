@@ -1,8 +1,17 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
 > 状态：**运维 as-built；最新正式版 v0.6.23，于 2026-11-22 正式发布（release run 45021547917）；既有 tag 与镜像保持不可变**。
-> 同步日期：2026-11-22
+> 同步日期：2026-11-24
 >
+> **v0.6.24 发布准备（2026-11-24）**。本轮用户要求补齐 #1230 后发布新版本。已核对最高既有稳定 tag 与正式 Release 为 v0.6.23，候选 compare 为 `v0.6.23...v0.6.24`，schema 为 79。候选包含 #1230 结算回执修复，以及 v0.6.23 后已合入的 #1252 Responses 结算时序、人工断点与请求说明、设备需求与绑定诊断、清空重试前置检查、Finding 位置复制和 #1228 运行时依赖更新。完整范围见 [CHANGELOG](../CHANGELOG.md)。
+>
+> #1230 的修复已由 PR #1237 合入 main `1242d561`，该主线提交的核心 CI 与适用 Reverse 专项已通过。发布准备现以 `main` 为 base，后续 #1254 的交互与动效设计文档也纳入发布说明。v0.6.23 与本候选同为 schema 79，升级采用同 schema 的镜像更新流程及现有数据库基线。低于 schema 79 的部署先备份并预演，再按既有文档执行基线重建。
+>
+> 已逐项核对本轮 Gateway 的实现、两份专题、接口/运行时/安全视图及索引，修正了回执仍按当前活动 Attempt 过滤的旧描述。版本、schema 与已删机制引用已人工核对，命令和链接由 Actions 文档保鲜门进一步校验。依赖和基础镜像已由主线更新，本版须按实际 fingerprint 构建或核验复用的原生候选。
+>
+> 发布尚未完成。修复 PR、发布准备 PR 与最终 main 的验收分别核对，打 tag 前再次解析最新 main 与最高既有 tag。正式 Release、签名、全部配置通道证据、最终 catalog 双平台门禁与回写均以本轮 Actions 的实际结果为准。生产部署、历史任务重跑与真实模型效果未验证。
+>
+
 > **v0.6.23 发布结果（2026-11-22）**。[正式 Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.23) 绑定不可变 tag 的源码 `162ec5b616f256ff0113c4ac4a2754ee52cf59b2`（annotated tag 对象 `1640743c`），比较范围为 `v0.6.22...v0.6.23`。本版内容为 Finding 重复候选与重复处置（#1206，schema 78）、任务收尾知识沉淀首两阶段（#1197/#1200/#1203）、知识整理历史与反馈覆盖率（#1192/#1193）、删除项目任务队列（#1180，schema 79）、任务发现状态与轮询修复（#1199/#1201）、统一操作反馈（#967）。数据库基线 77 → 79，非空库没有增量迁移链，先备份并按既有基线重建流程预演；受控重建只把旧项目任务队列里仍处于排队/占位的条目、以及由队列让出触发的人工续做投影为现有任务暂停；已领取、准备中、执行中的任务与其它原因的暂停保持原状。
 >
 > 候选提交是纯文档改动（CHANGELOG PR #1210），`push@main` 未触发核心 `ci` 与四个专家套件，因此按发布硬门在**同一候选 SHA** 上手动 `workflow_dispatch` 五个门禁：核心 `ci` 45016866136（首次因 kali-minimal 镜像内 Maven 依赖下载瞬时失败，同 SHA 重跑通过）、chrome-runtime 45016869417、mobile-runtime 45016872952、openharmony-runtime 45016876188、reverse-runtime 45016879403，全部 `success`，与 `refs/tags/v0.6.23^{}` 的 `162ec5b6` 一致。
@@ -126,7 +135,7 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.22 --previous-version 0.6.21 --tag v0.6.22
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.24 --previous-version 0.6.23 --tag v0.6.24
 pnpm typecheck
 pnpm build
 pnpm ci:images

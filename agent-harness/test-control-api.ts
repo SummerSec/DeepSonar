@@ -120,7 +120,7 @@ assert.deepEqual(workerTools, ALL_PLATFORM_TOOLS.filter(tool => tool !== "sugges
 assert.deepEqual(resolvePlatformTools("explore", "role", {
   suggest_project_skills: true, record_skill_choice: true, submit_task_knowledge_suggestion: true,
 }), ALL_PLATFORM_TOOLS);
-assert.deepEqual(PLATFORM_OPERATION_IDS, ALL_PLATFORM_TOOLS);
+assert.deepEqual(PLATFORM_OPERATION_IDS.filter((id: string) => id !== "read_project_memory"), ALL_PLATFORM_TOOLS);
 const workerGuide = platformToolGuide(["emit_progress", "emit_fact", "mark_job_done", "request_human"]);
 for (const expected of [
   "Job-scoped control API",
@@ -149,7 +149,7 @@ const restrictedTools = resolvePlatformTools("explore", "role", {
 assert.deepEqual(restrictedTools, [
   "request_project_knowledge",
   "search_project_knowledge",
-  "read_project_memory",
+  "read_project_knowledge",
   "read_knowledge_input",
   "propose_project_knowledge",
   "submit_knowledge_evaluation",

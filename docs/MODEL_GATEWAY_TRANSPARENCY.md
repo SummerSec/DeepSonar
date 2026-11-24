@@ -1,7 +1,19 @@
 # Model Gateway 透明传输（#923）
 
 > 状态：as-built；#928 已合入 main 616d7a36，工程证据见下文；后续 SHA 另验，不代表真实模型、生产或性能验收。
-> 同步日期：2026-11-20
+> 同步日期：2026-11-24
+
+## Responses 完成尾部与结算时序（#1252）
+
+Responses SSE 在合法 `response.completed` 中取得完整最终用量后，可以再发送一个无事件名的精确 `data: [DONE]` 结束标记。标记不贡献用量。缺失或非法用量、失败或不完整完成、重复完成、重复标记、带事件名的标记及完成后的业务数据帧仍拒收，半帧和非法 UTF-8 仍无法结算。
+
+对于未压缩的 Responses SSE，Gateway 暂存包含已验证完成事件的当前传输块及其尾部。前面的流式内容继续及时转发。尾部沿用 16 MiB 观察上限及原请求 deadline，在原始上游完整结束、回显守卫与 trailers 检查完成、原 usage/effect 事务处理后，才按原字节结束下游响应。这使 Pi 读取完成事件后的关闭发生在宿主结算之后。提前取消、上游中断、校验失败及结算写失败继续保留拒绝或未知结果。
+
+压缩响应沿用原有完整解码观察和透明传输路径，此次完成块暂存仅作用于未压缩 Responses SSE。历史 Job 账本、冻结额度及回执保持原事实。
+
+现场 v0.6.23 的 49 条解析审计均已看到最终用量且报 `invalid_sequence`，最后一笔聚合路由与 Pi 会话用量一致。原始尾部未保存，额外帧的精确内容及 19 条 unknown 的连接终止原因仍未确认。上述精确结束标记是本次明确支持并回归的输入形态，不能据此宣称现场尾部已捕获或旧 Job 已恢复。
+
+scanner 正反例和真实 HTTP/PG 用量、额度读回、Pi 式完成即关闭、完成前取消、完成后上游中断与凭据回显回归，分别接既有 `pnpm ci:unit:executor-real` 与 `pnpm ci:integration:platform-api`。完整 JSON 缺末尾帧分隔的失败、重复完成和业务数据同样拒收。最终 SHA Actions 待验，生产重跑与真实模型验证未执行。
 
 ## Managed proxy 的逐跳连接策略（#1097）
 
@@ -151,7 +163,7 @@ scanner 单测接 `pnpm ci:unit:executor-real`（gate-runtime），真实普通 
 
 OM 在受审 wrapper 的请求生成层读取相同 allowance。wrapper 在生成请求前将 `options.maxTokens` 限制到该 allowance；Responses SDK 的最小输出值无法容纳时明确拒绝（当前 SDK 下限为 16，核对基线 2026-11-05）。pending/unknown 不允许协商下一次请求。此结果只是生成参数的提示，Gateway 出站前仍在 Job 锁内重核额度和冻结权限，竞态不能扩大 allowance。
 
-OM 响应不再由 Gateway 缓冲后换成结算错误。受审 [wrapper](../agent-harness/pi-observational-memory-governed.ts) 为每次后台请求生成 UUID 放入 `x-deepsonar-request-id`；Gateway 消费该头并在原 effect intent 中登记。wrapper 收到模型终止结果后，必须从冻结 Gateway 的 `GET /gateway/_settlement/:id` 读取同 Job、当前 Attempt、同 token/workload 的持久状态，确认 settled 才提交该结果。pending 有界等待；unknown、查询不可用或超时硬失败。内核证明 never_started 的结果与普通 Provider 文案分离。读取回执不创建模型请求、不消耗新的模型请求配额、不授予跨 scope 权限。详见 [OM Gateway](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) 和 [ADR 0017](architecture/adr/0017-transparent-gateway-settlement.md)。
+OM 响应不再由 Gateway 缓冲后换成结算错误。受审 [wrapper](../agent-harness/pi-observational-memory-governed.ts) 为每次后台请求生成 UUID 放入 `x-deepsonar-request-id`；Gateway 消费该头并在原 effect intent 中登记。wrapper 收到模型终止结果后，必须从冻结 Gateway 的 `GET /gateway/_settlement/:id` 按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一持久身份读取状态，原 Attempt 终态或已有后续活动 Attempt 时仍能读到原回执（#1230）。多条匹配回答 `unknown`，历史 `gateway_error` 结算回答 `settled`，当前活动 Attempt 自己的零用量结算才可回答 `not_started`。历史 `settled` 只表示原 effect 与用量账本已经结算，模型请求结果仍按原 SDK 结果判定，重试继续经过现有恢复准入。确认 settled 才提交已取得的模型结果。pending 有界等待；unknown、查询不可用或超时硬失败。内核证明 never_started 的结果与普通 Provider 文案分离。读取回执不创建模型请求、不消耗新的模型请求配额、不授予跨 scope 权限。详见 [OM Gateway](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) 和 [ADR 0017](architecture/adr/0017-transparent-gateway-settlement.md)。
 
 配额拒绝及已回滚的 admission 数据库冲突耗尽，也必须有持久的宿主无外部效果回执才允许 OM 可见降级。[admission receipt helper](../apps/scheduler/src/gateway-admission-receipt.ts) 在确认未发上游、且失败 admission 已回滚后，另开事务复用 `events` 的 `control_receipt`：`operation=gateway_admission`、`authority=kernel`，按 Job/Attempt/token/workload/请求 UUID 绑定，复用事件限流与 dedup。它不创建模型 effect、不增加模型请求计数或 usage，不改 schema。查询同 scope 回执得到 `not_started` 才能按已知 quota/transient 降级；保存失败、缺失或不匹配保持 unknown。相同 UUID 不得重新发起上游请求。请求前 transport 的原 effect/零用量结算路径保持独立，不能与未准入回执混淆。
 

@@ -81,6 +81,40 @@ test("Anthropic SSE joins start input and final cumulative output with stop", ()
   assert.equal(scan("messages", event({ type: "error", error: { type: "overloaded_error" } }) + antStream, true), null);
 });
 
+test("#1252 Responses accepts one trailing DONE only after verified final usage", () => {
+  const completed = event({ type: "response.completed", response }, "response.completed");
+  const expected = scan("responses", response);
+  for (const chunk of [1, 7, 65536]) {
+    assert.deepEqual(scan("responses", completed + event("[DONE]"), true, chunk), expected);
+    assert.deepEqual(scan("responses", (completed + event("[DONE]")).replaceAll("\n", "\r\n"), true, chunk), expected);
+    assert.equal(scan("responses", event("[DONE]"), true, chunk), null);
+    assert.equal(scan("responses", completed + event("[DONE]") + event("[DONE]"), true, chunk), null);
+    assert.equal(scan("responses", completed + event("[DONE]", "error"), true, chunk), null);
+    assert.equal(scan("responses", completed + completed, true, chunk), null);
+    assert.equal(scan("responses", completed + event("[DONE]") + event({ type: "response.output_text.delta" }), true, chunk), null);
+    assert.equal(scan("responses", completed + "data: [DONE]\n", true, chunk), null);
+    for (const tail of [
+      event({ type: "response.failed", response: { status: "failed" } }),
+      completed,
+      event({ type: "response.output_text.delta", delta: "late" }),
+    ]) assert.equal(scan("responses", completed + tail.trimEnd(), true, chunk), null);
+    for (const type of ["response.output_item.done", "response.content_part.done", "response.output_text.done"]) {
+      assert.equal(scan("responses", completed + event({ type, output_index: 0 }), true, chunk), null);
+    }
+    assert.equal(scan("responses", event({ type: "response.completed", response: { ...response, usage: undefined } }) + event("[DONE]"), true, chunk), null);
+    assert.equal(scan("responses", event({ type: "response.failed", response: { ...response, status: "failed" } }) + event("[DONE]"), true, chunk), null);
+    assert.equal(scan("messages", antStream + event("[DONE]"), true, chunk), null);
+  }
+  const scanner = createRepairUsageScanner("responses", true);
+  scanner.push(completed);
+  assert.equal(scanner.hasCompletedResponse(), true);
+  scanner.push(event("[DONE]"));
+  assert.deepEqual(scanner.finish(), expected);
+  scanner.push(event("[DONE]"));
+  assert.equal(scanner.hasCompletedResponse(), false);
+  assert.equal(scanner.finish(), null);
+});
+
 test("#1059: start snapshot without output_tokens defers to the cumulative delta, supplied fields still validate", () => {
   // 现场形态：聚合路由的 `message_start.usage` 只带 input/cache 字段，output 在 message_delta。
   const pendingStart = event(
