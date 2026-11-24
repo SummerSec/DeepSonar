@@ -58,8 +58,9 @@ export interface PlanGapReport {
 
 /** 可信区块只描述事实，但字段来自冻结快照，渲染时仍按纯文本转义，避免被当成 Markdown 结构。 */
 function plainText(value: string): string {
+  // 先吃掉原始反斜杠再转义其余标点，否则输入里已有的 \\\[] 等转义会被新增转义抵消。
   return value.replace(/\s+/gu, " ").trim()
-    .replaceAll("`", "'").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll("\\", "\\\\").replaceAll("`", "'").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     // 冻结快照里的内联链接/图片语法不能变成真实链接，方括号一律转义。
     .replaceAll("[", "\\[").replaceAll("]", "\\]")
     .replace(/(^|\s)([#>*|~-]+)/gu, "$1\\$2");

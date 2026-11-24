@@ -95,6 +95,24 @@ test("#1251 冻结快照里的内联链接与图片按纯文本渲染", async ()
   assert.ok(rendered.includes("!\\[图\\](shot-b.png)"), "图片语法同样必须转义");
 });
 
+test("#1251 冻结文本里已有反斜杠时新增转义不会被抵消", async () => {
+  const { renderPlanGapReport, projectPlanGaps } = await import("./domains/plan-protocol/gap-projection.js");
+  const { PlanAuditRecord } = await import("@deepsonar/shared-types");
+  const audit = PlanAuditRecord.parse({ v: 1, source: "submit_plan", raw: {
+    v: 1, goal: "先按 \\[文档](note-a) 逐条核对：\\[ 图 \!= note-b",
+    assumptions: [], tasks: [{ id: "read", title: "按手工构造的转义样例核对", role: "test", description: "核对转义样例的边界条款",
+      prompt: "本地仓库内核对转义样例，不访问任何外部地址，保留原始样例与说明以便后续复核。", from: [], depends_on: [], inputs: [],
+      expected_outputs: ["notes"] }],
+    completion: { mode: "explicit_result", description: "转义样例核对完成并保留记录", required_outputs: ["notes"] },
+    budget: { max_tasks: 2 }, open_questions: [] }, trimmed: null, trim_reasons: [], result: null,
+    termination_reason: null, updated_at: "2026-11-24T00:00:00.000Z" });
+  const rendered = renderPlanGapReport({ v: 1, scope: "canvas_plan_audits", entries: [projectPlanGaps("job-esc", { plan_protocol: audit })], truncated: false, limit: 32 });
+  // 原文里的反斜杠没有被"吃掉"：转义序列数不为零；
+  // 且无论原来有多少反斜杠，渲染文本里不再出现未转义的 [（链接/图片语法需要它）。
+  assert.ok(rendered.includes("\\[文档\\]"), "方括号必须以转义形式出现");
+  assert.doesNotMatch(rendered, /(?<!\\)\[/u, "仍有未转义的方括号");
+  });
+
 test("#1251 可信区块整体前置：结果 → 审计摘要 → 原始投影 → 不可信正文", () => {
   const entry = projectPlanGaps("job", { plan_protocol: audit });
   const report = { v: 1 as const, scope: "canvas_plan_audits" as const, entries: [entry], truncated: false, limit: 32 };

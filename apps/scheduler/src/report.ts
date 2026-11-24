@@ -647,7 +647,13 @@ function platformResultSummary(input: ReportInput): string {
       ? "- 本次未形成已确认漏洞：这只表示自动验证范围内没有 confirmed 结论，不代表系统安全。"
       : "- 已确认漏洞的编号、位置与证据链见下文的已确认清单与 Finding 详情。",
     "- 任务是否达标不由模型自述决定：目标达成口径以任务结果投影为准，未生成时记为未知（unknown）。",
-    "- 下一步：先核对未证实与待人工项的证据链，需要补证或人工判定的先处理，再决定是否提交或扩大验证范围。",
+    s.needs_human_count > 0
+      ? `- 下一步：先处理 ${s.needs_human_count} 条待人工判定项，再决定是否扩大验证范围。`
+      : `- 下一步：${s.inconclusive_count > 0
+        ? `先核对 ${s.inconclusive_count} 条未证实项的证据链。`
+        : s.confirmed_count > 0
+          ? "确认清单证据无异议后提交结论，或安排下一轮针对性验证。"
+          : "如需推进验证，先扩大测试范围，再决定是否重跑。"}`,
   ].join("\n");
 }
 
