@@ -63,6 +63,7 @@ if (testDatabaseUrl) {
         await sql`
           INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
           VALUES (${jobId}, ${projectId}, ${canvasId}, 'hub_reason', 'waiting_human', ${sql.json({})}, ${sql.json({ name: "hub_reason" })})`;
+        // Cancellation and interruption validate the frozen total-state identity.
         await sql`
           INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, state_json)
           VALUES (${attemptId}, ${jobId}, 1, 'active', 'agent.suspended',
@@ -203,6 +204,52 @@ if (testDatabaseUrl) {
       assert.equal(refused.json().error_code, "CHECKPOINT_ABANDON_NOT_APPLICABLE");
       const [usableAfter] = await sql`SELECT status FROM human_requests WHERE id = ${usable.requestId}`;
       assert.equal(usableAfter.status, "answered");
+
+      const readOnlyToken = generateToken();
+      await sql`INSERT INTO api_tokens (name,project_id,token_prefix,token_hash,scopes)
+        VALUES ('只读退出 Token',${projectId},${readOnlyToken.prefix},${readOnlyToken.hash},${["tasks:read"]})`;
+      const { markAttemptInterrupted } = await import("./domains/job-attempt/index.js");
+      const { pumpHumanContinuations } = await import("./domains/job-control/human-continuation-pump.js");
+      for (const stage of ["active", "interrupted"] as const) {
+        const exit = await insertWaitingJob("answered");
+        if (stage === "interrupted") {
+          await markAttemptInterrupted(sql, exit.jobId, "human_wait_checkpoint_sealed", { preservePendingGatewayRequests: true });
+        } else {
+          await sql`UPDATE human_requests SET process_exited_at=NULL,resources_released_at=NULL WHERE id=${exit.requestId}`;
+        }
+        const [originalAttempt] = await sql`SELECT * FROM job_attempts WHERE id=${exit.attemptId}`;
+        assert.equal(originalAttempt.status, stage);
+        const [originalReply] = await sql`SELECT reply_message_id FROM human_requests WHERE id=${exit.requestId}`;
+        const denied = await app.inject({ method: "POST", url: `/jobs/${exit.jobId}/cancel`,
+          headers: { authorization: `Bearer ${readOnlyToken.plaintext}` }, payload: { force: true } });
+        assert.equal(denied.statusCode, 403, denied.body);
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${exit.jobId}`)[0].status, "waiting_human");
+        const cancelled = await app.inject({ method: "POST", url: `/jobs/${exit.jobId}/cancel`, headers,
+          payload: { force: true, reason: "断点不可用，结束本次运行" } });
+        assert.equal(cancelled.statusCode, 200, cancelled.body);
+        assert.equal(cancelled.json().status, "cancelled");
+        const [settled] = await sql`SELECT status,finished_at FROM jobs WHERE id=${exit.jobId}`;
+        assert.equal(settled.status, "cancelled");
+        assert.ok(settled.finished_at);
+        const [closedRequest] = await sql`SELECT status,close_reason,reply_message_id,resumed_at,checkpoint_status,checkpoint_error_code
+          FROM human_requests WHERE id=${exit.requestId}`;
+        assert.deepEqual(closedRequest, { status: "closed", close_reason: "cancelled",
+          reply_message_id: originalReply.reply_message_id, resumed_at: null, checkpoint_status: "blocked",
+          checkpoint_error_code: "HUMAN_CHECKPOINT_SECRET_DETECTED" });
+        const [retainedReply] = await sql`SELECT body,delivery_status FROM human_messages WHERE id=${originalReply.reply_message_id}`;
+        assert.deepEqual(retainedReply, { body: "继续", delivery_status: "planned" });
+        const [settledAttempt] = await sql`SELECT * FROM job_attempts WHERE id=${exit.attemptId}`;
+        if (stage === "interrupted") assert.deepEqual(settledAttempt, originalAttempt, "historical interrupted Attempt stays immutable");
+        else assert.equal(settledAttempt.status, "cancelled");
+        const [logged] = await sql`SELECT after_json FROM audit_logs WHERE resource_id=${exit.jobId} AND action='job.force_cancel'`;
+        assert.deepEqual(logged.after_json, { status: "cancelled", force: true, reason: "断点不可用，结束本次运行" });
+        const duplicate = await app.inject({ method: "POST", url: `/jobs/${exit.jobId}/cancel`, headers, payload: { force: true } });
+        assert.equal(duplicate.statusCode, 409, duplicate.body);
+        assert.equal(duplicate.json().error_code, "JOB_NOT_CANCELLABLE");
+        await pumpHumanContinuations(1, exit.requestId);
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${exit.jobId}`)[0].status, "cancelled");
+        assert.equal((await sql`SELECT count(*)::int AS n FROM job_attempts WHERE job_id=${exit.jobId}`)[0].n, 1);
+      }
     } finally {
       if (closeApp) await closeApp().catch(() => undefined);
       if (endSql) await endSql().catch(() => undefined);
