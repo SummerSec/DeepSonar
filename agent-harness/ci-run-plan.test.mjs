@@ -2,7 +2,7 @@
 // must never turn a missing/partial diff into a smaller required set.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -604,7 +604,7 @@ test("#992 the skip sentence names the real reason for each mode", () => {
   assert.match(explainRunPlan(unrelated), /（原因：改动都落在 Reverse 输入之外，已证明无关）/u);
 });
 
-test("#1221 真实 git 提交下计划自己识别普通文件：普通 Markdown 走文档快车道", () => {
+test("#1221 真实 git 提交下 #1220 形状的普通 Markdown 走文档快车道", () => {
   // 复核意见：真实工作流此前拿不到文件模式，普通 Markdown 一律回退全量。
   // 这条用例直接跑真实 git（不用 --diff-file 夹具），证明确实走文档快车道。
   const dir = mkdtempSync(join(tmpdir(), "plan-real-docs-"));
@@ -617,12 +617,18 @@ test("#1221 真实 git 提交下计划自己识别普通文件：普通 Markdown
     git("init", "-q");
     git("config", "user.email", "ci@example.invalid");
     git("config", "user.name", "ci");
-    writeFileSync(join(dir, "README.md"), "first\n");
-    git("add", "README.md");
+    // 正例用 #1220 的形状：根目录 DESIGN.md 修改 + docs/superpowers/plans/ 下新增方案文档，
+    // 这样同一真实入口也锁住本次新增的白名单，而不只是模式接线。
+    mkdirSync(join(dir, "docs/superpowers/plans"), { recursive: true });
+    writeFileSync(join(dir, "DESIGN.md"), "first\n");
+    writeFileSync(join(dir, "README.md"), "readme\n");
+    git("add", "DESIGN.md", "README.md");
     git("commit", "-q", "-m", "base");
     const base = git("rev-parse", "HEAD");
-    writeFileSync(join(dir, "README.md"), "second\n");
-    git("commit", "-q", "-am", "docs");
+    writeFileSync(join(dir, "DESIGN.md"), "second\n");
+    writeFileSync(join(dir, "docs/superpowers/plans/2026-11-24-plan.md"), "# 方案\n");
+    git("add", "DESIGN.md", "docs/superpowers/plans/2026-11-24-plan.md");
+    git("commit", "-q", "-m", "docs");
     const head = git("rev-parse", "HEAD");
     const output = join(dir, "output.txt");
     const summary = join(dir, "summary.md");
@@ -634,7 +640,7 @@ test("#1221 真实 git 提交下计划自己识别普通文件：普通 Markdown
     });
     assert.equal(result.status, 0, result.stderr);
     const outputs = readFileSync(output, "utf8");
-    assert.match(outputs, /mode=docs/u, `普通 Markdown 改动必须走文档快车道，实际输出：${outputs}`);
+    assert.match(outputs, /mode=docs/u, `#1220 形状的普通 Markdown 改动必须走文档快车道，实际输出：${outputs}`);
     assert.match(outputs, /docs_only=true/u);
   } finally {
     rmSync(dir, { recursive: true, force: true });
