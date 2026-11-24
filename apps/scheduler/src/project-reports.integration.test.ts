@@ -183,6 +183,8 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM project_knowledge_proposals WHERE project_id=${projectId}`;
       await sql`DELETE FROM project_knowledge_work WHERE project_id=${projectId}`;
       await sql`DELETE FROM project_knowledge_usages WHERE project_id=${projectId}`;
+      // 版本引用条目与 blob：先删版本再删条目，否则外键拒绝。
+      await sql`DELETE FROM project_knowledge_versions WHERE project_id=${projectId}`;
       await sql`DELETE FROM project_knowledge_items WHERE project_id=${projectId}`;
       await sql`DELETE FROM jobs WHERE project_id=${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id=${projectId}`;
