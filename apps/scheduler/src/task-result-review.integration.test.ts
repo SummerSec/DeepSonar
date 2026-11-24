@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { normalizeTaskContract, deriveTaskGoalCriteria, type TaskResultProposal } from "@deepsonar/shared-types";
+import { normalizeTaskContract, normalizeTaskResultProposal, deriveTaskGoalCriteria, type TaskResultProposal } from "@deepsonar/shared-types";
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
 if (!databaseUrl) {
@@ -167,7 +167,7 @@ if (!databaseUrl) {
             if (withContract) {
               assert.equal(result.statusCode, 200, result.body);
               const [saved] = await sql`SELECT extensions_json FROM artifacts WHERE job_id=${job.jobId} AND kind='task.result'`;
-              assert.deepEqual(saved.extensions_json.task_result.proposal, proposal);
+              assert.deepEqual(saved.extensions_json.task_result.proposal, normalizeTaskResultProposal(proposal));
               assert.equal(saved.extensions_json.task_result.evidence_bindings[0].fact_id, evidence.factId);
               const mismatch = await declare({ ...proposal, task_contract_sha256: `sha256:${"b".repeat(64)}` });
               assert.equal(mismatch.statusCode, 422, mismatch.body);
