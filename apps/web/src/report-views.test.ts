@@ -399,3 +399,13 @@ test("tasks with content stay collapsed by default and only appear as context", 
   assert.equal(contexts[1]?.hasOutput, false);
   assert.equal(contexts[1]?.pendingCount, 0);
 });
+
+test("#1251 下载入口不改写正文，与页面共用服务端同一份报告（#1251）", () => {
+  const panel = readFileSync(new URL("./ReportPanel.tsx", import.meta.url), "utf8");
+  const api = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+  // 页面下载只调 api.downloadReport(reportId, format)，不得拼接或改写渲染结果。
+  assert.match(panel, /await api\.downloadReport\(reportId, format\);/u);
+  assert.doesNotMatch(panel, /api\.downloadReport\([^)]*markdown/u, "正文必须来自服务端，不得用页面文本");
+  // 服务端入口是 /reports/{id}/markdown 与 /reports/{id}/sarif，二者本来就从同一份报告投影生成。
+  assert.match(api, /\/reports\/\$\{encodeURIComponent\(reportId\)\}\/\$\{format\}/u);
+});
