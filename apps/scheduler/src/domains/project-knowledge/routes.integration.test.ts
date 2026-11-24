@@ -66,6 +66,17 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       assert.equal(card.feedback.success, 1);
       assert.equal(card.feedback.total, 1);
       assert.equal(typeof card.feedback.failure, "number");
+      // #1256：按版本读评价明细；unrated 表示读过但没分类评价。
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.json().counts.success, 1);
+      assert.equal(res.json().counts.total, 1);
+      assert.equal(res.json().items[0].outcome, "success");
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback?outcome=unrated` });
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.json().items, []);
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${randomUUID()}/feedback` });
+      assert.equal(res.statusCode, 404);
       res = await app.inject({ method: "GET", url: `${path}/${skillItem}` });
       assert.equal(res.statusCode, 200);
       assert.equal(res.json().versions[0].id, skillVersion);

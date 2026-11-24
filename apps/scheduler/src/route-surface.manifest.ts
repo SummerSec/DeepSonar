@@ -40,6 +40,7 @@ GET /projects/:id/knowledge/receipts
 GET /projects/:id/knowledge/receipts/:receiptId
 GET /projects/:id/knowledge/:itemId
 GET /projects/:id/knowledge/:itemId/versions/:versionId
+GET /projects/:id/knowledge/:itemId/versions/:versionId/feedback
 GET /projects/:id/knowledge/:itemId/versions/:versionId/grants
 POST /projects/:id/knowledge/:itemId/versions/:versionId/grants
 POST /projects/:id/knowledge/closeout/:rootId/evaluate
@@ -304,6 +305,7 @@ GET /projects/{id}/knowledge/receipts
 GET /projects/{id}/knowledge/receipts/{receiptId}
 GET /projects/{id}/knowledge/{itemId}
 GET /projects/{id}/knowledge/{itemId}/versions/{versionId}
+GET /projects/{id}/knowledge/{itemId}/versions/{versionId}/feedback
 GET /projects/{id}/knowledge/{itemId}/versions/{versionId}/grants
 POST /projects/{id}/knowledge/{itemId}/versions/{versionId}/grants
 POST /projects/{id}/knowledge/closeout/{rootId}/evaluate

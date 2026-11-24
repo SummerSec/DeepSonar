@@ -26,6 +26,8 @@ const List = Page.extend({
 const GrantBody = z.object({ grantee_project_id: Id }).strict();
 const RevokeBody = z.object({ reason: z.string().trim().min(1).max(2000) }).strict();
 const ReceiptList = Page.extend({ job_id: Id });
+// #1256：评价明细按版本读取；unrated 表示读过但没有分类评价。
+const FeedbackList = Page.extend({ outcome: z.enum(["success", "failure", "inapplicable", "unrated"]).optional() });
 
 type Db = KnowledgeDb;
 type Row = Record<string, unknown>;
@@ -101,6 +103,13 @@ async function itemDetail(db: Db, projectId: string, itemId: string) {
     ORDER BY created_at DESC LIMIT 100`;
   return { ...item, versions: versions.slice(0, 50), versions_next_offset: versions.length > 50 ? 50 : null,
     proposals, evaluations, usages };
+}
+
+/** 评价 JSON 是不可信历史内容，只读已知字段，缺失即 null。 */
+function recordField(value: unknown, key: string): string | null {
+  if (typeof value !== "object" || value === null || !(key in value)) return null;
+  const field = Object.getOwnPropertyDescriptor(value, key)?.value;
+  return typeof field === "string" ? field : null;
 }
 
 /** #1256：一个版本的三类评价计数与未评价数，供卡片与明细共用。 */
@@ -244,6 +253,36 @@ export function registerProjectKnowledgeRoutes(
       // Only the owning project can inspect historical content. Source refs remain opaque.
       const candidate = await readKnowledgeBlob(db, String(version.content_sha256));
       return { ...version, item: { id: item.id, kind: item.kind, title: item.title, logical_key: item.logical_key }, candidate };
+    } catch (error) { return errorReply(reply, error); }
+  });
+
+  // #1256：某一版本的评价计数与明细（时间倒序分页）；只有所属项目可读，来源引用保持不透明。
+  app.get("/projects/:id/knowledge/:itemId/versions/:versionId/feedback", async (req, reply) => {
+    try {
+      const { id, itemId, versionId } = req.params as { id: string; itemId: string; versionId: string };
+      const projectId = Id.parse(id);
+      if (!access(req, reply, projectId)) return;
+      const version = await versionFor(db, projectId, Id.parse(itemId), Id.parse(versionId));
+      if (!version) return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
+      const input = FeedbackList.parse(req.query);
+      const hash = String(version.content_sha256);
+      const counts = await readVersionFeedbackCounts(db, projectId, hash);
+      const rows = await db<Array<Row>>`
+        SELECT u.id,u.job_id,u.created_at,u.feedback_json
+        FROM project_knowledge_usages u
+        WHERE u.project_id=${projectId} AND u.content_sha256=${hash}
+          AND (${input.outcome ?? null}::text IS NULL
+            OR (${input.outcome ?? null}::text = 'unrated' AND u.feedback_json IS NULL)
+            OR u.feedback_json->>'outcome'=${input.outcome ?? null})
+        ORDER BY u.created_at DESC,u.id DESC LIMIT ${input.limit + 1} OFFSET ${input.offset}`;
+      return {
+        counts,
+        items: rows.slice(0, input.limit).map((row) => ({
+          id: row.id, job_id: row.job_id, created_at: row.created_at,
+          outcome: recordField(row.feedback_json, "outcome"), reason: recordField(row.feedback_json, "reason"),
+        })),
+        next_offset: rows.length > input.limit ? input.offset + input.limit : null,
+      };
     } catch (error) { return errorReply(reply, error); }
   });
 
