@@ -76,6 +76,8 @@ project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请
 - `total` 是**阅读记录数**（含未评价），不叫「使用次数」；
 - `inapplicable` 显示「不适用」，与旧契约的「部分有用」不是一回事。
 
+任务报告冻结本画布任务实际读用过的知识：`knowledge_refs` 记录条目 id、**精确版本 id**、版本号、类型、标题与 `content_sha256`（最多 50 条，按条目+版本去重），报告正文里的「本轮使用的项目知识（精确版本）」排在平台结论之后、计划审计之前。知识后来被修订、下架或撤权都不改写已写入的报告，也不把评价理由或来源正文带进下载件；反馈只用 `outcome` 显示，没有评价写「未评价（效果未知）」。
+
 反馈明细（`GET /projects/:id/knowledge/:itemId/versions/:versionId/feedback`）同样绑定版本 id：读者的 `job_id` 与自由文本 `reason` 只在具备 `tasks:read` 时返回，否则两者都为 `null`。投影只读：不写 usage、不改评价、不影响排序与权重；人的页面浏览不写入 `project_knowledge_usages`，不增加采纳票或延长闲置期。
 
 ## 工作与结算

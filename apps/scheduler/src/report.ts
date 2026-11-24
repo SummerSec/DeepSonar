@@ -167,6 +167,18 @@ export interface ReportInput {
     verification_status: string;
     quantities: QuantityAnchor[];
   }>;
+  /** #1256：本画布任务实际读用过的项目知识，按精确版本冻结（不含评价理由与来源正文）。 */
+  knowledge_refs?: ReportInputKnowledgeRef[];
+}
+
+export interface ReportInputKnowledgeRef {
+  item_id: string;
+  version_id: string;
+  kind: string;
+  title: string;
+  version: number;
+  content_sha256: string;
+  outcome: string | null;
 }
 
 export interface FindingReportInput {
@@ -318,6 +330,45 @@ function enforceFindingReportInputBudget(input: FindingReportInput): FindingRepo
 }
 
 /** 从数据库确定性生成报告输入（不含 Agent 创作内容）。 */
+/** #1256：报告里的知识引用按精确版本去重并截断，只保留可核对的身份字段。 */
+export const KNOWLEDGE_REF_LIMIT = 50;
+export function normalizeKnowledgeRefs(rows: readonly Record<string, unknown>[]): ReportInputKnowledgeRef[] {
+  const seen = new Set<string>();
+  const refs: ReportInputKnowledgeRef[] = [];
+  for (const row of rows) {
+    const itemId = typeof row.item_id === "string" ? row.item_id : null;
+    const versionId = typeof row.version_id === "string" ? row.version_id : null;
+    const hash = typeof row.content_sha256 === "string" ? row.content_sha256 : null;
+    if (!itemId || !versionId || !hash) continue;
+    const key = `${itemId}:${versionId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({
+      item_id: itemId,
+      version_id: versionId,
+      kind: typeof row.kind === "string" ? row.kind : "memory",
+      title: typeof row.title === "string" ? row.title.slice(0, 200) : "（未命名知识）",
+      version: Number.isSafeInteger(Number(row.version)) ? Number(row.version) : 1,
+      content_sha256: hash,
+      outcome: typeof row.outcome === "string" ? row.outcome : null,
+    });
+    if (refs.length >= KNOWLEDGE_REF_LIMIT) break;
+  }
+  return refs;
+}
+
+/** #1256：报告里的知识引用段。版本与哈希冻结在写入时，知识被更正后仍能核对原判断。 */
+export function renderKnowledgeRefsSection(refs: readonly ReportInputKnowledgeRef[] | undefined): string {
+  if (!refs || refs.length === 0) return "";
+  const lines = ["## 本轮使用的项目知识（精确版本）", ""];
+  for (const ref of refs) {
+    const feedback = ref.outcome === null ? "未评价（效果未知）" : ref.outcome;
+    lines.push(`- ${ref.title} · v${ref.version} · ${ref.kind} · \`${ref.content_sha256.slice(0, 12)}…\` · 反馈 ${feedback}`);
+  }
+  lines.push("", "版本与内容哈希是写入时冻结的精确引用；知识后来被修订或下架也不改写本节。");
+  return lines.join("\n");
+}
+
 export async function buildReportInput(canvasId: string, db: typeof sql = sql): Promise<ReportInput> {
   const [canvas] = await db`
     SELECT c.id, c.title, c.target_json, c.project_id, p.name AS project_name
@@ -454,6 +505,15 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     },
     evidence: [],
     facts: await loadReportFactQuantities(canvasId, db),
+    knowledge_refs: normalizeKnowledgeRefs(await db<Array<Record<string, unknown>>>`
+      SELECT i.id::text AS item_id, v.id::text AS version_id, i.kind, i.title, v.version, v.content_sha256,
+        u.feedback_json->>'outcome' AS outcome
+      FROM project_knowledge_usages u
+      JOIN project_knowledge_versions v ON v.project_id=u.project_id AND v.id=u.version_id
+      JOIN project_knowledge_items i ON i.project_id=v.project_id AND i.id=v.item_id
+      WHERE u.job_id IN (SELECT id FROM jobs WHERE canvas_id=${canvasId} AND project_id=${canvas.project_id})
+      ORDER BY u.created_at DESC
+      LIMIT 200`),
   };
 }
 
@@ -820,10 +880,10 @@ export function finalizeTaskReportMarkdown(
 } {
   if (goalReportRequired(input.task_outcome)) {
     const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
-    const markdown = withPlanGapReport({ trusted: goalReportMarkdown(input.task_outcome!, declared, {
+    const markdown = withPlanGapReport({ trusted: [goalReportMarkdown(input.task_outcome!, declared, {
       task: input.task, scope_and_coverage: input.scope_and_coverage, technical_statistics: input.statistics,
       findings: input.findings, facts: input.facts, seed_findings: input.seed_findings, evidence: input.evidence,
-    }) }, input.plan_gaps);
+    }), renderKnowledgeRefsSection(input.knowledge_refs)].filter((part) => part.length > 0).join("\n\n") }, input.plan_gaps);
     return { markdown, numeric: checkReportNumericFidelity(declared, { markdown }), coverageOk: true, usedDefault: "task_outcome" };
   }
   const candidate = agentText.trim();
@@ -848,6 +908,8 @@ export function finalizeTaskReportMarkdown(
   }
   // 模型正文存活时可信区为空：补一段简短的平台结论与下一步，保证「结论先于依据」。
   if (trusted.length === 0) trusted = platformResultSummary(input);
+  // #1256：本轮使用的项目知识以精确版本冻结在可信区，随报告一起下载。
+  trusted = [trusted, renderKnowledgeRefsSection(input.knowledge_refs)].filter((part) => part.length > 0).join("\n\n");
   const markdown = withPlanGapReport({ trusted, untrusted }, input.plan_gaps);
   return { markdown, numeric, coverageOk, usedDefault };
 }

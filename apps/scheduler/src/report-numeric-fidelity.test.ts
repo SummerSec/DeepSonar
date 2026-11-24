@@ -503,3 +503,49 @@ test("deterministic task reports retain identity, goal and scope even without a 
     assert.ok(result.markdown.includes("\\u0060\\u0060\\u0060"), "untrusted title cannot close the data fence");
   }
 });
+
+test("#1256 报告冻结本轮使用知识的精确版本，并按版本去重、限量", async () => {
+  const { normalizeKnowledgeRefs, renderKnowledgeRefsSection, KNOWLEDGE_REF_LIMIT } = await import("./report.js");
+  const refs = normalizeKnowledgeRefs([
+    { item_id: "item-1", version_id: "ver-1", kind: "memory", title: "时区核对", version: 2, content_sha256: "a".repeat(64), outcome: "success" },
+    // 同一版本重复读取只记一次
+    { item_id: "item-1", version_id: "ver-1", kind: "memory", title: "时区核对", version: 2, content_sha256: "a".repeat(64), outcome: null },
+    // 同一 item 的另一个版本要单独记（精确版本）
+    { item_id: "item-1", version_id: "ver-2", kind: "memory", title: "时区核对", version: 3, content_sha256: "b".repeat(64), outcome: "inapplicable" },
+    // 缺字段的行直接丢弃，不猜版本
+    { item_id: "item-2", version_id: null, title: "无版本" },
+  ]);
+  assert.deepEqual(refs.map((ref) => `${ref.item_id}@${ref.version}`), ["item-1@2", "item-1@3"]);
+  const section = renderKnowledgeRefsSection(refs);
+  assert.match(section, /本轮使用的项目知识（精确版本）/u);
+  assert.match(section, /时区核对 · v2 · memory/u);
+  assert.match(section, /反馈 success/u);
+  assert.match(section, /反馈 inapplicable/u);
+  assert.match(section, /知识后来被修订或下架也不改写本节/u);
+  assert.equal(renderKnowledgeRefsSection([]), "");
+  assert.equal(renderKnowledgeRefsSection(undefined), "");
+  // 上限：最多 50 条，超出截断
+  const many = Array.from({ length: KNOWLEDGE_REF_LIMIT + 10 }, (_, index) => ({
+    item_id: `item-${index}`, version_id: `ver-${index}`, kind: "memory", title: `t${index}`, version: 1,
+    content_sha256: "c".repeat(64), outcome: null,
+  }));
+  assert.equal(normalizeKnowledgeRefs(many).length, KNOWLEDGE_REF_LIMIT);
+});
+
+test("#1256 非目标报告把知识引用放在结论之后、审计之前", async () => {
+  const { finalizeTaskReportMarkdown } = await import("./report.js");
+  const input = reportInput({
+    knowledge_refs: [{ item_id: "item-1", version_id: "ver-1", kind: "memory", title: "归档日志按请求 ID 查",
+      version: 2, content_sha256: "d".repeat(64), outcome: null }],
+    plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 },
+  });
+  const final = finalizeTaskReportMarkdown(input, "too short");
+  // 覆盖不足时走默认报告：知识引用仍必须排在审计之前、正文之内。
+  const body = final.markdown.indexOf("# 任务报告");
+  const knowledge = final.markdown.indexOf("## 本轮使用的项目知识");
+  const audit = final.markdown.indexOf("## 目标与缺口");
+  assert.ok(body === 0, "默认报告仍是最前");
+  assert.ok(body < knowledge && knowledge < audit, `顺序应为 正文→知识→审计，实际 ${body}/${knowledge}/${audit}`);
+  assert.match(final.markdown, /归档日志按请求 ID 查 · v2 · memory/u);
+  assert.match(final.markdown, /未评价（效果未知）/u);
+});
