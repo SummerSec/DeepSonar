@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Plan, mergePlanAudit, PlanResult } from "@deepsonar/shared-types";
-import { projectPlanGaps, renderPlanGapReport } from "./domains/plan-protocol/gap-projection.js";
+import { projectPlanGaps, renderPlanGapDetail, renderPlanGapReport, withPlanGapReport } from "./domains/plan-protocol/gap-projection.js";
 
 const plan = Plan.parse({
   v: 1, goal: "Verify the scoped authentication behavior",
@@ -55,7 +55,9 @@ test("report exposes missing and truncated coverage; untrusted fences stay quote
   const rendered = renderPlanGapReport({ v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: true, limit: 32 });
   assert.match(rendered, /unknown/);
   assert.match(rendered, /覆盖不完整/);
-  assert.match(rendered, /```json/);
+  // #1251 评审：原始投影不再排进摘要，改由详情段追加在文末。
+  assert.doesNotMatch(rendered, /```json/);
+  assert.match(renderPlanGapDetail({ v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: true, limit: 32 }), /```json/);
 });
 
 test("#1250 空计划审计只给可读结论，不再倾倒原始 JSON", () => {
@@ -69,8 +71,34 @@ test("#1250 空计划审计只给可读结论，不再倾倒原始 JSON", () => 
 test("#1250 有计划审计时先给摘要，原始投影下沉到详细数据", () => {
   const entry = projectPlanGaps("job", { plan_protocol: audit });
   const rendered = renderPlanGapReport({ v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: false, limit: 32 });
-  assert.ok(rendered.indexOf("本画布关联了 1 份计划审计快照") < rendered.indexOf("### 详细审计数据"));
+  assert.match(rendered, /本画布关联了 1 份计划审计快照/);
+  assert.doesNotMatch(rendered, /### 详细审计数据/u, "摘要段不再携带机器数据章节");
   assert.match(rendered, /任务数 1，判据 1 项/);
   assert.match(rendered, /整体 unknown（unknown 表示目前没有权威评审/);
-  assert.match(rendered, /```json/);
+  assert.doesNotMatch(rendered, /```json/);
+  assert.match(renderPlanGapDetail({ v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: false, limit: 32 }), /```json/);
+});
+
+test("#1251 报告正文在结论之后、原始投影在最末", () => {
+  const entry = projectPlanGaps("job", { plan_protocol: audit });
+  const report = { v: 1 as const, scope: "canvas_plan_audits" as const, entries: [entry], truncated: false, limit: 32 };
+  const markdown = withPlanGapReport("# 任务结果\n\n任务做完了什么。", report);
+  const summary = markdown.indexOf("## 目标与缺口");
+  const body = markdown.indexOf("# 任务结果");
+  const detail = markdown.indexOf("### 详细审计数据");
+  assert.ok(summary < body && body < detail, `顺序应为摘要→正文→详情，实际 ${summary}/${body}/${detail}`);
+  assert.ok(markdown.trimEnd().endsWith("```"), "原始投影必须在文末");
+});
+
+test("#1251 正文存在未闭合结构时不追加机器数据，改用下载指引", () => {
+  const entry = projectPlanGaps("job", { plan_protocol: audit });
+  const report = { v: 1 as const, scope: "canvas_plan_audits" as const, entries: [entry], truncated: false, limit: 32 };
+  for (const tail of ["```", "```json", "~~~~md", "<!--", "<div hidden>", "<details>"]) {
+    const markdown = withPlanGapReport(`# 任务结果\n\n正文\n\n${tail}`, report);
+    assert.doesNotMatch(markdown, /### 详细审计数据/u, `未闭合 ${tail} 时不应追加详情`);
+    assert.match(markdown, /原始投影未随正文附在文末/u);
+    assert.ok(markdown.trimEnd().endsWith("读取。"), "指引必须留在文末，正文本身保持原样");
+  }
+  const closed = withPlanGapReport("# 任务结果\n\n```\ncode\n```\n\n<div>ok</div>", report);
+  assert.match(closed, /### 详细审计数据/u, "结构闭合时仍应附上详情");
 });

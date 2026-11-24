@@ -75,7 +75,7 @@ export function renderPlanGapReport(report: PlanGapReport | undefined): string {
   }
   const lines = [
     "## 目标与缺口（只读计划审计）", "",
-    `本画布关联了 ${report.entries.length} 份计划审计快照${report.truncated ? "，超出展示上限、覆盖不完整" : ""}。下面先给人读的摘要，原始投影在「详细审计数据」一节。`,
+    `本画布关联了 ${report.entries.length} 份计划审计快照${report.truncated ? "，超出展示上限、覆盖不完整" : ""}。下面先给人读的摘要，原始投影附在文末的「详细审计数据」一节。`,
   ];
   for (const entry of report.entries) {
     const audit = entry.audit;
@@ -88,14 +88,48 @@ export function renderPlanGapReport(report: PlanGapReport | undefined): string {
     if (audit.goal) lines.push(`  - 目标原文（来自冻结快照）：${audit.goal}`);
     lines.push(`  - 完成情况：整体 ${audit.completion_assessment}（unknown 表示目前没有权威评审，不表示完成或未完成）；提议的结束理由${audit.proposed_termination_reason ? `「${audit.proposed_termination_reason}」` : "未记录"}不用于证明完成或阴性。`);
   }
-  lines.push("", semantics, "", "### 详细审计数据（产品投影，给排查用）", "");
+  lines.push("", semantics);
+  return lines.join("\n");
+}
+
+/**
+ * #1250：原始投影放在文末，结论与依据在前。
+ * 只有正文的 Markdown 结构完整闭合时才附在文末；正文停在未闭合的代码块、注释或 HTML 块里时，
+ * 追加内容会被吞掉或显示错位，此时不追加，改由摘要里的指引让人从报告下载或任务详情查看。
+ */
+function bodyEndsInOpenConstruct(markdown: string): boolean {
+  // 未闭合的 HTML 注释或块级标签会把后面的内容整段吞掉。
+  if (/<!--(?!([\s\S]*?)-->)/u.test(markdown)) return true;
+  const block = /<(script|style|div|details|iframe)\b/iu.exec(markdown);
+  if (block && !new RegExp(`</${block[1]}>`, "iu").test(markdown.slice(block.index))) return true;
+  let open: { char: string; length: number } | null = null;
+  for (const line of markdown.split("\n")) {
+    const fence = /^\s{0,3}(`{3,}|~{3,})/u.exec(line);
+    if (!fence) continue;
+    const run = fence[1]!;
+    if (!open) { open = { char: run[0]!, length: run.length }; continue; }
+    const closes = run[0] === open.char && run.length >= open.length && line.trim().slice(run.length).trim() === "";
+    if (closes) open = null;
+  }
+  return open !== null;
+}
+
+export function renderPlanGapDetail(report: PlanGapReport | undefined): string {
+  if (!report || !report.entries.length) return ""; // 空审计不倾倒 JSON。
   const body = JSON.stringify(report, null, 2);
   const fence = "`".repeat(Math.max(3, ...Array.from(body.matchAll(/`+/g), (m) => m[0].length + 1)));
-  lines.push(`${fence}json`, body, fence);
-  return lines.join("\n");
+  return ["### 详细审计数据（产品投影，给排查用）", "", `${fence}json`, body, fence].join("\n");
 }
 
 /** Start in a fresh Markdown context: an unclosed model tail cannot swallow this section. */
 export function withPlanGapReport(markdown: string, report: PlanGapReport | undefined): string {
-  return report ? `${renderPlanGapReport(report)}\n\n${markdown}` : markdown;
+  if (!report) return markdown;
+  const head = `${renderPlanGapReport(report)}\n\n${markdown}`;
+  const detail = renderPlanGapDetail(report);
+  if (!detail) return head; // 空审计不追加任何机器数据，也不追加说明。
+  if (bodyEndsInOpenConstruct(markdown)) {
+    const pointer = "原始投影未随正文附在文末：正文存在未闭合的代码块、注释或 HTML 块，追加内容会被吞掉。需要原始数据时请从报告下载或任务详情读取。";
+    return `${head}\n\n${pointer}`;
+  }
+  return `${head}\n\n${detail}`;
 }
