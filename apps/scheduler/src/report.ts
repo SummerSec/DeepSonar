@@ -168,21 +168,20 @@ export interface ReportInput {
     verification_status: string;
     quantities: QuantityAnchor[];
   }>;
-  /** #1256：本画布任务实际读用过的项目知识，按精确版本冻结（不含评价理由与来源正文）。 */
-  knowledge_refs?: ReportInputKnowledgeRef[];
+  /**
+   * #1256 复核：报告 Job 输入与通用产物都会外流，所以这里只放**匿名计数**；
+   * 精确版本引用（条目/版本 id、标题、哈希）不进报告输入，由知识权限保护的页面按需读取。
+   */
+  knowledge_summary?: ReportInputKnowledgeSummary;
 }
 
-export interface ReportInputKnowledgeRef {
-  item_id: string;
-  version_id: string;
-  kind: string;
-  title: string;
-  version: number;
-  content_sha256: string;
-  /** 本画布对该版本的读取次数；读取不等于采用。 */
+export interface ReportInputKnowledgeSummary {
+  /** 里被读取且当前可见的知识版本数（撤权、评测私有版本不计）。 */
+  versions: number;
+  /** 累计读取次数。 */
   reads: number;
-  /** 最近一次**显式**反馈的 outcome；后续未评价读取不会把它覆盖成空。 */
-  outcome: string | null;
+  /** 其中有显式反馈的版本数。 */
+  rated: number;
 }
 
 export interface FindingReportInput {
@@ -334,59 +333,33 @@ function enforceFindingReportInputBudget(input: FindingReportInput): FindingRepo
 }
 
 /** 从数据库确定性生成报告输入（不含 Agent 创作内容）。 */
-/** #1256：报告里的知识引用按精确版本去重并截断，只保留可核对的身份字段。 */
-export const KNOWLEDGE_REF_LIMIT = 50;
-export function normalizeKnowledgeRefs(rows: readonly Record<string, unknown>[]): ReportInputKnowledgeRef[] {
-  const index = new Map<string, number>();
-  const refs: ReportInputKnowledgeRef[] = [];
+/** #1256：把知识读取聚合成匿名摘要；不含任何条目/版本标识。 */
+export function knowledgeSummary(rows: readonly Record<string, unknown>[]): ReportInputKnowledgeSummary {
+  let versions = 0;
+  let reads = 0;
+  let rated = 0;
   for (const row of rows) {
-    const itemId = typeof row.item_id === "string" ? row.item_id : null;
-    const versionId = typeof row.version_id === "string" ? row.version_id : null;
-    const hash = typeof row.content_sha256 === "string" ? row.content_sha256 : null;
-    if (!itemId || !versionId || !hash) continue;
-    const key = `${itemId}:${versionId}`;
-    const seenAt = index.get(key);
-    if (seenAt !== undefined) {
-      // 同一版本的多行（未聚合输入）合并：读取次数取最大，显式反馈优先，绝不被未评价读取清空。
-      const prior = refs[seenAt]!;
-      prior.reads = Math.max(prior.reads, Number.isSafeInteger(Number(row.reads)) ? Number(row.reads) : 1);
-      const outcome = typeof row.outcome === "string" && row.outcome.length > 0 ? row.outcome : null;
-      if (prior.outcome === null && outcome !== null) prior.outcome = outcome;
-      continue;
-    }
-    index.set(key, refs.length);
-    refs.push({
-      item_id: itemId,
-      version_id: versionId,
-      kind: typeof row.kind === "string" ? row.kind : "memory",
-      title: typeof row.title === "string" ? row.title.slice(0, 200) : "（未命名知识）",
-      version: Number.isSafeInteger(Number(row.version)) ? Number(row.version) : 1,
-      content_sha256: hash,
-      reads: Number.isSafeInteger(Number(row.reads)) && Number(row.reads) > 0 ? Number(row.reads) : 1,
-      // 只有显式反馈才算效果；未评价读取不覆盖既有评价。
-      outcome: typeof row.outcome === "string" && row.outcome.length > 0 ? row.outcome : null,
-    });
-    if (refs.length >= KNOWLEDGE_REF_LIMIT) break;
+    versions += 1;
+    reads += Number.isSafeInteger(Number(row.reads)) && Number(row.reads) > 0 ? Number(row.reads) : 1;
+    if (typeof row.outcome === "string" && row.outcome.length > 0) rated += 1;
   }
-  return refs;
+  return { versions, reads, rated };
 }
 
 /**
  * #1256 复核：报告是「任务只读」也能下载的通用正文，知识目录却要求 projects:read。
- * 因此这里只写不识别条目的摘要；精确版本引用留在冻结输入里，由有知识权限的页面按需读取。
+ * 因此正文只给匿名计数（读过几个版本、累计次数、其中有显式反馈的数量），
+ * 条目标题、版本 id 与内容哈希既不进正文，也不进报告 Job 输入。
  */
-export function renderKnowledgeRefsSection(refs: readonly ReportInputKnowledgeRef[] | undefined): string {
-  if (!refs || refs.length === 0) return "";
-  const versions = refs.length;
-  const rated = refs.filter((ref) => ref.outcome !== null).length;
-  const reads = refs.reduce((total, ref) => total + ref.reads, 0);
-  const lines = [
+export function renderKnowledgeRefsSection(summary: ReportInputKnowledgeSummary | undefined): string {
+  if (!summary || summary.versions === 0) return "";
+  return [
     "## 本轮读取的项目知识（摘要）",
     "",
-    `- 共读取 ${versions} 个知识版本，累计 ${reads} 次；其中 ${rated} 个版本有显式反馈，其余记为未评价（效果未知）。`,
-  ];
-  lines.push("", "读取不等于采用：只有显式反馈才表示实际应用与效果。为不越过知识目录的项目级读取权限，本节只给数量与反馈分布，条目标题、版本 id 与内容哈希不写入通用报告正文；有项目知识权限的成员可在项目知识页按精确版本核对。");
-  return lines.join("\n");
+    `- 共读取 ${summary.versions} 个知识版本，累计 ${summary.reads} 次；其中 ${summary.rated} 个版本有显式反馈，其余记为未评价（效果未知）。`,
+    "",
+    "读取不等于采用：只有显式反馈才表示实际应用与效果。为不越过知识目录的项目级读取权限，本节只给数量与反馈分布；精确版本（条目、版本与内容哈希）不写入报告正文与报告 Job 输入，有项目知识权限的成员可在项目知识页按版本核对（按需读取入口属后续切片）。",
+  ].join("\n");
 }
 
 export async function buildReportInput(canvasId: string, db: typeof sql = sql): Promise<ReportInput> {
@@ -525,10 +498,9 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
     },
     evidence: [],
     facts: await loadReportFactQuantities(canvasId, db),
-    // #1256 复核：按版本聚合读取次数，只保留最近一次**显式**反馈；受限/撤权版本整条不写。
-    knowledge_refs: normalizeKnowledgeRefs(await db<Array<Record<string, unknown>>>`
-      SELECT i.id::text AS item_id, v.id::text AS version_id, i.kind, i.title, v.version, v.content_sha256,
-        count(*)::int AS reads,
+    // #1256 复核：只取匿名计数；可见性过滤与知识目录一致（撤销、评测私有、非 active 都不计）。
+    knowledge_summary: knowledgeSummary(await db<Array<Record<string, unknown>>>`
+      SELECT v.id::text AS version_id, count(*)::int AS reads,
         (array_agg(u.feedback_json->>'outcome' ORDER BY u.created_at DESC)
           FILTER (WHERE u.feedback_json->>'outcome' IS NOT NULL))[1] AS outcome
       FROM project_knowledge_usages u
@@ -539,9 +511,7 @@ export async function buildReportInput(canvasId: string, db: typeof sql = sql): 
         AND NOT EXISTS (SELECT 1 FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
           WHERE p.project_id=v.project_id AND p.candidate_version_id=v.id
             AND w.trigger_key LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"})
-      GROUP BY i.id, v.id, i.kind, i.title, v.version, v.content_sha256
-      ORDER BY max(u.created_at) DESC
-      LIMIT 200`),
+      GROUP BY v.id`),
   };
 }
 
@@ -911,7 +881,7 @@ export function finalizeTaskReportMarkdown(
     const markdown = withPlanGapReport({ trusted: [goalReportMarkdown(input.task_outcome!, declared, {
       task: input.task, scope_and_coverage: input.scope_and_coverage, technical_statistics: input.statistics,
       findings: input.findings, facts: input.facts, seed_findings: input.seed_findings, evidence: input.evidence,
-    }), renderKnowledgeRefsSection(input.knowledge_refs)].filter((part) => part.length > 0).join("\n\n") }, input.plan_gaps);
+    }), renderKnowledgeRefsSection(input.knowledge_summary)].filter((part) => part.length > 0).join("\n\n") }, input.plan_gaps);
     return { markdown, numeric: checkReportNumericFidelity(declared, { markdown }), coverageOk: true, usedDefault: "task_outcome" };
   }
   const candidate = agentText.trim();
@@ -937,7 +907,7 @@ export function finalizeTaskReportMarkdown(
   // 模型正文存活时可信区为空：补一段简短的平台结论与下一步，保证「结论先于依据」。
   if (trusted.length === 0) trusted = platformResultSummary(input);
   // #1256：本轮使用的项目知识以精确版本冻结在可信区，随报告一起下载。
-  trusted = [trusted, renderKnowledgeRefsSection(input.knowledge_refs)].filter((part) => part.length > 0).join("\n\n");
+  trusted = [trusted, renderKnowledgeRefsSection(input.knowledge_summary)].filter((part) => part.length > 0).join("\n\n");
   const markdown = withPlanGapReport({ trusted, untrusted }, input.plan_gaps);
   return { markdown, numeric, coverageOk, usedDefault };
 }

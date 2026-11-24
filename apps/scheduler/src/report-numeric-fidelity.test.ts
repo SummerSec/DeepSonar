@@ -504,78 +504,33 @@ test("deterministic task reports retain identity, goal and scope even without a 
   }
 });
 
-test("#1256 报告冻结本轮使用知识的精确版本，并按版本去重、限量", async () => {
-  const { normalizeKnowledgeRefs, renderKnowledgeRefsSection, KNOWLEDGE_REF_LIMIT } = await import("./report.js");
-  const refs = normalizeKnowledgeRefs([
-    { item_id: "item-1", version_id: "ver-1", kind: "memory", title: "时区核对", version: 2, content_sha256: "a".repeat(64), outcome: "success" },
-    // 同一版本重复读取只记一次
-    { item_id: "item-1", version_id: "ver-1", kind: "memory", title: "时区核对", version: 2, content_sha256: "a".repeat(64), outcome: null },
-    // 同一 item 的另一个版本要单独记（精确版本）
-    { item_id: "item-1", version_id: "ver-2", kind: "memory", title: "时区核对", version: 3, content_sha256: "b".repeat(64), outcome: "inapplicable" },
-    // 缺字段的行直接丢弃，不猜版本
-    { item_id: "item-2", version_id: null, title: "无版本" },
+test("#1256 报告只写匿名知识摘要：没有条目/版本 id 与标题", async () => {
+  const { knowledgeSummary, renderKnowledgeRefsSection } = await import("./report.js");
+  const summary = knowledgeSummary([
+    { version_id: "ver-1", reads: 2, outcome: "success" },
+    { version_id: "ver-2", reads: 1, outcome: null },
   ]);
-  assert.deepEqual(refs.map((ref) => `${ref.item_id}@${ref.version}`), ["item-1@2", "item-1@3"]);
-  const section = renderKnowledgeRefsSection(refs);
-  assert.match(section, /本轮读取的项目知识（摘要）/u);
-  assert.match(section, /共读取 2 个知识版本，累计 2 次/u);
-  assert.match(section, /其中 2 个版本有显式反馈/u);
-  assert.match(section, /读取不等于采用：只有显式反馈才表示实际应用与效果/u);
-  // 通用正文不能带可识别元数据：标题、条目/版本 id 与哈希都不出现。
-  assert.ok(!section.includes("时区核对"), "标题不得进入正文");
-  assert.ok(!section.includes("item-1") && !section.includes("ver-1"), "条目/版本 id 不得进入正文");
-  assert.ok(!section.includes("a".repeat(64)) && !section.includes("aaaaaaaaaaaa"), "哈希不得进入正文");
-  assert.equal(renderKnowledgeRefsSection([]), "");
+  assert.deepEqual(summary, { versions: 2, reads: 3, rated: 1 });
+  const section = renderKnowledgeRefsSection(summary);
+  assert.match(section, /共读取 2 个知识版本，累计 3 次/u);
+  assert.match(section, /其中 1 个版本有显式反馈/u);
+  assert.match(section, /读取不等于采用/u);
+  assert.ok(!section.includes("ver-1"), "版本 id 不得进入正文");
+  assert.equal(renderKnowledgeRefsSection({ versions: 0, reads: 0, rated: 0 }), "");
   assert.equal(renderKnowledgeRefsSection(undefined), "");
-  // 上限：最多 50 条，超出截断
-  const many = Array.from({ length: KNOWLEDGE_REF_LIMIT + 10 }, (_, index) => ({
-    item_id: `item-${index}`, version_id: `ver-${index}`, kind: "memory", title: `t${index}`, version: 1,
-    content_sha256: "c".repeat(64), outcome: null,
-  }));
-  assert.equal(normalizeKnowledgeRefs(many).length, KNOWLEDGE_REF_LIMIT);
 });
 
-test("#1256 未评价读取不覆盖既有的显式反馈", async () => {
-  const { normalizeKnowledgeRefs, renderKnowledgeRefsSection } = await import("./report.js");
-  const base = { item_id: "item-9", version_id: "ver-9", kind: "memory", title: "同名标题", version: 1, content_sha256: "e".repeat(64) };
-  // 聚合输入已经算好；这里验证即便给了多行，也不会让后到的未评价读取覆盖既有评价。
-  const refs = normalizeKnowledgeRefs([
-    { ...base, reads: 1, outcome: "success" },
-    { ...base, reads: 3, outcome: null },
-  ]);
-  assert.equal(refs.length, 1);
-  assert.equal(refs[0]!.reads, 3);
-  assert.equal(refs[0]!.outcome, "success");
-  assert.match(renderKnowledgeRefsSection(refs), /其中 1 个版本有显式反馈/u);
-});
-
-test("#1256 知识标题与哈希不进入通用报告正文", async () => {
-  const { renderKnowledgeRefsSection } = await import("./report.js");
-  const section = renderKnowledgeRefsSection([{
-    item_id: "item-1", version_id: "ver-1", kind: "memory",
-    title: "[点我](note-a) 与 ![图](shot.png) ## 标题", version: 2,
-    content_sha256: "f".repeat(64), reads: 1, outcome: null,
-  }]);
-  assert.ok(!section.includes("点我"), "标题不得进入正文");
-  assert.ok(!section.includes("f".repeat(64)) && !section.includes("ffffffffffff"), "哈希不得进入正文");
-  assert.doesNotMatch(section, /(?<!\\)\[/u, "正文里不应出现可构成链接的方括号");
-});
-
-test("#1256 非目标报告把知识引用放在结论之后、审计之前", async () => {
+test("#1256 非目标报告把知识摘要放在结论之后、审计之前", async () => {
   const { finalizeTaskReportMarkdown } = await import("./report.js");
   const input = reportInput({
-    knowledge_refs: [{ item_id: "item-1", version_id: "ver-1", kind: "memory", title: "归档日志按请求 ID 查",
-      version: 2, content_sha256: "d".repeat(64), reads: 3, outcome: null }],
+    knowledge_summary: { versions: 1, reads: 3, rated: 0 },
     plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 },
   });
   const final = finalizeTaskReportMarkdown(input, "too short");
-  // 覆盖不足时走默认报告：知识引用仍必须排在审计之前、正文之内。
   const body = final.markdown.indexOf("# 任务报告");
   const knowledge = final.markdown.indexOf("## 本轮读取的项目知识（摘要）");
   const audit = final.markdown.indexOf("## 目标与缺口");
   assert.ok(body === 0, "默认报告仍是最前");
-  assert.ok(body < knowledge && knowledge < audit, `顺序应为 正文→知识→审计，实际 ${body}/${knowledge}/${audit}`);
+  assert.ok(body < knowledge && knowledge < audit, `顺序应为 正文→摘要→审计，实际 ${body}/${knowledge}/${audit}`);
   assert.match(final.markdown, /共读取 1 个知识版本，累计 3 次/u);
-  assert.match(final.markdown, /其中 0 个版本有显式反馈/u);
-  assert.ok(!final.markdown.includes("归档日志按请求 ID 查"), "标题不得进入通用正文");
 });

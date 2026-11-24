@@ -187,12 +187,9 @@ test("v2 Plan audits remain visible while historical v1 and native reports stay 
 
 test("#1256 报告里的知识摘要不携带可识别元数据，页面也不会生成链接或图片", async () => {
   const { renderKnowledgeRefsSection } = await import("../../scheduler/src/report.js");
-  const section = renderKnowledgeRefsSection([{
-    item_id: "item-1", version_id: "ver-1", kind: "memory",
-    title: "[点我](note-a) 与 ![图](shot.png)", version: 2,
-    content_sha256: "a".repeat(64), reads: 2, outcome: null,
-  }]);
-  assert.ok(!section.includes("点我"), "标题不得进入正文");
+  const section = renderKnowledgeRefsSection({ versions: 2, reads: 5, rated: 1 });
+  assert.match(section, /共读取 2 个知识版本，累计 5 次/u);
+  assert.ok(!section.includes("[点我]"), "摘要里不应出现条目级内容");
   const html = renderToStaticMarkup(createElement(MarkdownView, { markdown: `## 结论\n\n任务已完成。\n\n${section}`, controls: false }));
   assert.doesNotMatch(html, /<a\s[^>]*href=/iu);
   assert.doesNotMatch(html, /<img\s/iu);

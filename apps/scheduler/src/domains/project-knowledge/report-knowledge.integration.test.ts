@@ -44,14 +44,15 @@ test("#1256 报告只取可见版本的知识引用，且正文不带可识别�
         ${randomUUID()}, ${"b".repeat(64)}, ${"c".repeat(64)}, 'test')`;
 
     const input = await buildReportInput(owner.canvasId, db as never);
-    const refs = input.knowledge_refs ?? [];
-    assert.deepEqual(refs.map((ref) => ref.version_id), [activeVersion], "撤销与评测私有版本不得进入报告引用");
-    assert.equal(refs[0]?.reads, 1);
-    assert.equal(refs[0]?.outcome, "success");
-    const section = renderKnowledgeRefsSection(refs);
-    assert.match(section, /共读取 1 个知识版本/u);
+    // 撤销与评测私有版本不计入摘要。
+    assert.deepEqual(input.knowledge_summary, { versions: 1, reads: 1, rated: 1 });
+    const section = renderKnowledgeRefsSection(input.knowledge_summary);
+    assert.match(section, /共读取 1 个知识版本，累计 1 次/u);
     assert.match(section, /其中 1 个版本有显式反馈/u);
+    // 报告 Job 输入（会写进 report_input_json 并随通用产物外流）不得含可识别元数据。
+    const frozen = JSON.stringify(input);
     for (const needle of ["可见知识标题", "已撤权知识标题", "私有评测知识标题", hashes[0]!.slice(0, 12), activeItem, activeVersion]) {
+      assert.ok(!frozen.includes(needle), `报告输入不得包含可识别元数据：${needle}`);
       assert.ok(!section.includes(needle), `正文不得包含可识别元数据：${needle}`);
     }
   });
