@@ -65,6 +65,7 @@ function anthropicStartUsage(value: unknown): { valid: boolean; pendingOutput: b
 export function createRepairUsageScanner(path: string, isSse: boolean): {
   push: (chunk: Uint8Array | string) => void;
   finish: () => UsageBreakdown | null;
+  hasCompletedResponse: () => boolean;
   diagnostic: () => ReturnType<ReturnType<typeof createUsageShapeDiagnostic>["snapshot"]>;
 } {
   const normalized = path.replace(/^\//u, "");
@@ -74,9 +75,7 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
   const completionObject = normalized.endsWith("chat/completions") ? "chat.completion" : "text_completion";
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let failed = protocol === null, finished = false, ended = false, totalBytes = 0;
-  // #1250/#1252：Responses 在 response.completed 之后只会出现表层尾帧（如 response.output_text.done），
-  // 一律拒收会把已观察到的合法最终用量整条作废。见 responsesTail。
-  let responsesTail = false;
+  let responsesDone = false;
   let reason: UsageScanReason = protocol === null ? "unsupported_protocol" : "complete";
   const diagnostic = createUsageShapeDiagnostic(protocol, isSse);
   const fail = (next: UsageScanReason): void => { if (!failed) reason = next; failed = true; };
@@ -96,9 +95,13 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
     const text = data.join("\n");
     data = []; frameBytes = 0;
     const name = eventName; eventName = "";
-    if (ended && !responsesTail) { fail("invalid_sequence"); return; }
-    // #1252：[DONE] 是 Responses 的标准结束标记，先于"结束后不再收业务帧"判定。
-    if (text === "[DONE]" && protocol === "responses" && ended) { diagnostic.frame(null, name); return; }
+    // A Responses completion already supplies final usage. Some transports
+    // append one exact SSE sentinel, which contributes no additional usage.
+    if (ended && protocol === "responses" && text === "[DONE]" && !name && !responsesDone) {
+      responsesDone = true;
+      return;
+    }
+    if (ended) { fail("invalid_sequence"); return; }
     if (text === "[DONE]") {
       diagnostic.frame(null, name);
       if (protocol !== "chat" || !chatChoices.size || [...chatChoices.values()].some(done => !done)) fail("invalid_sequence");
@@ -124,18 +127,10 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
       if (typeof value.type !== "string" || !value.type.startsWith("response.")) { fail("unknown_event"); return; }
       if (name && name !== value.type) { fail("event_mismatch"); return; }
       if (["response.failed", "response.incomplete", "response.cancelled", "response.error"].includes(value.type)) { fail("upstream_error"); return; }
-      if (ended && responsesTail) {
-        // #1252：完成之后只接受已知的表层尾帧，任何业务帧、重复完成或未知事件都继续拒绝。
-        if (value.type === "response.completed") { fail("invalid_sequence"); return; }
-        const tailFrame = value.response === undefined && count(value.output_index) !== null
-          && ["response.output_text.done", "response.output_item.done", "response.content_part.done"].includes(value.type);
-        if (!tailFrame) { fail("invalid_sequence"); return; }
-        return;
-      }
       if (value.type === "response.completed") {
         const response = record(value.response);
         if (!response || response.object !== "response" || response.status !== "completed" || response.error != null || response.incomplete_details != null) { fail("invalid_envelope"); return; }
-        observe(usage(response.usage, "responses")); ended = true; responsesTail = true;
+        observe(usage(response.usage, "responses")); ended = true;
         if (!failed) diagnostic.finalUsage();
       }
     } else if (protocol === "anthropic") {
@@ -211,10 +206,7 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
         try { consume(decoder.decode()); } catch { fail("invalid_utf8"); }
         if (isSse) {
           // A partial SSE frame is not evidence of a completed response.
-          // #1252：已完成且用量合法的 Responses 之后的残留字节属于传输收尾（客户端可能先关连接），
-          // 不能把已经取得的最终用量改判为未知。
-          if (!ended) fail("truncated");
-          else if (!responsesTail && (buffer.trim() || data.length || eventName)) fail("truncated");
+          if (buffer.trim() || data.length || eventName || !ended) fail("truncated");
         } else {
           const value = parse(buffer);
           diagnostic.frame(value, "");
@@ -233,6 +225,7 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
       finished = true;
       return failed || !observed ? null : { ...observed };
     },
+    hasCompletedResponse: () => isSse && protocol === "responses" && ended && !failed && observed !== null,
     diagnostic: () => diagnostic.snapshot(reason, failed),
   };
 }

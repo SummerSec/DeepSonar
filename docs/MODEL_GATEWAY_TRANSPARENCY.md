@@ -1,7 +1,19 @@
 # Model Gateway 透明传输（#923）
 
 > 状态：as-built；#928 已合入 main 616d7a36，工程证据见下文；后续 SHA 另验，不代表真实模型、生产或性能验收。
-> 同步日期：2026-11-20
+> 同步日期：2026-11-24
+
+## Responses 完成尾部与结算时序（#1252）
+
+Responses SSE 在合法 `response.completed` 中取得完整最终用量后，可以再发送一个无事件名的精确 `data: [DONE]` 结束标记。标记不贡献用量。缺失或非法用量、失败或不完整完成、重复完成、重复标记、带事件名的标记及完成后的业务数据帧仍拒收，半帧和非法 UTF-8 仍无法结算。
+
+对于未压缩的 Responses SSE，Gateway 暂存包含已验证完成事件的当前传输块及其尾部。前面的流式内容继续及时转发。尾部沿用 16 MiB 观察上限及原请求 deadline，在原始上游完整结束、回显守卫与 trailers 检查完成、原 usage/effect 事务处理后，才按原字节结束下游响应。这使 Pi 读取完成事件后的关闭发生在宿主结算之后。提前取消、上游中断、校验失败及结算写失败继续保留拒绝或未知结果。
+
+压缩响应沿用原有完整解码观察和透明传输路径，此次完成块暂存仅作用于未压缩 Responses SSE。历史 Job 账本、冻结额度及回执保持原事实。
+
+现场 v0.6.23 的 49 条解析审计均已看到最终用量且报 `invalid_sequence`，最后一笔聚合路由与 Pi 会话用量一致。原始尾部未保存，额外帧的精确内容及 19 条 unknown 的连接终止原因仍未确认。上述精确结束标记是本次明确支持并回归的输入形态，不能据此宣称现场尾部已捕获或旧 Job 已恢复。
+
+scanner 正反例和真实 HTTP/PG 用量、额度读回、Pi 式完成即关闭、完成前取消、完成后上游中断与凭据回显回归，分别接既有 `pnpm ci:unit:executor-real` 与 `pnpm ci:integration:platform-api`。完整 JSON 缺末尾帧分隔的失败、重复完成和业务数据同样拒收。最终 SHA Actions 待验，生产重跑与真实模型验证未执行。
 
 ## Managed proxy 的逐跳连接策略（#1097）
 
@@ -221,14 +233,3 @@ Claude start/resume 先读取 `CLAUDE_CONFIG_DIR/settings.json`（未配置目�
 `PostToolUseFailure` 官方契约不允许改写 error，失败工具继续由本地请求守卫 fail closed。钩子输入或声明凭据不合法时仅输出固定失败码，后续漏网请求同样拒绝；不把该拒绝冒充脱敏成功。成功投影只改变送入模型的工具输出，不证明工具执行前的 telemetry、analytics、CLI 原始本地历史或文件已清除。该本地拒绝不会调用 Gateway，故没有对应 Gateway 接受回执、用量或 gateway.credential_denied 条目；运行失败沿原 Evidence/Dispatcher 分类记录。认证、工具 ID 和已形成请求不重写，干净请求按原字节传输。所有新增回归尚未执行，工程验收仍待最终 SHA Actions。
 
 保证仅覆盖当前 Job 已知 token 在普通文本中的上述具体出口。任意编码、分片、二进制/图像、工具直接联网或同 UID 对执行代码的修改不由这轮证明；既有网络、原字节 Gateway 守卫及权限仍独立约束。长期 Provider key 不进入沙箱，当前短期 token 的文件化不构成身份隔离。
-
-## Responses 完成后的表层尾帧（#1252，2026-11-24）
-
-OpenAI Responses 流在 `response.completed` 之后可能继续下发表层收尾帧（`response.output_item.done`、`response.content_part.done`、`response.output_text.done`），部分客户端还会补发 `[DONE]` 结束标记。这些帧都不含 `response` 对象，因此不可能携带用量；此前 scanner 在完成事件之后一律按 `invalid_sequence` 拒收，等于把已经取得的合法最终用量整条作废，结算侧只能记为未知。
-
-现在的规则：
-
-- 完成事件之后只接受上述三种、且带整数 `output_index`、不含 `response` 字段的表层尾帧，以及 `[DONE]` 结束标记；
-- 任何业务帧（如 `response.output_text.delta`）、重复的 `response.completed`、未知事件类型、携带 `response` 的帧仍然拒绝，不会因为放宽尾部而接受第二份用量；
-- 完成事件之后、流结束之前的残留字节（例如客户端先关连接留下的半帧）按传输收尾处理，不改判已观察到的用量；未完成就断流仍然记为 `truncated`；
-- 用量回归、缺失、非法字段的判定完全不变。

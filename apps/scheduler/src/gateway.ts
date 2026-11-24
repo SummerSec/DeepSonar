@@ -1759,6 +1759,8 @@ export function registerGateway(app: FastifyInstance): void {
       const hasEntity = req.method !== "HEAD" && status !== 204 && status !== 304;
       const compressed = hasEntity && Boolean(upstream.headers["content-encoding"] && upstream.headers["content-encoding"] !== "identity");
       const observation: Buffer[] = []; let observationBytes = 0;
+      const completionTail: Buffer[] = [];
+      let completionTailBytes = 0;
       let interrupted = false;
       let secretTail = Buffer.alloc(0);
       const secretBytes = Buffer.from(secret);
@@ -1783,12 +1785,20 @@ export function registerGateway(app: FastifyInstance): void {
         for await (const chunk of upstream) {
           const bytes = Buffer.from(chunk);
           await responseGuard.inspect(bytes);
-          await safeWrite(bytes);
           if (compressed || workload === "observational_memory") {
             observationBytes += bytes.length;
             if (observationBytes <= MODEL_GATEWAY_BODY_LIMIT) observation.push(bytes);
           }
           if (!compressed) { scanner.push(bytes); noteResponseChunk(bytes); }
+          // Hold the chunk containing Responses completion until the original
+          // stream ends and its usage is durable. Pi may close on that event.
+          if (completionTail.length || (!compressed && scanner.hasCompletedResponse())) {
+            completionTailBytes += bytes.length;
+            if (completionTailBytes > MODEL_GATEWAY_BODY_LIMIT) throw new Error("gateway_completion_tail_limit");
+            completionTail.push(bytes);
+          } else {
+            await safeWrite(bytes);
+          }
         }
         if (compressed && observationBytes <= MODEL_GATEWAY_BODY_LIMIT) {
           try {
@@ -1797,7 +1807,7 @@ export function registerGateway(app: FastifyInstance): void {
           } catch { /* Unknown usage cannot authorize another bounded request. */ }
         }
         await responseGuard.finish();
-        await safeWrite(Buffer.alloc(0), true);
+        if (!completionTail.length) await safeWrite(Buffer.alloc(0), true);
         if (upstream.rawTrailers.length) {
           if (secret && upstream.rawTrailers.some(value => value.includes(secret))) throw new Error("upstream_credential_echo");
           const connection: string[] = [];
@@ -1830,7 +1840,7 @@ export function registerGateway(app: FastifyInstance): void {
       }
       const unknown = protocolFailure || interrupted || status < 200 || status >= 300 || (workload === "observational_memory" && !trusted);
       const usage = trusted ?? { ...EMPTY_USAGE };
-      await trySettleGatewayUsage({
+      const usageSettled = await trySettleGatewayUsage({
         jobId: String(jt.job_id), projectId: String(jt.project_id), attemptId: gatewayAttemptId,
         jobTokenId: String(jt.id), effectId: gatewayEffectId, requestNo, provider: safeProvider,
         model, modelCatalogMatch, upstreamReportingModel, usage,
@@ -1850,7 +1860,8 @@ export function registerGateway(app: FastifyInstance): void {
       }
       if (usage.total > 0 && !unknown) inc("deepsonar_model_tokens_total", { provider: safeProvider }, usage.total);
       reply.raw.off("close", abortClient);
-      if (interrupted) reply.raw.destroy(); else reply.raw.end();
+      if (interrupted || (!usageSettled && completionTail.length)) reply.raw.destroy();
+      else reply.raw.end(Buffer.concat([secretTail, ...completionTail]));
 
     },
   });

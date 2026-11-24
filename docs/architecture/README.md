@@ -9,6 +9,8 @@
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
 > 同步日期：2026-11-21
 
+#1252 的[Responses 完成尾部与结算时序](../MODEL_GATEWAY_TRANSPARENCY.md#responses-完成尾部与结算时序1252)映射 FR-CRED-003 与 IR-002。保持最终用量、原字节、额度和未知效果门，回归接既有 Actions，现场尾帧与最终 SHA 验收分开。
+
 #1082 的[最终用量与安全形态诊断](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
 
 #1119/#1046 的[创建故障与鉴权管理探测](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)归入 NFR-OPS-001 / IR-001，由运行时与部署视图记录计数、重放及 List/create 分层契约。专题含受控熔断参数、半开有界指数退避、真实 Dispatcher/受控 runner 到 PostgreSQL 暂停认领组合回归，以及 #1176 Kubernetes 覆盖、统一探针、打包与 smoke 的替代审计，最终 SHA Actions 待验。

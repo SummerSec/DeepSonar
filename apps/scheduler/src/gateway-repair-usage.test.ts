@@ -81,6 +81,40 @@ test("Anthropic SSE joins start input and final cumulative output with stop", ()
   assert.equal(scan("messages", event({ type: "error", error: { type: "overloaded_error" } }) + antStream, true), null);
 });
 
+test("#1252 Responses accepts one trailing DONE only after verified final usage", () => {
+  const completed = event({ type: "response.completed", response }, "response.completed");
+  const expected = scan("responses", response);
+  for (const chunk of [1, 7, 65536]) {
+    assert.deepEqual(scan("responses", completed + event("[DONE]"), true, chunk), expected);
+    assert.deepEqual(scan("responses", (completed + event("[DONE]")).replaceAll("\n", "\r\n"), true, chunk), expected);
+    assert.equal(scan("responses", event("[DONE]"), true, chunk), null);
+    assert.equal(scan("responses", completed + event("[DONE]") + event("[DONE]"), true, chunk), null);
+    assert.equal(scan("responses", completed + event("[DONE]", "error"), true, chunk), null);
+    assert.equal(scan("responses", completed + completed, true, chunk), null);
+    assert.equal(scan("responses", completed + event("[DONE]") + event({ type: "response.output_text.delta" }), true, chunk), null);
+    assert.equal(scan("responses", completed + "data: [DONE]\n", true, chunk), null);
+    for (const tail of [
+      event({ type: "response.failed", response: { status: "failed" } }),
+      completed,
+      event({ type: "response.output_text.delta", delta: "late" }),
+    ]) assert.equal(scan("responses", completed + tail.trimEnd(), true, chunk), null);
+    for (const type of ["response.output_item.done", "response.content_part.done", "response.output_text.done"]) {
+      assert.equal(scan("responses", completed + event({ type, output_index: 0 }), true, chunk), null);
+    }
+    assert.equal(scan("responses", event({ type: "response.completed", response: { ...response, usage: undefined } }) + event("[DONE]"), true, chunk), null);
+    assert.equal(scan("responses", event({ type: "response.failed", response: { ...response, status: "failed" } }) + event("[DONE]"), true, chunk), null);
+    assert.equal(scan("messages", antStream + event("[DONE]"), true, chunk), null);
+  }
+  const scanner = createRepairUsageScanner("responses", true);
+  scanner.push(completed);
+  assert.equal(scanner.hasCompletedResponse(), true);
+  scanner.push(event("[DONE]"));
+  assert.deepEqual(scanner.finish(), expected);
+  scanner.push(event("[DONE]"));
+  assert.equal(scanner.hasCompletedResponse(), false);
+  assert.equal(scanner.finish(), null);
+});
+
 test("#1059: start snapshot without output_tokens defers to the cumulative delta, supplied fields still validate", () => {
   // 现场形态：聚合路由的 `message_start.usage` 只带 input/cache 字段，output 在 message_delta。
   const pendingStart = event(
@@ -229,33 +263,4 @@ test("#1082 diagnostics contain only fixed shapes, bounded counts and a non-cont
   const long = diagnose(event(antStart) + event({ type: "ping" }).repeat(4000) + event(antStop), 65536);
   assert.equal(long.events.ping, 4000);
   assert.ok(Buffer.byteLength(JSON.stringify(long)) <= 2048);
-});
-
-test("#1252 Responses 完成事件之后的表层尾帧不再作废已观察到的最终用量", () => {
-  const completed = event({ type: "response.completed", response });
-  const expected = scan("responses", response);
-  const tails = [
-    event({ type: "response.output_item.done", output_index: 0, item: { type: "message" } }),
-    event({ type: "response.content_part.done", output_index: 0, content_index: 0, part: { type: "output_text", text: "ok" } }),
-    event({ type: "response.output_text.done", output_index: 0, content_index: 0, text: "ok" }),
-    event({ type: "response.output_item.done", output_index: 1 }) + event({ type: "response.output_text.done", output_index: 0 }),
-  ];
-  for (const tail of tails) assert.deepEqual(scan("v1/responses", completed + tail, true), expected);
-  // 收尾时序：完成事件之后才断流（尾部半帧）属于传输残余，不改判用量。
-  assert.deepEqual(scan("responses", completed + `data: {"type":"response.output_text.done","output_index":0`, true), expected);
-  assert.deepEqual(scan("responses", completed + "data: [DONE]\n\n", true), expected);
-});
-
-test("#1252 完成之后仍拒绝新的业务帧、重复完成与未知事件", () => {
-  const completed = event({ type: "response.completed", response });
-  for (const tail of [
-    event({ type: "response.completed", response }),
-    event({ type: "response.output_text.delta", delta: "more" }),
-    event({ type: "response.some_new_event", output_index: 0 }),
-    event({ type: "response.output_item.done" }),
-    event({ type: "response.output_item.done", output_index: "zero" }),
-    event({ type: "response.output_item.done", response: { ...response, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }),
-  ]) assert.equal(scan("responses", completed + tail, true), null, JSON.stringify(tail));
-  // 未完成就断流仍然是不完整响应。
-  assert.equal(scan("responses", event({ type: "response.output_text.delta", delta: "hi" }), true), null);
 });
