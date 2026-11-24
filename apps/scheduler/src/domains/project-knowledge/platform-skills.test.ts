@@ -43,3 +43,22 @@ test("trial injection contains execution guidance but neither grading answers no
   assert.ok(!JSON.stringify(trial).includes("evaluation-cases.json"));
   assert.ok(!JSON.stringify(trial).includes("KNOWLEDGE_SCOPE_DENIED"));
 });
+
+test("#1219 反馈指引与 schema 允许值对齐：不提交 unknown，缺评就是未知", async () => {
+  const { PLATFORM_OPERATION_REGISTRY } = await import("../platform-api/operations.js");
+  // 允许的 outcome 只有这三个；指引里不得出现「提交 unknown」这种会被 schema 拒绝的写法。
+  const allowed = ["success", "failure", "inapplicable"];
+  const record = PLATFORM_OPERATION_REGISTRY.record_knowledge_feedback.description;
+  for (const value of allowed) assert.match(record, new RegExp(value, "u"), value);
+  assert.match(record, /there is no 'unknown' value to submit/u);
+  assert.match(record, /omitting the call is how unknown is recorded/u);
+  // 新名与迁移窗口的旧名别名都要满足同一条反馈口径。
+  for (const operation of ["search_project_knowledge", "read_project_knowledge", "read_project_memory"]) {
+    const text = PLATFORM_OPERATION_REGISTRY[operation].description;
+    assert.doesNotMatch(text, /submit (an )?unknown|outcome unknown/u, operation);
+  }
+  assert.match(PLATFORM_OPERATION_REGISTRY.search_project_knowledge.description, /Searching is not use/u);
+  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_knowledge.description, /do not call the tool/u);
+  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_knowledge.description, /usage_ref/u);
+  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_memory.description, /same post-use rating rule/u);
+});
