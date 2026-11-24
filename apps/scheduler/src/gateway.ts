@@ -1393,9 +1393,10 @@ export function registerGateway(app: FastifyInstance): void {
         // identity only — Job + original token + request id + workload — and two rows claiming
         // that identity are reported as unknown instead of resolved by recency. Admission,
         // budget and replay rules still key off the active Attempt and are unchanged.
-        const receipts = await sql`SELECT e.status, e.settlement_json, l.settlement_status, l.source
+        const receipts = await sql`SELECT e.status, e.settlement_json, l.settlement_status, l.source, e.attempt_id
           FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
           WHERE e.job_id=${jt.job_id}
+          AND e.effect_kind='gateway_model_request'
           AND e.resource_identity_json->>'job_token_id'=${String(jt.id)}
           AND e.intent_json->>'gateway_request_id'=${receiptPath[1]!}
           AND e.intent_json->>'workload'=${String(jt.workload)}
@@ -1409,7 +1410,10 @@ export function registerGateway(app: FastifyInstance): void {
           return noEffect || reply.code(404).send({ status: "not_found" });
         }
         if (receipt.status === "settled" && receipt.settlement_status === "settled") {
-          if (receipt.source === "gateway_error" && receipt.settlement_json?.external_effect === false) {
+          // #1230：只有当前活动 Attempt 自己的 no-start 结算才构成"未开始"证据；
+          // 历史 Attempt 的 gateway_error 记录只回答"已结算"，绝不升级成新的 not_started 证明。
+          const ownActiveAttempt = jt.attempt_id !== null && String(receipt.attempt_id) === String(jt.attempt_id);
+          if (receipt.source === "gateway_error" && receipt.settlement_json?.external_effect === false && ownActiveAttempt) {
             return { status: "not_started", reason: "gateway_transient" };
           }
           return { status: "settled" };

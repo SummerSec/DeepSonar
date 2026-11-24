@@ -239,6 +239,18 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
     const ambiguous = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
       headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
     assert.equal(ambiguous.json().status, "unknown", "duplicate durable identities are never resolved by recency");
+    // #1230 review: a HISTORICAL Attempt's gateway_error settlement answers only "settled".
+    // Only the active Attempt's own no-start settlement may be replayed as not_started proof.
+    await sql`UPDATE job_attempt_effects SET settlement_json = ${sql.json({ result: "never_started", external_effect: false,
+        response_status: "not_started", total_tokens: 0, source: "gateway_error" })}
+      WHERE job_id=${terminalJob.id} AND intent_json->>'gateway_request_id'=${settledId}`;
+    await sql`UPDATE job_usage_ledger SET source='gateway_error', total_tokens=0
+      WHERE job_id=${terminalJob.id} AND effect_id LIKE ${`gateway_model_request:%`}`;
+    const historicalErrorProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,
+      headers: { authorization: `Bearer ${terminalToken.plaintext}` } });
+    assert.equal(historicalErrorProbe.statusCode, 200, historicalErrorProbe.body);
+    assert.deepEqual(historicalErrorProbe.json(), { status: "settled" },
+      "a historical Attempt's gateway_error row never becomes a fresh not_started proof");
     // A token that is no longer usable keeps its existing refusal.
     await sql`UPDATE job_tokens SET status='revoked', revoked_at=now() WHERE id=${terminalToken.id}`;
     const revokedProbe = await app.inject({ method: "GET", url: `/gateway/_settlement/${settledId}`,

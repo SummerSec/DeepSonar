@@ -83,11 +83,13 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
       if (query.startsWith("INSERT INTO job_event_rate_limits") || query.startsWith("UPDATE job_event_rate_limits")) return [];
       if (query.includes("FROM job_event_rate_limits")) return [{ job_id: jobId, window_started_at: new Date(),
         progress_count: 0, standard_count: 0, terminal_count: 0 }];
-      if (query.startsWith("SELECT e.status, e.settlement_json, l.settlement_status, l.source")) {
+      if (query.startsWith("SELECT e.status, e.settlement_json, l.settlement_status, l.source, e.attempt_id")) {
         // #1230: the receipt is located by durable identity (job, original token, request id,
         // workload), so the request id is the third value; two rows for one identity stay
         // visible here because the real query asks for LIMIT 2 to detect that ambiguity.
-        return state.effects.filter((entry) => (entry.intent_json as Row)?.gateway_request_id === values[2]).map((effect) => ({
+        // 生产查询显式限定 effect_kind：workload 只是用途字段，不能替代 effect_kind。
+        return state.effects.filter((entry) => entry.effect_kind === "gateway_model_request"
+          && (entry.intent_json as Row)?.gateway_request_id === values[2]).map((effect) => ({
           ...effect, settlement_status: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.settlement_status,
           source: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.source,
         }));
@@ -525,4 +527,39 @@ test("OM rollback without a persisted no-effect receipt stays a hard unknown for
     assert.deepEqual({ usedRequests: store.usedRequests, effects: store.effects.length, ledger: store.ledger.length },
       { usedRequests: 0, effects: 0, ledger: 0 });
   } finally { boundary.close(); }
+});
+
+test("#1230 历史 Attempt 的 gateway_error 回执只回答已结算，绝不升级成新的 not_started", async (t) => {
+  const fixture = setup(t, "main", "40P01", 0);
+  const requestId = randomUUID();
+  const historicalAttempt = randomUUID();
+  const effectId = `gateway_model_request:${tokenId}:1`;
+  store.effects.push({ attempt_id: historicalAttempt, job_id: jobId, effect_id: effectId,
+    effect_kind: "gateway_model_request", status: "settled",
+    resource_identity_json: { job_token_id: tokenId },
+    intent_json: { gateway_request_id: requestId, workload: "main" },
+    settlement_json: { result: "never_started", external_effect: false, source: "gateway_error" } });
+  store.ledger.push({ attempt_id: historicalAttempt, job_id: jobId, effect_id: effectId,
+    settlement_status: "settled", source: "gateway_error", total_tokens: 0 });
+  const probe = await fixture.inject({ method: "GET", url: `/gateway/_settlement/${requestId}`,
+    headers: { authorization: `Bearer ${token}` } });
+  assert.equal(probe.statusCode, 200, probe.body);
+  assert.deepEqual(probe.json(), { status: "settled" },
+    "only the active Attempt's own no-start settlement may answer not_started");
+});
+
+test("#1230 同用途但不同 effect_kind 的记录不会被当成结算回执", async (t) => {
+  const fixture = setup(t, "main", "40P01", 0);
+  const requestId = randomUUID();
+  const attemptKey = `gateway_model_request:${tokenId}:1`;
+  store.effects.push({ attempt_id: attemptId, job_id: jobId, effect_id: attemptKey, effect_kind: "agent_run",
+    status: "settled", resource_identity_json: { job_token_id: tokenId },
+    intent_json: { gateway_request_id: requestId, workload: "main" },
+    settlement_json: { result: "never_started", external_effect: false, source: "gateway_error" } });
+  store.ledger.push({ attempt_id: attemptId, job_id: jobId, effect_id: attemptKey,
+    settlement_status: "settled", source: "gateway_error", total_tokens: 0 });
+  const probe = await fixture.inject({ method: "GET", url: `/gateway/_settlement/${requestId}`,
+    headers: { authorization: `Bearer ${token}` } });
+  assert.equal(probe.statusCode, 404, probe.body);
+  assert.deepEqual(probe.json(), { status: "not_found" });
 });
