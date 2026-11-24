@@ -371,24 +371,22 @@ export function normalizeKnowledgeRefs(rows: readonly Record<string, unknown>[])
   return refs;
 }
 
-/** #1256：报告里的知识引用段。版本与哈希冻结在写入时，知识被更正后仍能核对原判断。 */
+/**
+ * #1256 复核：报告是「任务只读」也能下载的通用正文，知识目录却要求 projects:read。
+ * 因此这里只写不识别条目的摘要；精确版本引用留在冻结输入里，由有知识权限的页面按需读取。
+ */
 export function renderKnowledgeRefsSection(refs: readonly ReportInputKnowledgeRef[] | undefined): string {
   if (!refs || refs.length === 0) return "";
-  const lines = ["## 本轮读取的项目知识（精确版本）", ""];
-  for (const ref of refs) {
-    const feedback = ref.outcome === null ? "未评价（效果未知）" : ref.outcome;
-    lines.push(`- ${plainRefText(ref.title)} · v${ref.version} · ${plainRefText(ref.kind)} · \`${ref.content_sha256.slice(0, 12)}…\` · 读取 ${ref.reads} 次 · 反馈 ${feedback}`);
-  }
-  lines.push("", "读取不等于采用：只有显式反馈才表示实际应用与效果，没有反馈记为未知。版本与内容哈希是写入时冻结的精确引用，知识后来被修订或下架也不改写本节；受限或已撤权的条目不写入本表。");
+  const versions = refs.length;
+  const rated = refs.filter((ref) => ref.outcome !== null).length;
+  const reads = refs.reduce((total, ref) => total + ref.reads, 0);
+  const lines = [
+    "## 本轮读取的项目知识（摘要）",
+    "",
+    `- 共读取 ${versions} 个知识版本，累计 ${reads} 次；其中 ${rated} 个版本有显式反馈，其余记为未评价（效果未知）。`,
+  ];
+  lines.push("", "读取不等于采用：只有显式反馈才表示实际应用与效果。为不越过知识目录的项目级读取权限，本节只给数量与反馈分布，条目标题、版本 id 与内容哈希不写入通用报告正文；有项目知识权限的成员可在项目知识页按精确版本核对。");
   return lines.join("\n");
-}
-
-/** 报告可信区的标题来自知识条目，必须按纯文本序列化，不能改变 Markdown 结构。 */
-function plainRefText(value: string): string {
-  return value.replace(/\s+/gu, " ").trim()
-    .replaceAll("\\", "\\\\").replaceAll("`", "'").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-    .replaceAll("[", "\\[").replaceAll("]", "\\]")
-    .replace(/(^|\s)([#>*|~-]+)/gu, "$1\\$2");
 }
 
 export async function buildReportInput(canvasId: string, db: typeof sql = sql): Promise<ReportInput> {

@@ -517,13 +517,14 @@ test("#1256 报告冻结本轮使用知识的精确版本，并按版本去重�
   ]);
   assert.deepEqual(refs.map((ref) => `${ref.item_id}@${ref.version}`), ["item-1@2", "item-1@3"]);
   const section = renderKnowledgeRefsSection(refs);
-  assert.match(section, /本轮读取的项目知识（精确版本）/u);
-  assert.match(section, /时区核对 · v2 · memory/u);
-  assert.match(section, /读取 1 次/u);
-  assert.match(section, /反馈 success/u);
-  assert.match(section, /反馈 inapplicable/u);
+  assert.match(section, /本轮读取的项目知识（摘要）/u);
+  assert.match(section, /共读取 2 个知识版本，累计 2 次/u);
+  assert.match(section, /其中 2 个版本有显式反馈/u);
   assert.match(section, /读取不等于采用：只有显式反馈才表示实际应用与效果/u);
-  assert.match(section, /知识后来被修订或下架也不改写本节/u);
+  // 通用正文不能带可识别元数据：标题、条目/版本 id 与哈希都不出现。
+  assert.ok(!section.includes("时区核对"), "标题不得进入正文");
+  assert.ok(!section.includes("item-1") && !section.includes("ver-1"), "条目/版本 id 不得进入正文");
+  assert.ok(!section.includes("a".repeat(64)) && !section.includes("aaaaaaaaaaaa"), "哈希不得进入正文");
   assert.equal(renderKnowledgeRefsSection([]), "");
   assert.equal(renderKnowledgeRefsSection(undefined), "");
   // 上限：最多 50 条，超出截断
@@ -545,18 +546,19 @@ test("#1256 未评价读取不覆盖既有的显式反馈", async () => {
   assert.equal(refs.length, 1);
   assert.equal(refs[0]!.reads, 3);
   assert.equal(refs[0]!.outcome, "success");
-  assert.match(renderKnowledgeRefsSection(refs), /反馈 success/u);
+  assert.match(renderKnowledgeRefsSection(refs), /其中 1 个版本有显式反馈/u);
 });
 
-test("#1256 知识标题按纯文本渲染，不改变 Markdown 结构", async () => {
+test("#1256 知识标题与哈希不进入通用报告正文", async () => {
   const { renderKnowledgeRefsSection } = await import("./report.js");
   const section = renderKnowledgeRefsSection([{
     item_id: "item-1", version_id: "ver-1", kind: "memory",
     title: "[点我](note-a) 与 ![图](shot.png) ## 标题", version: 2,
     content_sha256: "f".repeat(64), reads: 1, outcome: null,
   }]);
-  assert.doesNotMatch(section, /(?<!\\)\[/u, "标题里的方括号必须转义");
-  assert.match(section, /\\\[点我\\\]\(note-a\)/u, "标题按纯文本保留原字符，括号不再构成链接");
+  assert.ok(!section.includes("点我"), "标题不得进入正文");
+  assert.ok(!section.includes("f".repeat(64)) && !section.includes("ffffffffffff"), "哈希不得进入正文");
+  assert.doesNotMatch(section, /(?<!\\)\[/u, "正文里不应出现可构成链接的方括号");
 });
 
 test("#1256 非目标报告把知识引用放在结论之后、审计之前", async () => {
@@ -569,11 +571,11 @@ test("#1256 非目标报告把知识引用放在结论之后、审计之前", as
   const final = finalizeTaskReportMarkdown(input, "too short");
   // 覆盖不足时走默认报告：知识引用仍必须排在审计之前、正文之内。
   const body = final.markdown.indexOf("# 任务报告");
-  const knowledge = final.markdown.indexOf("## 本轮读取的项目知识");
+  const knowledge = final.markdown.indexOf("## 本轮读取的项目知识（摘要）");
   const audit = final.markdown.indexOf("## 目标与缺口");
   assert.ok(body === 0, "默认报告仍是最前");
   assert.ok(body < knowledge && knowledge < audit, `顺序应为 正文→知识→审计，实际 ${body}/${knowledge}/${audit}`);
-  assert.match(final.markdown, /归档日志按请求 ID 查 · v2 · memory/u);
-  assert.match(final.markdown, /未评价（效果未知）/u);
-  assert.match(final.markdown, /读取 3 次/u);
+  assert.match(final.markdown, /共读取 1 个知识版本，累计 3 次/u);
+  assert.match(final.markdown, /其中 0 个版本有显式反馈/u);
+  assert.ok(!final.markdown.includes("归档日志按请求 ID 查"), "标题不得进入通用正文");
 });
