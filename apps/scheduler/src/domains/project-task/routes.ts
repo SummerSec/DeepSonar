@@ -81,6 +81,7 @@ import { taskContractPreflight, taskContractRuntimeBlockers } from "../../task-c
 import type { TargetAuthorizationSnapshot } from "../target-authorization/contract.js";
 import { recordTargetAuthorizationGrant, targetAuthorizationRequired } from "../target-authorization/index.js";
 import { applyPlanObjectivePatch, PlanObjectivePatch, readPersistedPlanObjective } from "../plan-protocol/objective.js";
+import { classifyRetryRetention, retryRetentionGuidance } from "./retry-retention.js";
 
 const CreateProjectBody = z.object({
   name: z.string().min(1),
@@ -428,58 +429,24 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       throw error;
     }
 
-    let canvasId: string;
+    let createdJob: Awaited<ReturnType<typeof createJob>>;
     try {
-      // Canvas creation freezes all task inputs before binding the user objective
-      // with the same CAS rules as PATCH, in the Canvas/root transaction (#887, #1002).
       const creationTarget = {
         title: body.title,
         content: body.content,
         goal: body.content,
-          kind: body.kind,
-          ...(taskContract ? { task_contract: taskContract } : {}),
-          ...(body.seed_finding_ids !== undefined ? { seed_finding_ids: body.seed_finding_ids } : {}),
-          ...(body.finding_protocol ? { finding_protocol: body.finding_protocol } : {}),
-          ...(body.allow_egress !== undefined
-            ? { network_policy: { allow_egress: body.allow_egress } }
-            : {}),
-          ...(body.device !== undefined ? { device_requirement: body.device } : {}),
-          ...(body.runtime_profile !== undefined ? { runtime_profile: body.runtime_profile } : {}),
+        kind: body.kind,
+        ...(taskContract ? { task_contract: taskContract } : {}),
+        ...(body.seed_finding_ids !== undefined ? { seed_finding_ids: body.seed_finding_ids } : {}),
+        ...(body.finding_protocol ? { finding_protocol: body.finding_protocol } : {}),
+        ...(body.allow_egress !== undefined ? { network_policy: { allow_egress: body.allow_egress } } : {}),
+        ...(body.device !== undefined ? { device_requirement: body.device } : {}),
+        ...(body.runtime_profile !== undefined ? { runtime_profile: body.runtime_profile } : {}),
         ...(schedule ? { schedule } : {}),
       } satisfies Record<string, unknown>;
-      canvasId = await ensureCanvasForTask({
-        projectId: id,
-        title: body.title,
-        allowComposeSeeds: true,
-        target: creationTarget,
-        initialPlanObjective: body.plan_objective,
-      });
-    } catch (error) {
-      if (error instanceof ControlInputError) {
-        return reply.code(error.code === "plan_stale_revision" ? 409 : error.retryable ? 422 : 409).send({
-          error: error.message,
-          error_code: error.code,
-          ...(error.path ? { path: error.path } : {}),
-        });
-      }
-      if (
-        error instanceof TaskSeedInputError ||
-        (error instanceof Error && error.message.includes("finding protocol"))
-      ) {
-        return reply.code(400).send({ error: error.message });
-      }
-      throw error;
-    }
-    const frozenSeedIds = body.kind === "compose"
-      ? frozenTaskSeeds(
-          ((await sql`SELECT target_json FROM canvases WHERE id = ${canvasId}`)[0]?.target_json ?? {}) as Record<string, unknown>,
-        ).map((seed) => seed.id)
-      : [];
-    let createdJob = null as Awaited<ReturnType<typeof createJob>> | null;
-    try {
+      // Canvas, root, frozen inputs and initial Job commit together. Admission failures roll everything back.
       createdJob = await createJob({
         projectId: id,
-        canvasId,
         type: "hub_reason",
         runtimeProfile: body.runtime_profile ?? null,
         payload: {
@@ -487,20 +454,38 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           content: body.content,
           goal: body.content,
           trigger: { kind: "user_task" },
-          ...(body.kind === "compose" ? { related_finding_ids: frozenSeedIds } : {}),
           ...(schedule ? { schedule } : {}),
         },
         targetAuthorization,
+      }, {
+        projectId: id,
+        title: body.title,
+        allowComposeSeeds: true,
+        target: creationTarget,
+        initialPlanObjective: body.plan_objective,
       });
     } catch (error) {
-      // 设备需求未授权（项目未 opt-in / Phase 1 之外的 transport）必须建任务时就 fail closed。
       if (error instanceof DeviceNotAuthorizedError) {
         return reply.code(409).send({ error: error.message, error_code: "device_not_authorized" });
+      }
+      if (error instanceof ControlInputError) {
+        return reply.code(error.code === "plan_stale_revision" ? 409 : error.retryable ? 422 : 409).send({
+          error: error.message,
+          error_code: error.code,
+          ...(error.path ? { path: error.path } : {}),
+        });
+      }
+      if (error instanceof TaskSeedInputError || (error instanceof Error && error.message.includes("finding protocol"))) {
+        return reply.code(400).send({ error: error.message });
       }
       throw error;
     }
     const { job, duplicated } = createdJob;
     if (duplicated || !job) return reply.code(409).send({ error: "任务创建冲突" });
+    const canvasId = String(job.canvas_id);
+    const frozenSeedIds = body.kind === "compose"
+      ? frozenTaskSeeds(((await sql`SELECT target_json FROM canvases WHERE id=${canvasId}`)[0]?.target_json ?? {}) as Record<string, unknown>).map(seed => seed.id)
+      : [];
     if (schedule) noteScheduleWakeAt(schedule.start_at);
     await audit(req, {
       action: "task.create",
@@ -1420,11 +1405,17 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         return reply.code(409).send({ error: "该任务仍有活动 Job，请先取消后再重试" });
       }
       if (retryResult.reason === "retained") {
+        // #1236：设备租约历史与知识/治理记录是两种不同的阻塞，给不同错误码与可行动引导。
+        const verdict = classifyRetryRetention(retryResult.retained ?? {});
+        const guidance = verdict.blocked
+          ? retryRetentionGuidance(verdict)
+          : { error: "task records must be retained", next_action: "请先确认这些记录的去向。" };
         return reply.code(409).send({
-          error: "task records must be retained",
+          error: guidance.error,
           error_code: "TASK_DELETE_KNOWLEDGE_RETAINED",
           retained: retryResult.retained ?? {},
-          next_action: "该任务留下了不可删除的治理/审计记录；重试会清空运行数据，因此请先确认这些记录的去向。",
+          ...(verdict.blocked ? { retained_kinds: verdict.kinds, retained_reason: verdict.reason } : {}),
+          next_action: guidance.next_action,
         });
       }
       return reply.code(404).send({ error: "canvas not found" });

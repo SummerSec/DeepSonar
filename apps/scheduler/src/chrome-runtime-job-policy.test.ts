@@ -97,7 +97,9 @@ test("normal createJob validates the frozen canvas policy before insertion", () 
   assert.ok(insert > guard, "createJob must validate before handing off to the Job insertion primitive");
   assert.match(createJob.slice(0, insert), /resolveAgentSnapshotForJob/);
   assert.match(createJob.slice(0, insert), /freezeAgentSnapshotNetworkPolicy[\s\S]*input\.canvasId/);
-  assert.match(coreSource, /export async function createJob\(input: CreateJobInput\)[\s\S]*?sql\.begin\(\(tx\) => createJobInTransaction\(/);
+  assert.match(coreSource, /export async function createJob\(input: CreateJobInput, task\?: EnsureCanvasInput\)[\s\S]*?sql\.begin\(async \(txRaw\)/);
+  assert.match(coreSource, /if \(!task\) return createJobInTransaction\(tx, input\)/);
+  assert.match(coreSource, /await ensureCanvasForTaskInTransaction\(tx,[\s\S]*?return createJobInTransaction\(tx, \{ \.\.\.input, canvasId, payload \}\)/);
   assert.match(jobCreationSource, /export async function persistPreparedJob[\s\S]*?INSERT INTO jobs/);
   assert.equal(createJob.indexOf("assertFrozenRuntimeImageLocal"), -1);
 });
@@ -165,12 +167,15 @@ test("Chrome runtimes raise stall floors without changing the global 900s defaul
 });
 
 test("human task create resolves the hub snapshot before opening a canvas", () => {
-  const createTask = projectTaskSource.slice(projectTaskSource.indexOf('app.post("/projects/:id/tasks"'));
+  const createTask = projectTaskSource.slice(
+    projectTaskSource.indexOf('app.post("/projects/:id/tasks"'),
+    projectTaskSource.indexOf('app.post("/projects/:id/events"'),
+  );
   const resolve = createTask.indexOf("resolveAgentSnapshotForJob");
-  const canvas = createTask.indexOf("ensureCanvasForTask");
-  assert.ok(resolve >= 0 && canvas > resolve, "POST /tasks must resolve the snapshot before ensureCanvasForTask");
-  assert.match(createTask.slice(resolve, canvas), /isSnapshotUnresolvableError/);
-  assert.match(createTask.slice(resolve, canvas), /currentSnapshotUnresolvableBody/);
+  const createJob = createTask.indexOf("await createJob(");
+  assert.ok(resolve >= 0 && createJob > resolve, "POST /tasks must resolve the snapshot before atomic task and Job creation");
+  assert.match(createTask.slice(resolve, createJob), /isSnapshotUnresolvableError/);
+  assert.match(createTask.slice(resolve, createJob), /currentSnapshotUnresolvableBody/);
   assert.equal(createTask.indexOf("assertFrozenRuntimeImageLocal"), -1);
 });
 

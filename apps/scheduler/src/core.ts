@@ -69,7 +69,7 @@ import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
-import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
+import { freezeTaskSeedTarget, frozenTaskSeeds, insertTaskSeedProjections } from "./task-compose.js";
 import { applyPlanObjectivePatch, type PlanObjectivePatch } from "./domains/plan-protocol/objective.js";
 import {
   advancePlanTaskAfterTerminal,
@@ -1007,11 +1007,20 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
   return prepared;
 }
 
-export async function createJob(input: CreateJobInput) {
+export async function createJob(input: CreateJobInput, task?: EnsureCanvasInput) {
   try {
     const job = await withOperationConflictRetry("create_job", () =>
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as Tx.
-      sql.begin((tx) => createJobInTransaction(tx as unknown as Tx, input)));
+      sql.begin(async (txRaw) => {
+        const tx = txRaw as unknown as Tx;
+        if (!task) return createJobInTransaction(tx, input);
+        const canvasId = await ensureCanvasForTaskInTransaction(tx, { ...task, projectId: input.projectId });
+        const [canvas] = await tx`SELECT target_json FROM canvases WHERE id=${canvasId}`;
+        const payload = task.target.kind === "compose"
+          ? { ...input.payload, related_finding_ids: frozenTaskSeeds(canvas.target_json).map(seed => seed.id) }
+          : input.payload;
+        return createJobInTransaction(tx, { ...input, canvasId, payload });
+      }));
     inc("deepsonar_jobs_created_total", { type: input.type });
     const providerModel = job.snapshotWithKnobs && typeof job.snapshotWithKnobs === "object"
       ? (job.snapshotWithKnobs as { provider_model?: { passthrough?: boolean; upstream_model_id?: string | null; cli_model_id?: string | null; catalog_revision?: string | null; model_descriptor?: { health_status?: string } | null } }).provider_model
