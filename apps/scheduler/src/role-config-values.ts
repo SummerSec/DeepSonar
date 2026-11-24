@@ -1,4 +1,4 @@
-import { allowedPlatformTools, requiredPlatformTools } from "@deepsonar/shared-types";
+import { allowedPlatformTools, normalizeLegacyPlatformTools, requiredPlatformTools } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { RoleConfigPutBody } from "./role-config-schema.js";
 import { parseContextWindowTokens } from "./provider-settings.js";
@@ -50,6 +50,9 @@ export function validateRoleConfigValues(
         return { error: `模块 selector 非法（${selector}）: ${error instanceof Error ? error.message : String(error)}` };
       }
     }
+    // #1219 迁移窗口：已保存的旧工具键在保存时归一化成新键（新键优先），
+    // 否则编辑页改一项无关设置就会因为旧键不在白名单而存不下来。
+    body.platform_tools = normalizeLegacyPlatformTools(body.platform_tools) as typeof body.platform_tools;
     const allowedTools = new Set<string>(allowedPlatformTools(role.name, role.kind));
     for (const tool of Object.keys(body.platform_tools)) {
       if (!allowedTools.has(tool)) return { error: `角色 ${role.name} 不支持平台工具: ${tool}` };

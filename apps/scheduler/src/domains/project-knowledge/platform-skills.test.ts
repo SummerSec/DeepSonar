@@ -15,7 +15,7 @@ test("platform discovery cannot be overridden and ordinary Jobs do not receive g
 test("ordinary Jobs receive a bounded reuse pointer while independent and governance Jobs remain isolated", () => {
   const entries = [{ kind: "memory", title: "private title" }, { kind: "skill", title: "private skill title" }];
   const snapshot = { project_knowledge_catalog: { entries, hash: sha256(canonical(entries)) },
-    platform_tools: ["search_project_knowledge", "read_project_memory", "search_skills", "pull_skill"] };
+    platform_tools: ["search_project_knowledge", "read_project_knowledge", "search_skills", "pull_skill"] };
   const hint = projectKnowledgeReuseHint(snapshot, "audit");
   assert.match(hint, /1 条项目 Memory、1 条项目 Skill/);
   assert.match(hint, /usage_ref/);

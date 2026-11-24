@@ -5,7 +5,7 @@ import { isolateKnowledgeConfiguration } from "./job-isolation-config.js";
 
 const baseTools = ["emit_progress", "mark_job_done", "request_human", "read_knowledge_input", "get_knowledge_receipt"];
 const stageTools = {
-  maker: ["search_project_knowledge", "read_project_memory", "search_skills", "list_available_skills", "pull_skill", "propose_project_knowledge"],
+  maker: ["search_project_knowledge", "read_project_knowledge", "search_skills", "list_available_skills", "pull_skill", "propose_project_knowledge"],
   trial: ["publish_shared_asset", "emit_fact"],
   evaluator: ["submit_knowledge_evaluation"],
   reviewer: ["review_project_knowledge"],

@@ -219,7 +219,7 @@ if (!testDatabaseUrl) {
       const [legacyAfterClear] = await sql`
         SELECT runtime_image_key FROM role_configs WHERE id = ${ownRoleConfigId}`;
       assert.equal(legacyAfterClear.runtime_image_key, null);
-      const ownDelete = await inject("DELETE", `/projects/${ownProjectId}/role-configs/${roleId}`);
+const ownDelete = await inject("DELETE", `/projects/${ownProjectId}/role-configs/${roleId}`);
       assert.equal(ownDelete.statusCode, 200, ownDelete.payload);
       const [ownAfterDelete] = await sql`SELECT id FROM role_configs WHERE id = ${ownRoleConfigId}`;
       assert.equal(ownAfterDelete, undefined);
