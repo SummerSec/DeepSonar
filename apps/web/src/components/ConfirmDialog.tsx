@@ -17,6 +17,7 @@ export interface ConfirmDialogOptions {
   confirmLabel?: string;
   cancelLabel?: string;
   tone?: "default" | "danger";
+  signal?: AbortSignal;
 }
 
 type PendingConfirmation = ConfirmDialogOptions & {
@@ -43,15 +44,21 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const confirm = useCallback((options: ConfirmDialogOptions) => new Promise<boolean>((resolve) => {
+    if (options.signal?.aborted) { resolve(false); return; }
     if (pendingRef.current) pendingRef.current.resolve(false);
+    const onAbort = () => { if (pendingRef.current === next) finish(false); };
     const next: PendingConfirmation = {
       ...options,
-      resolve,
+      resolve: value => {
+        options.signal?.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
       returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
     };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
     pendingRef.current = next;
     setPending(next);
-  }), []);
+  }), [finish]);
 
   useEffect(() => {
     if (!pending) return;

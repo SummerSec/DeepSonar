@@ -74,8 +74,8 @@ function retryRetentionMessage(feedback: TaskRetryFeedback): string {
   return `该任务有需要保留的${reason}，无法清空历史重试。${feedback.next_action ?? "请保留原任务。"}可在任务工作台通过「下达任务」按原目标新建任务。`;
 }
 
-export async function requireTaskRetryAllowed(canvasId: string): Promise<void> {
-  const result = await api.taskRetryAvailability(canvasId);
+export async function requireTaskRetryAllowed(canvasId: string, signal?: AbortSignal): Promise<void> {
+  const result = await api.taskRetryAvailability(canvasId, signal);
   if (result.allowed) return;
   throw new Error(result.error_code === "TASK_DELETE_KNOWLEDGE_RETAINED"
     ? retryRetentionMessage(result) : result.error ?? "当前任务无法清空重试。");

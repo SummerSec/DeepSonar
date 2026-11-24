@@ -33,7 +33,8 @@ import { canEditTaskIntent, taskIntentContentFromTarget } from "../task-intent";
 import { CanvasView } from "../CanvasView";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage, type PageProgress } from "../canvas-page-sync";
 import { useConfirmDialog } from "../components/ConfirmDialog";
-import { composeRetryErrorMessage, requireTaskRetryAllowed } from "../composeTaskModel";
+import { composeRetryErrorMessage } from "../composeTaskModel";
+import { useTaskRetry } from "../use-task-retry";
 import { FindingDetailPanel } from "../FindingDetailPanel";
 import { FactEvidenceTable } from "../FactEvidenceTable";
 import { FactDetailPanel } from "../FactDetailPanel";
@@ -130,6 +131,7 @@ export function TaskCanvasPage() {
   const confirm = useConfirmDialog();
   const { me } = useAuth();
   const { projectId, canvasId } = useParams<{ projectId: string; canvasId: string }>();
+  const retryAction = useTaskRetry(`${projectId}:${canvasId}`, confirm);
   const activeCanvasIdRef = useRef<string | null>(canvasId ?? null);
   activeCanvasIdRef.current = canvasId ?? null;
   const taskGenerationRef = useRef({ canvasId, generation: 0 });
@@ -187,7 +189,7 @@ export function TaskCanvasPage() {
   const [convergence, setConvergence] = useState<CanvasConvergence | null>(null);
   const [convergenceBusy, setConvBusy] = useState(false);
   const rerunAction = useJobRerun(`${projectId}:${canvasId}`);
-  const convBusy = convergenceBusy || rerunAction.busy !== null;
+  const convBusy = convergenceBusy || rerunAction.busy !== null || retryAction.busy;
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const paginationRef = useRef<{ jobs: PageProgress | null; facts: PageProgress | null }>({
@@ -636,30 +638,20 @@ export function TaskCanvasPage() {
   const retryTaskHard = async () => {
     if (!canvasId) return;
     try {
-      await requireTaskRetryAllowed(canvasId);
-    } catch (e) {
-      flash(composeRetryErrorMessage(e), "error");
-      return;
-    }
-    const ok = await confirm({
-      title: "清空历史并重新执行？",
-      description: meta?.target_json?.kind === "compose"
-        ? "将清空本画布的运行数据，并按冻结种子重新投影后执行。项目历史 Finding 库存不会删除；若种子已失效，系统会拒绝重试。"
-        : "将删除本任务的全部运行历史（Job、画布节点、本轮 Finding、报告），并按原意图从零重新执行。此操作不可撤销。",
-      confirmLabel: "清空并重试",
-      tone: "danger",
-    });
-    if (!ok) return;
-    setConvBusy(true);
-    setMoreOpen(false);
-    try {
-      await api.retryTask(canvasId);
+      const ok = await retryAction.run(canvasId, {
+        title: `清空「${meta?.title ?? canvasId}」的历史并重新执行？`,
+        description: meta?.target_json?.kind === "compose"
+          ? "将清空本画布的运行数据，并按冻结种子重新投影后执行。项目历史 Finding 库存不会删除；若种子已失效，系统会拒绝重试。"
+          : "将删除本任务的全部运行历史（Job、画布节点、本轮 Finding、报告），并按原意图从零重新执行。此操作不可撤销。",
+        confirmLabel: "清空并重试",
+        tone: "danger",
+      });
+      if (!ok) return;
+      setMoreOpen(false);
       flash("已清空历史并重新开始执行");
       setScopeOpen(false);
     } catch (e) {
       flash(composeRetryErrorMessage(e), "error");
-    } finally {
-      setConvBusy(false);
     }
   };
 

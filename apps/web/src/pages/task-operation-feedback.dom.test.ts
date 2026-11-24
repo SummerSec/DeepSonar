@@ -26,7 +26,7 @@ const canvas: CanvasSummary = {
   last_job_status: null, last_job_priority: null, last_job_at: null,
 };
 
-async function setup(context: TestContext, projects: Project[] = [], task: CanvasSummary = canvas) {
+async function setup(context: TestContext, projects: Project[] = [], task: CanvasSummary | CanvasSummary[] = canvas) {
   const dom = new JSDOM("<!doctype html><div id='page'></div><div id='toasts'></div>", { url: "http://127.0.0.1", pretendToBeVisual: true });
   const replacements = {
     window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
@@ -43,7 +43,7 @@ async function setup(context: TestContext, projects: Project[] = [], task: Canva
   context.mock.method(dom.window, "clearInterval", () => {});
   context.mock.method(api, "projects", async () => projects);
   context.mock.method(api, "authStatus", async () => ({ auth_required: true, has_users: true, bootstrap_available: false, default_admin_credentials_active: false, session_ttl_days: 1 }));
-  context.mock.method(api, "canvases", async () => [{ ...task }]);
+  context.mock.method(api, "canvases", async () => (Array.isArray(task) ? task : [task]).map(item => ({ ...item })));
   const { createRoot } = await import("react-dom/client");
   const { TasksPage } = await import("./TasksPage");
   const container = dom.window.document.getElementById("page")!;
@@ -120,6 +120,72 @@ test("task retry handles a new retention conflict after the user confirms", asyn
   assert.ok(dialog);
   await env.click("清空并重试", dialog);
   assert.match(env.container.querySelector('[role="alert"]')?.textContent ?? "", /设备使用历史.*下达任务/);
+});
+
+test("list retry ignores an earlier response and confirms only the latest task identity", async context => {
+  const tasks = ["task-a", "task-b"].map(id => ({ ...canvas, id, title: id, active_count: 0, execution_active_count: 0 }));
+  const env = await setup(context, [], tasks);
+  const first = deferred<Awaited<ReturnType<typeof api.taskRetryAvailability>>>();
+  const second = deferred<Awaited<ReturnType<typeof api.taskRetryAvailability>>>();
+  const signals: AbortSignal[] = [];
+  context.mock.method(api, "taskRetryAvailability", (id: string, signal?: AbortSignal) => {
+    assert.ok(signal);
+    signals.push(signal);
+    return id === "task-a" ? first.promise : second.promise;
+  });
+  const retried: string[] = [];
+  context.mock.method(api, "retryTask", async (id: string) => { retried.push(id); return { id, status: "pending" }; });
+  const buttons = [...env.container.querySelectorAll<HTMLButtonElement>("button")].filter(node => node.textContent?.trim() === "重试");
+  assert.equal(buttons.length, 2);
+  await act(async () => buttons[0].click());
+  await act(async () => buttons[1].click());
+  assert.equal(signals[0].aborted, true);
+  await act(async () => second.resolve({ allowed: true }));
+  const dialog = env.dom.window.document.querySelector('[role="alertdialog"]');
+  assert.ok(dialog);
+  assert.match(dialog.textContent ?? "", /任务编号 task-b/);
+  await act(async () => first.resolve({ allowed: true }));
+  assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), dialog);
+  assert.doesNotMatch(dialog.textContent ?? "", /task-a/);
+  await env.click("清空并重试", dialog);
+  assert.deepEqual(retried, ["task-b"]);
+});
+
+for (const boundary of ["unmount", "project change"] as const) {
+  test(`list retry drops late checks and closes pending confirmation after ${boundary}`, async context => {
+    const env = await setup(context, [], { ...canvas, active_count: 0, execution_active_count: 0 });
+    const first = deferred<Awaited<ReturnType<typeof api.taskRetryAvailability>>>();
+    context.mock.method(api, "taskRetryAvailability", () => first.promise);
+    let retried = 0;
+    context.mock.method(api, "retryTask", async () => { retried++; return { id: canvas.id, status: "pending" }; });
+    await env.click("重试");
+    if (boundary === "unmount") env.unmountPage();
+    else await env.switchProject();
+    await act(async () => first.resolve({ allowed: true }));
+    assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null);
+    assert.equal(retried, 0);
+    if (boundary === "project change") {
+      await env.click("重试");
+      assert.ok(env.dom.window.document.querySelector('[role="alertdialog"]'));
+      env.unmountPage();
+      assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null);
+      assert.equal(retried, 0);
+    }
+  });
+}
+
+test("a newer list retry dismisses the previous task confirmation before its check returns", async context => {
+  const tasks = ["task-a", "task-b"].map(id => ({ ...canvas, id, title: id, active_count: 0, execution_active_count: 0 }));
+  const env = await setup(context, [], tasks);
+  const second = deferred<Awaited<ReturnType<typeof api.taskRetryAvailability>>>();
+  context.mock.method(api, "taskRetryAvailability", (id: string) => id === "task-a" ? Promise.resolve({ allowed: true }) : second.promise);
+  const buttons = [...env.container.querySelectorAll<HTMLButtonElement>("button")].filter(node => node.textContent?.trim() === "重试");
+  await act(async () => buttons[0].click());
+  assert.match(env.dom.window.document.querySelector('[role="alertdialog"]')?.textContent ?? "", /task-a/);
+  await act(async () => buttons[1].click());
+  assert.equal(env.dom.window.document.querySelector('[role="alertdialog"]'), null);
+  await act(async () => second.resolve({ allowed: true }));
+  assert.match(env.dom.window.document.querySelector('[role="alertdialog"]')?.textContent ?? "", /任务编号 task-b/);
 });
 
 for (const operation of ["archive", "pause"] as const) {

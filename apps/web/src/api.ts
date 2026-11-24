@@ -2402,7 +2402,7 @@ export const api = {
     send<TaskExecutionControlResult>("POST", `/tasks/${canvasId}/start`),
   /** 重试任务：清空本画布历史后从意图重新执行 */
   retryTask: (canvasId: string) => send<{ id: string; status: string }>("POST", `/tasks/${canvasId}/retry`),
-  taskRetryAvailability: (canvasId: string) => get<ApiErrorBody & { allowed: boolean }>(`/tasks/${canvasId}/retry-availability`),
+  taskRetryAvailability: (canvasId: string, signal?: AbortSignal) => get<ApiErrorBody & { allowed: boolean }>(`/tasks/${canvasId}/retry-availability`, signal),
   /** 归档任务（软删除，历史保留） */
   archiveTask: (canvasId: string) =>
     send<{ id: string; status: string; archived_at: string | null; cancelled_jobs: number }>(
