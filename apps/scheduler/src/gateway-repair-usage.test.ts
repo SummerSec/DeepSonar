@@ -230,3 +230,32 @@ test("#1082 diagnostics contain only fixed shapes, bounded counts and a non-cont
   assert.equal(long.events.ping, 4000);
   assert.ok(Buffer.byteLength(JSON.stringify(long)) <= 2048);
 });
+
+test("#1252 Responses 完成事件之后的表层尾帧不再作废已观察到的最终用量", () => {
+  const completed = event({ type: "response.completed", response });
+  const expected = scan("responses", response);
+  const tails = [
+    event({ type: "response.output_item.done", output_index: 0, item: { type: "message" } }),
+    event({ type: "response.content_part.done", output_index: 0, content_index: 0, part: { type: "output_text", text: "ok" } }),
+    event({ type: "response.output_text.done", output_index: 0, content_index: 0, text: "ok" }),
+    event({ type: "response.output_item.done", output_index: 1 }) + event({ type: "response.output_text.done", output_index: 0 }),
+  ];
+  for (const tail of tails) assert.deepEqual(scan("v1/responses", completed + tail, true), expected);
+  // 收尾时序：完成事件之后才断流（尾部半帧）属于传输残余，不改判用量。
+  assert.deepEqual(scan("responses", completed + `data: {"type":"response.output_text.done","output_index":0`, true), expected);
+  assert.deepEqual(scan("responses", completed + "data: [DONE]\n\n", true), expected);
+});
+
+test("#1252 完成之后仍拒绝新的业务帧、重复完成与未知事件", () => {
+  const completed = event({ type: "response.completed", response });
+  for (const tail of [
+    event({ type: "response.completed", response }),
+    event({ type: "response.output_text.delta", delta: "more" }),
+    event({ type: "response.some_new_event", output_index: 0 }),
+    event({ type: "response.output_item.done" }),
+    event({ type: "response.output_item.done", output_index: "zero" }),
+    event({ type: "response.output_item.done", response: { ...response, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }),
+  ]) assert.equal(scan("responses", completed + tail, true), null, JSON.stringify(tail));
+  // 未完成就断流仍然是不完整响应。
+  assert.equal(scan("responses", event({ type: "response.output_text.delta", delta: "hi" }), true), null);
+});

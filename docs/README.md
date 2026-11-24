@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+网关用量扫描器只放行 Responses 完成后的表层收尾帧（#1252）：`response.completed` 之后的 `output_item.done` / `content_part.done` / `output_text.done` 与 `[DONE]` 不再把已观察到的合法用量整条作废，业务帧、重复完成和未知事件仍然拒收，未完成断流仍记 `truncated`。详见 [模型网关透明度](MODEL_GATEWAY_TRANSPARENCY.md#responses-完成后的表层尾帧12522026-11-24)。
+
 #1182 的[提问前资源核对](HUMAN_CONTINUATION.md#提问前核对已授权资源1182)复用当前 Control API、冻结资产路径和有界 Canvas 查询，补齐静态/动态指导与可控 Agent 回归。晚回复和恢复的已有覆盖见同专题，最终候选 Actions 另验，真实模型判断和收益未验证。
 #1211 的[任务设备入口](DEVICE_ACCESS.md#1-现状代码事实)支持显式 adb/hdc 需求与匹配角色，沿用现有项目和网络授权。任务工作台、快捷创建及正常 HTTP 到 broker grant 回归接既有 Actions，最终候选结果另验。
 #1223 的[断点凭据来源](HUMAN_CONTINUATION.md#断点凭据候选的来源1223)按现有输出额度字段的精确路径与类型识别普通配置，文件和原生历史共用短凭据保护。合成回归接既有 Actions，历史现场的具体命中来源仍未确认。

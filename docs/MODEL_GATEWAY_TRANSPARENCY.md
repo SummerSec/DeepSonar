@@ -221,3 +221,14 @@ Claude start/resume 先读取 `CLAUDE_CONFIG_DIR/settings.json`（未配置目�
 `PostToolUseFailure` 官方契约不允许改写 error，失败工具继续由本地请求守卫 fail closed。钩子输入或声明凭据不合法时仅输出固定失败码，后续漏网请求同样拒绝；不把该拒绝冒充脱敏成功。成功投影只改变送入模型的工具输出，不证明工具执行前的 telemetry、analytics、CLI 原始本地历史或文件已清除。该本地拒绝不会调用 Gateway，故没有对应 Gateway 接受回执、用量或 gateway.credential_denied 条目；运行失败沿原 Evidence/Dispatcher 分类记录。认证、工具 ID 和已形成请求不重写，干净请求按原字节传输。所有新增回归尚未执行，工程验收仍待最终 SHA Actions。
 
 保证仅覆盖当前 Job 已知 token 在普通文本中的上述具体出口。任意编码、分片、二进制/图像、工具直接联网或同 UID 对执行代码的修改不由这轮证明；既有网络、原字节 Gateway 守卫及权限仍独立约束。长期 Provider key 不进入沙箱，当前短期 token 的文件化不构成身份隔离。
+
+## Responses 完成后的表层尾帧（#1252，2026-11-24）
+
+OpenAI Responses 流在 `response.completed` 之后可能继续下发表层收尾帧（`response.output_item.done`、`response.content_part.done`、`response.output_text.done`），部分客户端还会补发 `[DONE]` 结束标记。这些帧都不含 `response` 对象，因此不可能携带用量；此前 scanner 在完成事件之后一律按 `invalid_sequence` 拒收，等于把已经取得的合法最终用量整条作废，结算侧只能记为未知。
+
+现在的规则：
+
+- 完成事件之后只接受上述三种、且带整数 `output_index`、不含 `response` 字段的表层尾帧，以及 `[DONE]` 结束标记；
+- 任何业务帧（如 `response.output_text.delta`）、重复的 `response.completed`、未知事件类型、携带 `response` 的帧仍然拒绝，不会因为放宽尾部而接受第二份用量；
+- 完成事件之后、流结束之前的残留字节（例如客户端先关连接留下的半帧）按传输收尾处理，不改判已观察到的用量；未完成就断流仍然记为 `truncated`；
+- 用量回归、缺失、非法字段的判定完全不变。
