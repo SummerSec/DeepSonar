@@ -79,6 +79,22 @@ test("#1250 有计划审计时先给摘要，原始投影下沉到详细数据",
   assert.match(renderPlanGapDetail({ v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: false, limit: 32 }), /```json/);
 });
 
+test("#1251 冻结快照里的内联链接与图片按纯文本渲染", async () => {
+  const { renderPlanGapReport, projectPlanGaps } = await import("./domains/plan-protocol/gap-projection.js");
+  const { PlanAuditRecord } = await import("@deepsonar/shared-types");
+  const audit = PlanAuditRecord.parse({ v: 1, source: "submit_plan", raw: {
+    v: 1, goal: "阅读 [文档](note-a) 与 ![图](shot-b.png) 后核对",
+    assumptions: [], tasks: [{ id: "read", title: "阅读外部文档并核对边界条件", role: "test", description: "阅读并核对已授权文档的边界条款",
+      prompt: "阅读已授权文档并核对边界条件，保留原始链接与截图来源记录，供后续独立复核使用。", from: [], depends_on: [], inputs: [],
+      expected_outputs: ["notes"] }],
+    completion: { mode: "explicit_result", description: "核对记录已保留并可供复核", required_outputs: ["notes"] },
+    budget: { max_tasks: 2 }, open_questions: [] }, trimmed: null, trim_reasons: [], result: null,
+    termination_reason: null, updated_at: "2026-11-24T00:00:00.000Z" });
+  const rendered = renderPlanGapReport({ v: 1, scope: "canvas_plan_audits", entries: [projectPlanGaps("job-link", { plan_protocol: audit })], truncated: false, limit: 32 });
+  assert.ok(rendered.includes("\\[文档\\](note-a)"), "内联链接的方括号必须转义");
+  assert.ok(rendered.includes("!\\[图\\](shot-b.png)"), "图片语法同样必须转义");
+});
+
 test("#1251 可信区块整体前置：结果 → 审计摘要 → 原始投影 → 不可信正文", () => {
   const entry = projectPlanGaps("job", { plan_protocol: audit });
   const report = { v: 1 as const, scope: "canvas_plan_audits" as const, entries: [entry], truncated: false, limit: 32 };

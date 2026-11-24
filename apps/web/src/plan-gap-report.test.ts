@@ -21,6 +21,23 @@ for (const tail of ["<!--", "```", "````json", "~~~html", "<script>", "<div hidd
   });
 }
 
+test("#1251 冻结快照里的内联链接与图片在页面上不生成链接或图片", async () => {
+  const audit = { v: 1 as const, source: "submit_plan", trim_reasons: [], result: null, termination_reason: null,
+    updated_at: "2026-11-24T00:00:00.000Z", trimmed: null,
+    raw: { v: 1 as const, goal: "阅读 [文档](note-a) 与 ![图](shot-b.png) 后核对边界", assumptions: [],
+      tasks: [{ id: "read", title: "阅读外部文档并核对边界条件", role: "test", description: "阅读并核对已授权文档的边界条款",
+        prompt: "阅读已授权文档并核对边界条件，保留原始链接与截图来源记录，供后续独立复核使用。", from: [], depends_on: [], inputs: [],
+        expected_outputs: ["notes"] }],
+      completion: { mode: "explicit_result" as const, description: "核对记录已保留并可供复核", required_outputs: ["notes"] },
+      budget: { max_tasks: 2 }, open_questions: [] } };
+  const markdown = withPlanGapReport({ trusted: "## 结论\n\n任务已按计划完成初检。" },
+    { v: 1, scope: "canvas_plan_audits", entries: [projectPlanGaps("job-link", { plan_protocol: audit as never })], truncated: false, limit: 32 });
+  const html = renderToStaticMarkup(createElement(MarkdownView, { markdown, controls: false }));
+  assert.doesNotMatch(html, /<a\s[^>]*href=/iu, "冻结快照里的链接不能变成真实链接");
+  assert.doesNotMatch(html, /<img\s/iu, "冻结快照里的图片语法不能变成图片");
+  assert.match(html, /文档/u, "正文语义仍要可读");
+});
+
 test("#1251 有审计数据时页面与下载同一份 Markdown：结论在前、原始投影在文末", () => {
   const v1Plan = {
     v: 1, goal: "Read the historical authentication boundary", assumptions: [],

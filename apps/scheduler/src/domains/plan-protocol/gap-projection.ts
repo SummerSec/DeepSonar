@@ -60,6 +60,8 @@ export interface PlanGapReport {
 function plainText(value: string): string {
   return value.replace(/\s+/gu, " ").trim()
     .replaceAll("`", "'").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    // 冻结快照里的内联链接/图片语法不能变成真实链接，方括号一律转义。
+    .replaceAll("[", "\\[").replaceAll("]", "\\]")
     .replace(/(^|\s)([#>*|~-]+)/gu, "$1\\$2");
 }
 

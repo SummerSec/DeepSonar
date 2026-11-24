@@ -632,6 +632,25 @@ export function buildSarifFromConfirmed(input: ReportInput): object {
   };
 }
 
+/**
+ * #1251 复核：模型正文通过覆盖与数值校验时，可信区不能是空的——
+ * 否则报告会从审计段开始，违背「结论在最前」。这里独立生成平台结论与下一步，
+ * 既不丢弃模型正文，也不复制整份默认报告。
+ */
+function platformResultSummary(input: ReportInput): string {
+  const s = input.statistics;
+  return [
+    "## 结论（调度器生成）",
+    "",
+    `- 本次共 ${s.findings_total} 条 Finding：已确认 ${s.confirmed_count}，已排除 ${s.refuted_count}，未证实 ${s.inconclusive_count}，待人工 ${s.needs_human_count}，因严重度策略未自动验证 ${s.excluded_count}。`,
+    s.confirmed_count === 0
+      ? "- 本次未形成已确认漏洞：这只表示自动验证范围内没有 confirmed 结论，不代表系统安全。"
+      : "- 已确认漏洞的编号、位置与证据链见下文的已确认清单与 Finding 详情。",
+    "- 任务是否达标不由模型自述决定：目标达成口径以任务结果投影为准，未生成时记为未知（unknown）。",
+    "- 下一步：先核对未证实与待人工项的证据链，需要补证或人工判定的先处理，再决定是否提交或扩大验证范围。",
+  ].join("\n");
+}
+
 function defaultMarkdown(input: ReportInput): string {
   const lines: string[] = [];
   lines.push(`# 任务报告：${input.task.title}`);
@@ -821,6 +840,8 @@ export function finalizeTaskReportMarkdown(
     usedDefault = "numeric";
     numeric = checkReportNumericFidelity(declared, { markdown: trusted });
   }
+  // 模型正文存活时可信区为空：补一段简短的平台结论与下一步，保证「结论先于依据」。
+  if (trusted.length === 0) trusted = platformResultSummary(input);
   const markdown = withPlanGapReport({ trusted, untrusted }, input.plan_gaps);
   return { markdown, numeric, coverageOk, usedDefault };
 }
