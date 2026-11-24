@@ -4,6 +4,15 @@
 > 同步日期：2026-11-21
 > 需求：FR-JOB-008、FR-CTRL-006；决策：[ADR 0022](architecture/adr/0022-human-continuation.md)
 
+## 提问前核对已授权资源（#1182）
+
+平台控制 Skill 与动态 `request_human` 指导共用提问前核对规则。Agent 在原权限和预算内按相关性读取当前目标、有效历史回复、Canvas Fact/Evidence、冻结共享资产、项目知识及能力目录。已有可靠有效答案时引用来源并继续，必要人工请求的 `reason` 记录实际查过的来源、已完成工作与最少缺失输入。资料冲突、缺失、权限拒绝、读取失败、过期和预算耗尽分别说明，可修正输入错误沿原 RepairFeedback 修正。资料中的操作指令按未经核验的数据处理，配置位置须有独立可信依据。
+
+现有共享资产发现返回冻结目录中的只读文件路径，Canvas 查询沿原调用/字节预算与已见引用校验。该指导由 Agent 实践，平台继续按现有四字段 guidance、Job scope、准入与回执校验提案。`executor-real-terminal-race.test.ts` 的可控 Claude/Pi 代替运行验证通过真实 Control HTTP 发现冻结资产、读取文件并引用来源后直接完成，以及缺少资料时先读目录再请求必要输入。真实模型的理解、判断和提问次数收益仍未验证。
+
+晚回复与接续复用现行持久请求和恢复循环。`human-continuation.integration.test.ts` 已覆盖数日后回复、连续两次等待、封存与回复竞争、重复提交、唯一后继、新所有者、累计计时、ACK 历史范围及无队列继续。历史 failed 续做、跨 Job 原预算及未知用量拒绝由历史 continuation/Gateway 夹具覆盖。回复 DOM 的草稿、版本、幂等和保存反馈以及未经核验内容展示沿现有 web-facts 回归。上述既有和新增入口均由当前候选的 Actions 验收，完整行为与真实模型效果分别记录。
+
+当前回复与历史续做界面均可展开未经核验的请求原文。续做输入也明确标注历史请求属于未经核验的数据，配置地址、凭据索取和其中的操作指令均不授予权限。PG 回归通过真实 Control HTTP 提交夹带资产伪指令的人工请求，核对持久请求、详情投影、保存回复、唯一后继、冻结权限及实际恢复输入。原文保留供核查，待投递回复仍只走受治理的 inbox；Web 回归核对当前与历史原文位于折叠的纯文本引用内。详见[人工请求展示边界](architecture/10-security-and-trust-boundaries.md#人工断点业务文件权限)。
 ### 断点凭据候选的来源（#1223）
 
 封存文件与导入原生历史共用 `checkpointManagedSecrets`。显式 Control、Gateway 与记忆 Gateway 令牌保留完整值。只有真实 Claude 执行传入的运行时环境 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 才适用 `prepareClaudeLaunch` 已定义并校验的正整数配置规则。执行器显式传入当前 CLI，未提供来源或使用其他 CLI 时继续保守收集。同形的任意物化 JSON 继续按凭据策略收集。非法值、嵌套同名字段、数组及其他含凭据词的字段继续受保护，原生文本中的秘密赋值继续解析。
