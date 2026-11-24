@@ -74,3 +74,16 @@ test("无冻结契约时按宿主前置条件拒绝，而不是要求 Agent 改�
     return true;
   });
 });
+
+test("存在但无效的冻结契约与正常省略分别拒绝", async () => {
+  const { db } = fixture();
+  for (const value of [null, {}, { ...contract, schema_version: 99 }]) {
+    await assert.rejects(prepareTaskResult(db, { ...job, agent_snapshot_json: { task_contract: value } }, id(3), "event", proposal), (error: unknown) => {
+      assert.ok(error instanceof ControlInputError);
+      assert.equal(error.code, "task_result_contract_invalid");
+      assert.equal(error.retryable, false);
+      assert.doesNotMatch(error.message, /没有 task_contract/);
+      return true;
+    });
+  }
+});

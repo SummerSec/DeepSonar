@@ -236,8 +236,11 @@ Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过
 | --- | --- | --- | --- | --- |
 | 快照带冻结契约 | 相关交付/阴性结果走 `artifact.task_result` | 契约内校验失败 | `model_correctable` | 按 `expected` 修正 |
 | 快照无冻结契约 | 明确不支持 `artifact.task_result`，改用普通 Fact 记录有界结果 | `task_result_contract_missing`（409） | `permanent_failure` | 停止提交 task_result，改用普通 Fact 并按完成协议收口 |
+| 快照存在无效冻结契约 | 记录当前契约不可用的阻塞 | `task_result_contract_invalid`（409） | `permanent_failure` | 由创建方核对当前契约并创建有效新任务，保留本次事实与历史 |
 
 `task_result_contract_missing` 不进入 Agent 可修复集合，反馈不携带 `expected`，也不给出「改 payload / 换 Idempotency-Key」这类在宿主冻结面上不可能成功的下一步。契约存在时的严格校验、证据绑定、预算、权限与不可变历史不变。
+
+正常省略契约和已经冻结但不符合当前 TaskContract 的数据分别返回上述永久前置条件码。正常创建、冻结快照、生产工具说明、实际 Control HTTP、执行器的拒绝转换和事件入账由 `task-result-review.integration.test.ts` 联合验证。无契约 Job 的任务声明拒绝后仍可保存普通 Fact 并通过原完成回执，目标评审保持 `not_assessed`；合法契约的声明仍绑定原始证据，摘要不匹配继续拒绝。现有无效契约的历史样本仅在隔离测试库构造。最终候选 Actions 另验。
 
 ## Pi RPC 完整归档回读（#990 切片）
 

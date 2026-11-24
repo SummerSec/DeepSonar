@@ -21,9 +21,15 @@ export async function prepareTaskResult(db: typeof sql, job: Record<string, unkn
   if (!attemptId || !eventId) return denied("task_result_execution_identity_missing");
   if (job.status !== "running" || typeof job.project_id !== "string" || typeof job.canvas_id !== "string") return denied("task_result_job_not_running_or_scoped");
   const proposal = normalizeTaskResultProposal(raw);
+  const snapshot = object(job.agent_snapshot_json);
+  if (!Object.hasOwn(snapshot, "task_contract")) return contractMissing();
   let contract;
-  try { contract = normalizeTaskContract(object(job.agent_snapshot_json).task_contract); }
-  catch { return contractMissing(); }
+  try { contract = normalizeTaskContract(snapshot.task_contract); }
+  catch {
+    throw new ControlInputError(CONTROL_INPUT_ERROR_CODES.taskResultContractInvalid,
+      "本 Job 已冻结的 task_contract 不符合当前契约，当前 Agent 无权修改历史快照。停止提交任务声明，由任务创建方核对当前契约并创建有效的新任务。",
+      "artifact.task_result", { task_result: { code: "task_result_contract_invalid" } });
+  }
   if (taskContractDigest(contract) !== proposal.task_contract_sha256) denied("task_result_contract_mismatch");
   const contractIssues = taskResultContractIssues(contract, proposal);
   if (contractIssues.length) denied(contractIssues[0]);

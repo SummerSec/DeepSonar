@@ -105,6 +105,103 @@ if (!databaseUrl) {
             actual: "Independent scoped matrix completed", rationale: "The retained output covers the entire assigned criterion", limitations: [], evidence_refs: [evidence.factId] })) } });
         await finish(reviewer); return { ...reviewer, evidence };
       };
+      await t.test("normal creation and Control HTTP distinguish omitted, invalid and valid frozen task contracts", async () => {
+        const control = await import("./domains/platform-api/index.js");
+        const { ControlInputError } = await import("./control-input.js");
+        const { controlInputRuntimeRejection, ingestFactSemanticEvent } = await import("./executor-real.js");
+        const { platformToolGuide } = await import("./platform-tools.js");
+        const projectId = randomUUID();
+        await sql`INSERT INTO projects(id,name,config_json) VALUES(${projectId},'contract HTTP fixture',
+          ${sql.json({ rules: { hubEnabled: false }, enabled_credential_ids: [] })})`;
+        const token = generateToken();
+        await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
+          VALUES('contract creator',${projectId},${token.prefix},${token.hash},${["tasks:write", "tasks:read", "jobs:control"]})`;
+        const headers = { authorization: `Bearer ${token.plaintext}` };
+        for (const withContract of [false, true]) {
+          const created = await app.inject({ method: "POST", url: "/jobs", headers, payload: {
+            project_id: projectId, type: "audit", payload: { prompt: "Record a bounded parser investigation with its limitations.",
+              ...(withContract ? { task_contract: contract } : {}) },
+          } });
+          assert.equal(created.statusCode, 201, created.body);
+          const job = await start(String(created.json().id), projectId, String(created.json().canvas_id));
+          await sql`UPDATE jobs SET started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${job.jobId}`;
+          const [frozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${job.jobId}`;
+          assert.equal(Object.hasOwn(frozen.agent_snapshot_json, "task_contract"), withContract);
+          if (withContract) assert.deepEqual(frozen.agent_snapshot_json.task_contract, contract);
+          const guide = platformToolGuide(frozen.agent_snapshot_json.platform_tools);
+          assert.match(guide, /仅当本 Job 的冻结快照带 task_contract/);
+          assert.match(guide, /普通 Fact 记录有界结果并按完成协议收口/);
+          const grant = await control.mintJobCapabilityToken(job.jobId);
+          let completed = false;
+          control.registerRuntimeHandler(job.jobId, async context => {
+            if (context.completionPhase === "prepare") return { completion_prepared: true };
+            if (context.completionPhase === "commit") { completed = true; return {}; }
+            if (context.completionPhase === "abort") return {};
+            try {
+              await ingestFactSemanticEvent({ v: 1, event_id: context.eventId, type: "fact", payload: context.input }, null,
+                event => ingestEvent(job.jobId, event));
+              return { accepted: true };
+            } catch (error) {
+              if (error instanceof ControlInputError) throw controlInputRuntimeRejection(error);
+              throw error;
+            }
+          }, ["emit_fact", "mark_job_done"]);
+          const post = (operation: string, payload: unknown) => app.inject({ method: "POST",
+            url: `/control/v1/jobs/${job.jobId}/operations/${operation}`, payload,
+            headers: { authorization: `Bearer ${grant.token}`, "idempotency-key": randomUUID(), "x-deepsonar-proposal-revision": "0" },
+          });
+          const declare = (proposal: TaskResultProposal) => post("emit_fact", { title: "Bounded parser result",
+            description: "The scoped parser result records its evidence, method and limitations for independent review.", artifact: { task_result: proposal } });
+          try {
+            const evidence = await proof(job);
+            const proposal: TaskResultProposal = { schema_version: 1, kind: "delivery", task_contract_sha256: hash,
+              target: "fixture-parser", criterion_ids: criterionIds, method: "Execute the scoped parser matrix",
+              observed: "The declared parser matrix completed with retained raw output", limitations: [], evidence_refs: [evidence.factId] };
+            const before = await sql`SELECT id FROM artifacts WHERE job_id=${job.jobId}`;
+            const result = await declare(proposal);
+            if (withContract) {
+              assert.equal(result.statusCode, 200, result.body);
+              const [saved] = await sql`SELECT extensions_json FROM artifacts WHERE job_id=${job.jobId} AND kind='task.result'`;
+              assert.deepEqual(saved.extensions_json.task_result.proposal, proposal);
+              assert.equal(saved.extensions_json.task_result.evidence_bindings[0].fact_id, evidence.factId);
+              const mismatch = await declare({ ...proposal, task_contract_sha256: `sha256:${"b".repeat(64)}` });
+              assert.equal(mismatch.statusCode, 422, mismatch.body);
+              assert.equal(mismatch.json().details.task_result.code, "task_result_contract_mismatch");
+              // Only synthetic historical data is modified to cover an unsupported frozen contract.
+              await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{task_contract}',${sql.json({ schema_version: 99 })}) WHERE id=${job.jobId}`;
+              const invalidGrant = await control.mintJobCapabilityToken(job.jobId);
+              const invalid = await app.inject({ method: "POST", url: `/control/v1/jobs/${job.jobId}/operations/emit_fact`,
+                headers: { authorization: `Bearer ${invalidGrant.token}`, "idempotency-key": randomUUID() },
+                payload: { title: "Invalid frozen contract", description: "A malformed frozen contract cannot be repaired by changing an Agent proposal.", artifact: { task_result: proposal } } });
+              assert.equal(invalid.statusCode, 409, invalid.body);
+              assert.equal(invalid.json().error_code, "task_result_contract_invalid");
+              assert.equal(invalid.json().repair.category, "permanent_failure");
+              assert.match(invalid.json().repair.next_action, /任务创建方/);
+            } else {
+              assert.equal(result.statusCode, 409, result.body);
+              assert.equal(result.json().error_code, "task_result_contract_missing");
+              assert.equal(result.json().retryable, false);
+              assert.equal(result.json().repair.category, "permanent_failure");
+              assert.equal(result.json().repair.expected, undefined);
+              assert.match(result.json().repair.next_action, /普通 Fact/);
+              assert.doesNotMatch(result.json().repair.next_action, /按 expected 修正/);
+              assert.deepEqual(await sql`SELECT id FROM artifacts WHERE job_id=${job.jobId}`, before);
+              const observation = await post("emit_fact", { title: "Bounded parser observation",
+                description: "The parser fixture was inspected within the authorized scope. Runtime behavior remains unverified and no goal assessment is claimed." });
+              assert.equal(observation.statusCode, 200, observation.body);
+              const done = await post("mark_job_done", { summary: "Recorded a bounded observation with execution limitations; goal assessment remains unassessed." });
+              assert.equal(done.statusCode, 200, done.body);
+              assert.equal(done.json().accepted, true);
+              assert.equal(completed, true);
+              assert.equal((await sql`SELECT count(*)::int AS n FROM events WHERE job_id=${job.jobId} AND type='done'`)[0].n, 1);
+              await finish(job);
+              const report = await loadTaskOutcomeReport(sql, job.canvasId, job.projectId);
+              assert.equal(report.goal_assessment, "not_assessed");
+              assert.deepEqual(report.task_results, []);
+            }
+          } finally { control.unregisterRuntimeHandler(job.jobId); }
+        }
+      });
       for (const kind of ["delivery", "negative_result"] as const) await t.test(`${kind} reaches independent criteria satisfaction with zero Findings`, async () => {
         const candidate = await source(kind);
         assert.equal((await loadTaskOutcomeReport(sql, candidate.canvasId, candidate.projectId)).goal_assessment, "blocked");

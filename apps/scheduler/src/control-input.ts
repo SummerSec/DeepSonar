@@ -36,6 +36,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidReferenceBudget: "invalid_reference_budget",
   // 宿主冻结的前置条件缺失，不是 Agent 能通过改写 payload 补齐的输入错误。
   taskResultContractMissing: "task_result_contract_missing",
+  taskResultContractInvalid: "task_result_contract_invalid",
 } as const;
 
 export type ControlInputErrorCode = (typeof CONTROL_INPUT_ERROR_CODES)[keyof typeof CONTROL_INPUT_ERROR_CODES];

@@ -226,6 +226,9 @@ function nextActionFor(input: {
   if (input.code === "task_result_contract_missing") {
     return "停止提交 artifact.task_result：该前置条件由任务创建方在创建期冻结，Agent 改 payload 或换 Idempotency-Key 都不会成功。改用普通 Fact 记录本次有界结果（证据引用 + 限制），并按完成协议收口。";
   }
+  if (input.code === "task_result_contract_invalid") {
+    return "停止提交 artifact.task_result；已冻结契约无法由当前 Agent 修正。由任务创建方核对当前 TaskContract 并创建有效的新任务，保留本次事实与历史记录。";
+  }
   if (input.code === "HANDLER_UNAVAILABLE") {
     return "平台运行时 handler 暂时不可用；使用同一 Idempotency-Key 重试，不要改写 payload。";
   }
