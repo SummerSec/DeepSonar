@@ -18,9 +18,11 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { findBannedCopy } from "../../../agent-harness/doc-copy-guard.mjs";
 import { repoRootFromModuleUrl } from "./file-size-gate.js";
 import { auditRequirements, normalizeDocPath, stripMarkdownFences as stripFences } from "./docs-architecture-gate.js";
 
@@ -333,4 +335,26 @@ test("#741 六条 ADR、开发 Skill 与双入口保持可发现", () => {
   assert.match(execFileSync("git", ["ls-files", "-s", "--", "CLAUDE.md"], { cwd: ROOT, encoding: "utf8" }), /^120000 /);
   const alias = path.join(ROOT, "CLAUDE.md");
   assert.equal(lstatSync(alias).isSymbolicLink() ? readlinkSync(alias) : read("CLAUDE.md"), "AGENTS.md");
+});
+
+test("#1221 窄文档面也守卫对外文案（文档快车道会跑，不依赖重型 Web gate）", () => {
+  // 与 Web 的 accent-theme 用例共用同一实现；这里只扫 DESIGN.md 与 docs/**/*.md。
+  const documents = ["DESIGN.md", ...relativeFiles("docs", [".md"])].map((relative) => path.join(ROOT, relative));
+  assert.deepEqual(
+    findBannedCopy({ files: documents, pattern: /open-kritt/i }).map((file: string) => path.relative(ROOT, file).replaceAll("\\", "/")),
+    [],
+    "文档里的对外文案不得出现外部主题 id",
+  );
+
+  // 合成坏文档必须被拦住，证明这条守卫不是空转。
+  const directory = mkdtempSync(path.join(tmpdir(), "docs-copy-guard-"));
+  try {
+    const bad = path.join(directory, "bad.md");
+    writeFileSync(bad, "Acme open-kritt theme\n");
+    const good = path.join(directory, "good.md");
+    writeFileSync(good, "普通文档\n");
+    assert.deepEqual(findBannedCopy({ files: [good, bad], pattern: /open-kritt/i }), [bad]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
+import { findBannedCopy } from "../../../agent-harness/doc-copy-guard.mjs";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -237,19 +238,19 @@ test("open-kritt leftover is confined to CHANGELOG and migration test notes", ()
     path.join(repoRoot, "CHANGELOG.md"),
     path.join(sourceRoot, "accent-theme.test.ts"),
   ]);
-  const leftover: string[] = [];
-  const scanRoots = [path.join(repoRoot, "apps", "web"), path.join(repoRoot, "docs"), repoRoot];
   const scanned = new Set<string>();
-  for (const root of scanRoots) {
-    const files = root === repoRoot
+  const files: string[] = [];
+  for (const root of [path.join(repoRoot, "apps", "web"), path.join(repoRoot, "docs"), repoRoot]) {
+    const candidates = root === repoRoot
       ? ["CHANGELOG.md", "DESIGN.md", "README.md", "AGENTS.md", "CLAUDE.md"].map((name) => path.join(repoRoot, name))
       : walkFiles(root);
-    for (const file of files) {
+    for (const file of candidates) {
       if (allowed.has(file) || scanned.has(file)) continue;
       scanned.add(file);
-      const text = readFileSync(file, "utf8");
-      if (/open-kritt/i.test(text)) leftover.push(path.relative(repoRoot, file).replaceAll("\\", "/"));
+      files.push(file);
     }
   }
+  // 与 docs-freshness 共用同一份扫描实现（#1221 评审）。
+  const leftover = findBannedCopy({ files, pattern: /open-kritt/i }).map((file) => path.relative(repoRoot, file).replaceAll("\\", "/"));
   assert.deepEqual(leftover, [], "runtime or user-visible copy still mentions the external theme id");
 });

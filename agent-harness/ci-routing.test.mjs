@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -37,10 +37,10 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
     const base = git("rev-parse", "HEAD");
     mkdirSync(join(dir, "agent-harness"), { recursive: true });
     writeFileSync(join(dir, "agent-harness/classify-ci-changes.mjs"), readFileSync(new URL("agent-harness/classify-ci-changes.mjs", root)));
-    const classifyHead = (event = "pull_request", head = git("rev-parse", "HEAD")) => {
+    const classifyHead = (event = "pull_request", head = git("rev-parse", "HEAD"), baseRef = base) => {
       const output = join(dir, "output"); writeFileSync(output, "");
       const run = spawnSync("bash", ["-c", classify], { cwd: dir, encoding: "utf8",
-        env: { ...process.env, EVENT_NAME: event, PR_BASE: base, PR_HEAD: head, GITHUB_OUTPUT: output } });
+        env: { ...process.env, EVENT_NAME: event, PR_BASE: baseRef, PR_HEAD: head, GITHUB_OUTPUT: output } });
       const invalidRevision = event === "pull_request" && (!head || head === "missing-ref");
       assert.equal(run.status, invalidRevision ? 1 : 0, run.stderr);
       return readFileSync(output, "utf8").trim().split("\n").find(line => line.startsWith("docs_only="));
@@ -57,6 +57,18 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
       [["agent-harness/runtime-manuals/other.md"], false], [["agent-harness/other.md"], false],
       [["skills/example/SKILL.md"], false], [["docs/evidence/result.md"], false],
       [["docs/data.json"], false], [["unknown.md"], false], [[".github/workflows/ci.yml"], false],
+      // #1221：根 DESIGN.md 与 docs/superpowers/plans/ 下的普通 Markdown 不必逐份加白名单。
+      [["DESIGN.md"], true],
+      [["DESIGN.md", "docs/superpowers/plans/2026-11-22-project-knowledge-library.md"], true],
+      [["docs/superpowers/plans/2026-12-01-new-design.md"], true],
+      [["docs/superpowers/plans/notes.txt"], false],
+      [["docs/superpowers/plans/sub/dir.md"], false],
+      [["docs/superpowers/plans/.hidden.md"], false],
+      [["docs/superpowers/plans/plan.md.bak"], false],
+      [["docs/superpowers/specs/new-spec.md"], false],
+      [["docs/superpowers/plans/说明.md"], false],
+      [["DESIGN.md", "apps/web/src/App.tsx"], false],
+      [["docs/superpowers/plans/2026-12-01-new-design.md", "packages/shared-types/src/x.ts"], false],
     ]) {
       git("reset", "--hard", base);
       for (const file of files) {
@@ -68,6 +80,27 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
       assert.equal(classifyHead("workflow_dispatch"), "docs_only=false");
       assert.equal(classifyHead("push"), "docs_only=false");
     }
+    // #1221 review：真实 Git 的符号链接不能靠名字混进文档快车道。
+    git("reset", "--hard", base);
+    mkdirSync(join(dir, "docs/superpowers/plans"), { recursive: true });
+    symlinkSync("../../README.md", join(dir, "docs/superpowers/plans/new-link.md"));
+    git("add", "docs/superpowers/plans"); git("commit", "-qm", "symlink-add");
+    assert.equal(classifyHead(), "docs_only=false", "新增符号链接不是普通文档");
+    git("checkout", "-f", "-q", base);
+    mkdirSync(join(dir, "docs/superpowers/plans"), { recursive: true });
+    writeFileSync(join(dir, "docs/superpowers/plans/target-a.md"), "a\n");
+    writeFileSync(join(dir, "docs/superpowers/plans/target-b.md"), "b\n");
+    symlinkSync("target-a.md", join(dir, "docs/superpowers/plans/existing-link.md"));
+    git("add", "docs/superpowers/plans"); git("commit", "-qm", "symlink-base");
+    const symlinkBase = git("rev-parse", "HEAD");
+    git("checkout", "-f", "-q", "-B", "retarget", symlinkBase);
+    rmSync(join(dir, "docs/superpowers/plans/existing-link.md"));
+    symlinkSync("target-b.md", join(dir, "docs/superpowers/plans/existing-link.md"));
+    writeFileSync(join(dir, "DESIGN.md"), "changed\n");
+    git("add", "docs/superpowers/plans", "DESIGN.md"); git("commit", "-qm", "symlink-retarget");
+    const retargetHead = git("rev-parse", "HEAD");
+    assert.equal(classifyHead("pull_request", retargetHead, symlinkBase), "docs_only=false", "既有链接改向不是普通文档");
+
     git("reset", "--hard", base); git("rm", "README.md"); git("commit", "-qm", "delete");
     assert.equal(classifyHead(), "docs_only=false");
     git("reset", "--hard", base); git("mv", "README.md", "DESIGN.md"); git("commit", "-qm", "rename");
