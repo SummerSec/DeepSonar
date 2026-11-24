@@ -112,11 +112,31 @@ function recordField(value: unknown, key: string): string | null {
   return typeof field === "string" ? field : null;
 }
 
+/** #1256 复核：明细与计数必须绑定同一 version_id，且只统计本项目 owner 的使用记录；同 hash 双版本绝不混票。 */
+async function readVersionFeedbackRows(db: Db, projectId: string, versionId: string, contentSha256: string,
+  outcome: "success" | "failure" | "inapplicable" | "unrated" | null, limit: number, offset: number,
+): Promise<{ counts: FeedbackCounts; rows: Row[] }> {
+  const counts = await readVersionFeedbackCounts(db, projectId, versionId, contentSha256);
+  const rows = await db<Array<Row>>`
+    SELECT u.id,u.job_id,u.created_at,u.feedback_json
+    FROM project_knowledge_usages u
+    WHERE u.project_id=${projectId} AND u.version_id=${versionId}
+      AND u.owner_project_id=${projectId}
+      AND (${outcome}::text IS NULL
+        OR (${outcome}::text = 'unrated' AND u.feedback_json IS NULL)
+        OR u.feedback_json->>'outcome'=${outcome})
+    ORDER BY u.created_at DESC,u.id DESC LIMIT ${limit + 1} OFFSET ${offset}`;
+  return { counts, rows };
+}
+
 /** #1256：一个版本的三类评价计数与未评价数，供卡片与明细共用。 */
-async function readVersionFeedbackCounts(db: Db, projectId: string, contentSha256: string): Promise<FeedbackCounts> {
+async function readVersionFeedbackCounts(db: Db, projectId: string, versionId: string, knownHash: string): Promise<FeedbackCounts> {
+  // #1256 复核：同一 content_sha256 可能同时属于两个版本，计票必须绑定 version_id；
+  // owner_project_id 限定只统计本项目自己的使用，不把消费方的票或理由混进来。
   const rows = await db<Array<{ outcome: string | null; count: number }>>`
     SELECT feedback_json->>'outcome' AS outcome, count(*)::int AS count
-    FROM project_knowledge_usages WHERE project_id=${projectId} AND content_sha256=${contentSha256}
+    FROM project_knowledge_usages WHERE project_id=${projectId} AND version_id=${versionId}
+      AND owner_project_id=${projectId} AND content_sha256=${knownHash}
     GROUP BY feedback_json->>'outcome'`;
   const counts: FeedbackCounts = { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 };
   for (const row of rows) {
@@ -138,7 +158,11 @@ async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promi
   const feedback = new Map<string, FeedbackCounts>();
   const summaries = new Map<string, string>();
   if (!hashes.length) return { summaries, feedback };
-  for (const hash of hashes) feedback.set(hash, await readVersionFeedbackCounts(db, projectId, hash));
+  for (const row of rows) {
+    const hash = typeof row.content_sha256 === "string" ? row.content_sha256 : null;
+    if (!hash) continue;
+    feedback.set(hash, await readVersionFeedbackCounts(db, projectId, String(row.active_version_id), hash));
+  }
   for (const hash of hashes) {
     try {
       const candidate: unknown = await readKnowledgeBlob(db, hash);
@@ -265,23 +289,20 @@ export function registerProjectKnowledgeRoutes(
       const version = await versionFor(db, projectId, Id.parse(itemId), Id.parse(versionId));
       if (!version) return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
       const input = FeedbackList.parse(req.query);
+      const canSeeSources = req.actor ? actorHasScope(req.actor, "tasks:read") : false;
       const hash = String(version.content_sha256);
-      const counts = await readVersionFeedbackCounts(db, projectId, hash);
-      const rows = await db<Array<Row>>`
-        SELECT u.id,u.job_id,u.created_at,u.feedback_json
-        FROM project_knowledge_usages u
-        WHERE u.project_id=${projectId} AND u.content_sha256=${hash}
-          AND (${input.outcome ?? null}::text IS NULL
-            OR (${input.outcome ?? null}::text = 'unrated' AND u.feedback_json IS NULL)
-            OR u.feedback_json->>'outcome'=${input.outcome ?? null})
-        ORDER BY u.created_at DESC,u.id DESC LIMIT ${input.limit + 1} OFFSET ${input.offset}`;
+      const page = await readVersionFeedbackRows(db, projectId, String(version.id), hash,
+        input.outcome ?? null, input.limit, input.offset);
       return {
-        counts,
-        items: rows.slice(0, input.limit).map((row) => ({
-          id: row.id, job_id: row.job_id, created_at: row.created_at,
-          outcome: recordField(row.feedback_json, "outcome"), reason: recordField(row.feedback_json, "reason"),
+        counts: page.counts,
+        items: page.rows.slice(0, input.limit).map((row) => ({
+          id: row.id, created_at: row.created_at,
+          outcome: recordField(row.feedback_json, "outcome"),
+          reason: recordField(row.feedback_json, "reason"),
+          // 来源任务与理由属于项目内执行记录：没有 tasks:read 就不给，避免只读目录者看到任务侧内容。
+          job_id: canSeeSources ? row.job_id : null,
         })),
-        next_offset: rows.length > input.limit ? input.offset + input.limit : null,
+        next_offset: page.rows.length > input.limit ? input.offset + input.limit : null,
       };
     } catch (error) { return errorReply(reply, error); }
   });

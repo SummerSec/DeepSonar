@@ -15,6 +15,7 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
     const grantee = await seedKnowledgeJob(db);
     const skillItem = randomUUID(), skillVersion = randomUUID();
     const memoryItem = randomUUID(), memoryVersion = randomUUID();
+    const candidateVersion2 = randomUUID();
     const candidate = { kind: "skill", logical_key: "sample", title: "Sample", keywords: [], files: { "SKILL.md": "# Sample" } };
     const bytes = Buffer.from(JSON.stringify(candidate), "utf8");
     const hash = createHash("sha256").update(bytes).digest("hex");
@@ -72,6 +73,21 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       assert.equal(res.json().counts.success, 1);
       assert.equal(res.json().counts.total, 1);
       assert.equal(res.json().items[0].outcome, "success");
+      // #1256 复核：明细里的来源任务需要 tasks:read；仅有 projects:read 时不得带 job/reason。
+      assert.ok(res.json().items[0].job_id, "tasks:read 角色应能定位来源任务");
+      actor = { ...actor, scopes: ["projects:read"], name: "reader" };
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.json().items[0].job_id, null);
+      actor = { ...actor, scopes: ["projects:read", "projects:write"], name: "owner" };
+      // 同一 content_sha256 的第二个版本不得重复计票；明细也不得串到别的版本。
+      await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
+        SELECT ${candidateVersion2},project_id,item_id,2,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash
+        FROM project_knowledge_versions WHERE id=${memoryVersion}`;
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${candidateVersion2}/feedback` });
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.json().counts.total, 0, "同 hash 双版本必须分开计票");
+      assert.deepEqual(res.json().items, []);
       res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback?outcome=unrated` });
       assert.equal(res.statusCode, 200);
       assert.deepEqual(res.json().items, []);
