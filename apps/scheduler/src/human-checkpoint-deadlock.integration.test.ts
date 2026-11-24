@@ -63,9 +63,11 @@ if (testDatabaseUrl) {
         await sql`
           INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
           VALUES (${jobId}, ${projectId}, ${canvasId}, 'hub_reason', 'waiting_human', ${sql.json({})}, ${sql.json({ name: "hub_reason" })})`;
+        // Cancellation and interruption validate the frozen total-state identity.
         await sql`
-          INSERT INTO job_attempts (id, job_id, attempt_no, status, phase)
-          VALUES (${attemptId}, ${jobId}, 1, 'active', 'agent.suspended')`;
+          INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, state_json)
+          VALUES (${attemptId}, ${jobId}, 1, 'active', 'agent.suspended',
+            ${sql.json({ version: 1, attempt_id: attemptId, job_id: jobId })})`;
         await sql`
           INSERT INTO events (job_id, job_seq, attempt_id, event_id, type, payload_json)
           VALUES (${jobId}, 1, ${attemptId}, ${eventId}, 'human', ${sql.json({})})`;
