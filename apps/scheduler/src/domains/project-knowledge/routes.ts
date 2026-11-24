@@ -158,10 +158,11 @@ async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promi
   const feedback = new Map<string, FeedbackCounts>();
   const summaries = new Map<string, string>();
   if (!hashes.length) return { summaries, feedback };
+  // 同一 hash 可能属于多个条目/版本：计票必须以版本 id 为键，不能按 hash 合并。
   for (const row of rows) {
     const hash = typeof row.content_sha256 === "string" ? row.content_sha256 : null;
-    if (!hash) continue;
-    feedback.set(hash, await readVersionFeedbackCounts(db, projectId, String(row.active_version_id), hash));
+    if (!hash || !row.active_version_id) continue;
+    feedback.set(String(row.active_version_id), await readVersionFeedbackCounts(db, projectId, String(row.active_version_id), hash));
   }
   for (const hash of hashes) {
     try {
@@ -205,8 +206,8 @@ export function registerProjectKnowledgeRoutes(
       const items = page.map((row) => ({
         ...row,
         summary: typeof row.content_sha256 === "string" ? summaries.get(row.content_sha256) ?? null : null,
-        feedback: typeof row.content_sha256 === "string"
-          ? feedback.get(row.content_sha256) ?? { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 }
+        feedback: row.active_version_id
+          ? feedback.get(String(row.active_version_id)) ?? { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 }
           : { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 },
       }));
       return { items, next_offset: rows.length > input.limit ? input.offset + input.limit : null };
