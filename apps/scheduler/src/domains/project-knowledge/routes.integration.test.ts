@@ -74,6 +74,9 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       assert.equal(res.json().counts.total, 1);
       assert.equal(res.json().items[0].outcome, "success");
       // #1256 复核：明细里的来源任务需要 tasks:read；仅有 projects:read 时不得带 job/reason。
+      actor = { ...actor, scopes: ["projects:read", "projects:write", "tasks:read"], name: "owner-exec" };
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
+      assert.equal(res.statusCode, 200);
       assert.ok(res.json().items[0].job_id, "tasks:read 角色应能定位来源任务");
       actor = { ...actor, scopes: ["projects:read"], name: "reader" };
       res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
