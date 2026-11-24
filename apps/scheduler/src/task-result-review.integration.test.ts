@@ -133,9 +133,14 @@ if (!databaseUrl) {
           assert.match(guide, /普通 Fact 记录有界结果并按完成协议收口/);
           const grant = await control.mintJobCapabilityToken(job.jobId);
           let completed = false;
+          let completionEvent: Parameters<typeof ingestEvent>[1] | undefined;
           control.registerRuntimeHandler(job.jobId, async context => {
             if (context.completionPhase === "prepare") return { completion_prepared: true };
-            if (context.completionPhase === "commit") { completed = true; return {}; }
+            if (context.completionPhase === "commit") {
+              completionEvent = { v: 1, event_id: context.eventId, type: "done", payload: context.input };
+              completed = true;
+              return {};
+            }
             if (context.completionPhase === "abort") return {};
             try {
               await ingestFactSemanticEvent({ v: 1, event_id: context.eventId, type: "fact", payload: context.input }, null,
@@ -193,6 +198,9 @@ if (!databaseUrl) {
               assert.equal(done.statusCode, 200, done.body);
               assert.equal(done.json().accepted, true);
               assert.equal(completed, true);
+              assert.ok(completionEvent);
+              // The runtime applies the accepted semantic event after receiving the durable receipt.
+              await ingestEvent(job.jobId, completionEvent);
               assert.equal((await sql`SELECT count(*)::int AS n FROM events WHERE job_id=${job.jobId} AND type='done'`)[0].n, 1);
               await finish(job);
               const report = await loadTaskOutcomeReport(sql, job.canvasId, job.projectId);
