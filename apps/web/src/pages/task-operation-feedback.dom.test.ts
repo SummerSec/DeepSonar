@@ -3,7 +3,8 @@ import test, { type TestContext } from "node:test";
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
-import { api, type CanvasSummary } from "../api";
+import { api, type CanvasSummary, type Project } from "../api";
+import { EMPTY_TASK_DEVICE, parseTaskDevice } from "../components/TaskDeviceEditor";
 import { AuthProvider } from "../auth";
 import { ConfirmDialogProvider } from "../components/ConfirmDialog";
 import { clearToasts, ToastHost } from "../toast";
@@ -24,7 +25,7 @@ const canvas: CanvasSummary = {
   last_job_status: null, last_job_priority: null, last_job_at: null,
 };
 
-async function setup(context: TestContext) {
+async function setup(context: TestContext, projects: Project[] = []) {
   const dom = new JSDOM("<!doctype html><div id='page'></div><div id='toasts'></div>", { url: "http://127.0.0.1", pretendToBeVisual: true });
   const replacements = {
     window: dom.window, document: dom.window.document, navigator: dom.window.navigator,
@@ -39,7 +40,7 @@ async function setup(context: TestContext) {
   context.mock.method(globalThis, "clearInterval", () => {});
   context.mock.method(dom.window, "setInterval", () => ++nextTimer);
   context.mock.method(dom.window, "clearInterval", () => {});
-  context.mock.method(api, "projects", async () => []);
+  context.mock.method(api, "projects", async () => projects);
   context.mock.method(api, "authStatus", async () => ({ auth_required: true, has_users: true, bootstrap_available: false, default_admin_credentials_active: false, session_ttl_days: 1 }));
   context.mock.method(api, "canvases", async () => [{ ...canvas }]);
   const { createRoot } = await import("react-dom/client");
@@ -170,4 +171,46 @@ test("unmounting the task page also removes its existing error toast", async con
   assert.equal(env.toasts().length, 0, "page cleanup removes its toast while the global host remains alive");
   await env.tick(60_000);
   assert.equal(env.toasts().length, 0);
+});
+
+for (const transport of ["", "hdc", "adb"] as const) {
+  test(`task creation sends only the explicit ${transport || "no-device"} selection`, async context => {
+    context.mock.method(api, "settings", async () => ({ effective_finding_protocol: null }));
+    const env = await setup(context, [{ id: "A", name: "device project", status: "active" } as Project]);
+    const requests: Parameters<typeof api.createTask>[1][] = [];
+    context.mock.method(api, "createTask", async (_projectId: string, payload: Parameters<typeof api.createTask>[1]) => {
+      requests.push(payload);
+      throw new Error("synthetic create failure");
+    });
+    await env.click("下达任务");
+    const fill = async (selector: string, value: string) => {
+      const input = env.container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector);
+      assert.ok(input, selector);
+      const prototype = input.tagName === "TEXTAREA" ? env.dom.window.HTMLTextAreaElement.prototype : env.dom.window.HTMLInputElement.prototype;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(input, value);
+        input.dispatchEvent(new env.dom.window.Event("input", { bubbles: true }));
+      });
+    };
+    await fill("#task-title", "设备选择回归");
+    await fill("textarea", "在已授权的模拟器上检查连通性");
+    if (transport) {
+      await act(async () => env.container.querySelector<HTMLButtonElement>('[aria-label="设备连接方式"]')!.click());
+      const option = [...env.dom.window.document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(node => node.textContent?.includes(transport));
+      assert.ok(option);
+      await act(async () => option.click());
+    }
+    await env.click("交给系统");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].allow_egress, undefined, "device selection preserves the chosen network policy");
+    if (transport) assert.deepEqual(requests[0].device, parseTaskDevice({ ...EMPTY_TASK_DEVICE, transport }).device);
+    else assert.equal(Object.hasOwn(requests[0], "device"), false, "task prose does not infer a requirement");
+    assert.match(env.container.textContent ?? "", /synthetic create failure/);
+  });
+}
+
+test("invalid task device roles and rig fail before submission", () => {
+  assert.ok(parseTaskDevice({ ...EMPTY_TASK_DEVICE, transport: "hdc", roles: " " }).error);
+  assert.ok(parseTaskDevice({ ...EMPTY_TASK_DEVICE, transport: "hdc", rigId: "invalid/rig" }).error);
+  assert.deepEqual(parseTaskDevice({ ...EMPTY_TASK_DEVICE, roles: " " }), { device: undefined, error: null });
 });

@@ -73,7 +73,9 @@ test("each Job freezes a canonical independent contract and keeps missing-contra
 test("route validates before side effects and dispatcher rechecks before sandbox provisioning", () => {
   const route = readFileSync(new URL("./domains/project-task/routes.ts", import.meta.url), "utf8");
   const create = route.slice(route.indexOf('app.post("/projects/:id/tasks"'), route.indexOf('app.post("/projects/:id/events"'));
-  assert.ok(create.indexOf("taskContractPreflight(") < create.indexOf("ensureCanvasForTask("));
+  const preflight = create.indexOf("taskContractPreflight(");
+  const createJob = create.indexOf("await createJob(");
+  assert.ok(preflight >= 0 && createJob > preflight, "task preflight must run before atomic task and Job creation");
   assert.match(create, /task_contract: taskContract/);
   assert.match(create, /content: body.content/);
   const dispatch = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
