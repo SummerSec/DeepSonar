@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 import { canAccessAnyScope } from "../permissions";
 import { SearchableSelect } from "../SearchableSelect";
 import { PageHeader } from "../ui";
+import { feedbackLine } from "../project-knowledge-card.js";
 import { ProjectKnowledgeActivity } from "./ProjectKnowledgeActivity";
 import { ProjectKnowledgeBackfill } from "./ProjectKnowledgeBackfill";
 import {
@@ -18,13 +19,6 @@ import {
 
 const field = "rounded-lg border border-white/10 bg-white/[.03] px-3 py-2 text-sm text-zinc-200 outline-none focus:border-acc-400/50";
 const button = "rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[.06] disabled:cursor-not-allowed disabled:opacity-40";
-/** #1256：没有评价就写「暂无评价」，不要用 0 冒充「无用」或「有用」。 */
-function feedbackLine(feedback?: { total: number; success: number; failure: number; inapplicable: number; unrated: number }): string {
-  if (!feedback || feedback.total === 0) return "当前版本暂无评价";
-  const rated = feedback.total - feedback.unrated;
-  if (rated === 0) return `本版本 ${feedback.total} 次使用记录，尚无分类评价`;
-  return `本版本 ${feedback.total} 次使用记录：有用 ${feedback.success} · 部分有用 ${feedback.inapplicable} · 无用 ${feedback.failure}`;
-}
 
 const card = "rounded-xl border border-white/[.07] bg-white/[.025] p-4";
 const date = (value: string | null | undefined) => value ? new Date(value).toLocaleString("zh-CN") : "—";

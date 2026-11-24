@@ -272,3 +272,20 @@ test("history preview reads on demand, drops closed responses, and renders sugge
     dom.window.close();
   }
 });
+
+test("#1256 卡片评价行按契约语义显示：不适用、未评价与有评价三态", async () => {
+  const { feedbackLine } = await import("./project-knowledge-card.js");
+  // 无记录：明确零样本，不写 0 次使用。
+  assert.equal(feedbackLine(undefined), "当前版本暂无评价");
+  assert.equal(feedbackLine({ total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 }), "当前版本暂无评价");
+  // 读过但都没评价：说清是「均未评价」，不是「无用」。
+  assert.equal(feedbackLine({ total: 3, success: 0, failure: 0, inapplicable: 0, unrated: 3 }), "3 条阅读记录，均未评价");
+  // 有评价：inapplicable 显示「不适用」，total 叫「阅读记录」而不是「使用次数」。
+  const line = feedbackLine({ total: 8, success: 5, failure: 1, inapplicable: 2, unrated: 0 });
+  assert.equal(line, "8 条阅读记录：有用 5 · 不适用 2 · 无用 1");
+  assert.doesNotMatch(line, /部分有用/u);
+  assert.doesNotMatch(line, /使用次数/u);
+  // 有评价也有未评价时把未评价单列。
+  assert.equal(feedbackLine({ total: 10, success: 5, failure: 1, inapplicable: 2, unrated: 2 }),
+    "10 条阅读记录：有用 5 · 不适用 2 · 无用 1 · 未评价 2");
+});

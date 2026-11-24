@@ -67,6 +67,10 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       assert.equal(card.feedback.success, 1);
       assert.equal(card.feedback.total, 1);
       assert.equal(typeof card.feedback.failure, "number");
+      // 同页反例：skill 与 memory 引用同一份候选字节（同 hash），计票必须按版本各归各。
+      const sibling = res.json().items.find((item: { id: string }) => item.id === skillItem);
+      assert.equal(sibling.content_sha256, card.content_sha256, "两条目确实共用同一 hash");
+      assert.equal(sibling.feedback.total, 0, "同 hash 的另一个条目不得继承这条评价");
       // #1256：按版本读评价明细；unrated 表示读过但没分类评价。
       res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
       assert.equal(res.statusCode, 200);
@@ -78,10 +82,12 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
       assert.equal(res.statusCode, 200);
       assert.ok(res.json().items[0].job_id, "tasks:read 角色应能定位来源任务");
+      assert.equal(res.json().items[0].reason, null, "未写理由时理由为 null");
       actor = { ...actor, scopes: ["projects:read"], name: "reader" };
       res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
       assert.equal(res.statusCode, 200);
       assert.equal(res.json().items[0].job_id, null);
+      assert.equal(res.json().items[0].reason, null, "没有 tasks:read 时理由与来源一样不可见");
       actor = { ...actor, scopes: ["projects:read", "projects:write"], name: "owner" };
       // 同一 content_sha256 的第二个版本不得重复计票；明细也不得串到别的版本。
       await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)

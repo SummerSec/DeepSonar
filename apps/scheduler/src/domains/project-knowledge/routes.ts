@@ -149,21 +149,39 @@ async function readVersionFeedbackCounts(db: Db, projectId: string, versionId: s
   return counts;
 }
 
-/** #1256：卡片要的一句话结论与三类评价计数；都是可选投影，不改变权重、排序与权限过滤。 */
+/** #1256：卡片要的一句话结论与三类评价计数；一次批量聚合，不随页大小增加往返。 */
 type FeedbackCounts = { total: number; success: number; failure: number; inapplicable: number; unrated: number };
+const EMPTY_FEEDBACK: FeedbackCounts = { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 };
+const CARD_SUMMARY_READ_LIMIT = 50;
+
 async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promise<{
   summaries: Map<string, string>; feedback: Map<string, FeedbackCounts>;
 }> {
-  const hashes = [...new Set(rows.map((row) => row.content_sha256).filter((hash): hash is string => typeof hash === "string"))];
   const feedback = new Map<string, FeedbackCounts>();
   const summaries = new Map<string, string>();
-  if (!hashes.length) return { summaries, feedback };
-  // 同一 hash 可能属于多个条目/版本：计票必须以版本 id 为键，不能按 hash 合并。
-  for (const row of rows) {
-    const hash = typeof row.content_sha256 === "string" ? row.content_sha256 : null;
-    if (!hash || !row.active_version_id) continue;
-    feedback.set(String(row.active_version_id), await readVersionFeedbackCounts(db, projectId, String(row.active_version_id), hash));
+  // 计票与摘要都只认可见的当前版本：join 已按 publicKnowledgeVersion 过滤，隐藏版本不会带 hash。
+  const visible = rows.filter((row): row is Row & { active_version_id: string; content_sha256: string } =>
+    typeof row.active_version_id === "string" && typeof row.content_sha256 === "string");
+  if (!visible.length) return { summaries, feedback };
+  for (const row of visible) feedback.set(String(row.active_version_id), { ...EMPTY_FEEDBACK });
+  const versionIds = visible.map((row) => String(row.active_version_id));
+  // 一页条目一次分组查询：口径绑定 (project, version_id, owner_project_id)，同 hash 不同版本互不串票。
+  const grouped = await db<Array<{ version_id: string; outcome: string | null; count: number }>>`
+    SELECT u.version_id, u.feedback_json->>'outcome' AS outcome, count(*)::int AS count
+    FROM project_knowledge_usages u
+    WHERE u.project_id=${projectId} AND u.owner_project_id=${projectId}
+      AND u.version_id = ANY(${versionIds}::uuid[])
+    GROUP BY u.version_id, u.feedback_json->>'outcome'`;
+  for (const row of grouped) {
+    const counts = feedback.get(String(row.version_id));
+    if (!counts) continue;
+    counts.total += Number(row.count);
+    if (row.outcome === "success") counts.success += Number(row.count);
+    else if (row.outcome === "failure") counts.failure += Number(row.count);
+    else if (row.outcome === "inapplicable") counts.inapplicable += Number(row.count);
+    else counts.unrated += Number(row.count);
   }
+  const hashes = [...new Set(visible.map((row) => String(row.content_sha256)))].slice(0, CARD_SUMMARY_READ_LIMIT);
   for (const hash of hashes) {
     try {
       const candidate: unknown = await readKnowledgeBlob(db, hash);
@@ -196,6 +214,7 @@ export function registerProjectKnowledgeRoutes(
           v.version,v.content_sha256
         FROM project_knowledge_items i
         LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
+          AND ${publicKnowledgeVersion(db)}
         WHERE i.project_id=${projectId} AND ${publicKnowledgeItem(db)}
           AND (${input.kind ?? null}::text IS NULL OR i.kind=${input.kind ?? null})
           AND (${input.status ?? null}::text IS NULL OR i.status=${input.status ?? null})
@@ -206,9 +225,7 @@ export function registerProjectKnowledgeRoutes(
       const items = page.map((row) => ({
         ...row,
         summary: typeof row.content_sha256 === "string" ? summaries.get(row.content_sha256) ?? null : null,
-        feedback: row.active_version_id
-          ? feedback.get(String(row.active_version_id)) ?? { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 }
-          : { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 },
+        feedback: row.active_version_id ? feedback.get(String(row.active_version_id)) ?? EMPTY_FEEDBACK : EMPTY_FEEDBACK,
       }));
       return { items, next_offset: rows.length > input.limit ? input.offset + input.limit : null };
     } catch (error) { return errorReply(reply, error); }
@@ -299,7 +316,8 @@ export function registerProjectKnowledgeRoutes(
         items: page.rows.slice(0, input.limit).map((row) => ({
           id: row.id, created_at: row.created_at,
           outcome: recordField(row.feedback_json, "outcome"),
-          reason: recordField(row.feedback_json, "reason"),
+          // 理由是任务产生的自由文本，与来源任务同权限：没有 tasks:read 一律不返回。
+          reason: canSeeSources ? recordField(row.feedback_json, "reason") : null,
           // 来源任务与理由属于项目内执行记录：没有 tasks:read 就不给，避免只读目录者看到任务侧内容。
           job_id: canSeeSources ? row.job_id : null,
         })),
