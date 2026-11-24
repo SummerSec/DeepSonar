@@ -74,15 +74,15 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
       const stale = await app.invoke({ jobId: frozenBefore.jobId, projectId: writer.projectId, canvasId: frozenBefore.canvasId,
         operationId: "search_project_knowledge", input: { query: "构建" }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
       assert.deepEqual(stale.items, [], "a job frozen before ingestion must not see it");
-      const reader = await seedKnowledgeJob(db, writer.projectId, ["search_project_knowledge", "read_project_memory", operation]);
+      const reader = await seedKnowledgeJob(db, writer.projectId, ["search_project_knowledge", "read_project_knowledge", operation]);
       const catalog = await freezeProjectKnowledgeCatalog(db as never, writer.projectId);
-      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_memory", operation],
+      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_knowledge", operation],
         project_knowledge_catalog: catalog } as never)} WHERE id=${reader.jobId}`;
       const found = await app.invoke({ jobId: reader.jobId, projectId: writer.projectId, canvasId: reader.canvasId,
         operationId: "search_project_knowledge", input: { query: "构建" }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
       assert.equal((found.items as unknown[]).length, 1, JSON.stringify(found));
       const read = await app.invoke({ jobId: reader.jobId, projectId: writer.projectId, canvasId: reader.canvasId,
-        operationId: "read_project_memory", input: { item_ref: String(item!.id), version: 1,
+        operationId: "read_project_knowledge", input: { item_ref: String(item!.id), version: 1,
           expected_hash: String((found.items as Array<{ hash: string }>)[0].hash) }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
       assert.equal(read.content, "先升 SDK 再打包");
       assert.equal(typeof read.usage_ref, "string");
@@ -100,12 +100,12 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
       assert.deepEqual(versions.map(row => Number(row.version)), [1, 2]);
 
       // 同一旧基线被另一个任务再次修订：基线已被取代，必须拒绝而不是覆盖当前版本。
-      const rival = await seedKnowledgeJob(db, writer.projectId, ["read_project_memory", "search_project_knowledge", operation]);
-      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["read_project_memory", "search_project_knowledge", operation],
+      const rival = await seedKnowledgeJob(db, writer.projectId, ["read_project_knowledge", "search_project_knowledge", operation]);
+      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["read_project_knowledge", "search_project_knowledge", operation],
         project_knowledge_catalog: catalog } as never)} WHERE id=${rival.jobId}`;
       const rivalFact = await seedFact(db as never, rival, 3);
       const stale1 = await app.invoke({ jobId: rival.jobId, projectId: writer.projectId, canvasId: rival.canvasId,
-        operationId: "read_project_memory", input: { item_ref: String(item!.id), version: 1,
+        operationId: "read_project_knowledge", input: { item_ref: String(item!.id), version: 1,
           expected_hash: String((found.items as Array<{ hash: string }>)[0].hash) }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
       await assert.rejects(submit(db as never, rival, { title: "构建要先升 SDK", content: "基于旧基线的另一份修订",
         factRef: rivalFact, target: { usage_ref: String(stale1.usage_ref) } }),
