@@ -52,11 +52,13 @@ test("#1219 反馈指引与 schema 允许值对齐：不提交 unknown，缺评�
   for (const value of allowed) assert.match(record, new RegExp(value, "u"), value);
   assert.match(record, /there is no 'unknown' value to submit/u);
   assert.match(record, /omitting the call is how unknown is recorded/u);
-  for (const operation of ["search_project_knowledge", "read_project_memory"]) {
+  // 新名与迁移窗口的旧名别名都要满足同一条反馈口径。
+  for (const operation of ["search_project_knowledge", "read_project_knowledge", "read_project_memory"]) {
     const text = PLATFORM_OPERATION_REGISTRY[operation].description;
     assert.doesNotMatch(text, /submit (an )?unknown|outcome unknown/u, operation);
   }
   assert.match(PLATFORM_OPERATION_REGISTRY.search_project_knowledge.description, /Searching is not use/u);
-  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_memory.description, /do not call the tool/u);
-  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_memory.description, /usage_ref/u);
+  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_knowledge.description, /do not call the tool/u);
+  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_knowledge.description, /usage_ref/u);
+  assert.match(PLATFORM_OPERATION_REGISTRY.read_project_memory.description, /same post-use rating rule/u);
 });
