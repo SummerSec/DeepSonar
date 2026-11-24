@@ -1,5 +1,5 @@
 import { SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/catalog.js";
-import { PLATFORM_CONTROL_HTTP_BOOTSTRAP } from "./platform-control-skill.js";
+import { HUMAN_RESOURCE_PREFLIGHT_GUIDANCE, PLATFORM_CONTROL_HTTP_BOOTSTRAP } from "./platform-control-skill.js";
 
 const PLATFORM_TOOL_USAGE: Record<string, string> = {
   submit_task_knowledge_suggestion: [
@@ -155,6 +155,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   ].join("\n"),
   request_human: [
     "### `request_human` — 请求人工介入并结束本轮",
+    HUMAN_RESOURCE_PREFLIGHT_GUIDANCE,
     "- 必填参数：`reason`（8-2000 字符）、结构化 `subject`，以及严格 `guidance` 对象；guidance 只能含 `question`（8-240 字符）、`required_action`（8-2000）、`reply_instructions`（8-2000）和 `after_reply`（8-1000）。未知字段、空值和缺字段均拒绝。",
     "- Finding 阻塞：`subject={type:\"finding\",finding_id,subject_revision}`；只允许当前项目、当前画布且未被最低严重度策略豁免的 canonical Finding。",
     "- 平台阻塞：`subject={type:\"platform_blocker\",kind}`；kind 只能是 authorization|credential|high_risk_action|business_decision。",
