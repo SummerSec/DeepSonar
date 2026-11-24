@@ -265,15 +265,15 @@ const TOP_GAP_GUIDANCE: Record<string, string> = {
   source_contract_invalid: "部分来源 Job 的契约无法解析：相应来源不计入目标口径，原始记录保留。",
   multiple_contract_snapshots: "同一任务记录到多份来源契约：需要平台核对契约绑定是否失效，此前结论都保持保守。",
   candidate_artifact_unavailable: "部分候选的提交载体不完整或已过期：平台继续按现有验证流程处理，详情见对应 Finding。",
-  projection_truncated: "数据超过展示上限被截断：完整口径应读投影与 SARIF 附属，不因截断给出更积极或更消极的结论。",
+  projection_truncated: "数据超过展示上限被截断：报告只列出被保留的部分，附件是同一份被截断的投影，不能据此补齐覆盖；不因截断给出更积极或更消极的结论。",
 };
 function gapGuidance(code: string): string {
   if (TOP_GAP_GUIDANCE[code]) return TOP_GAP_GUIDANCE[code]!;
-  if (code.endsWith("_truncated")) return `数据超过展示上限（${code}）：完整口径可见投影，不因截断改变判断。`;
-  if (code === "task_result_projection_truncated" ) return "任务结果声明超过投影上限：完整口径以详细数据区的 JSON 为准。";
+  if (code.endsWith("_truncated")) return `数据超过展示上限（${code}）：只列出被保留的部分，附件不能补齐覆盖，也不因截断改变判断。`;
+  if (code === "task_result_projection_truncated" ) return "任务结果声明超过投影上限：详细数据区同样只保留被截断的部分，未列出的声明不代表不存在。";
   if (code === "task_result_projection_incomplete") return "证据预算不足，部分任务结果声明缺少完整依据：结论保持保守，不当作已核实。";
   if (code === "task_contract_unavailable") return TOP_GAP_GUIDANCE.task_contract_unavailable!;
-  return `原因代码 ${code} 暂无通俗解释：以详细数据区的原始记录为准，不影响本报告对已有记录的陈述。`;
+  return `原因代码 ${code} 暂无通俗解释：详细数据区保留原始记录（可能同样截断），不影响本报告对已有记录的陈述。`;
 }
 const GOAL_ASSESSMENT_TEXT: Record<TaskOutcomeReport["goal_assessment"], string> = {
   not_assessed: "还没有独立评审覆盖目标判据，达成情况未知（不是失败，也不是已满足）。",

@@ -369,7 +369,7 @@ test("scheduler prepends frozen plan gaps to both accepted and fallback markdown
 });
 
 
-test("#1251 有审计数据时整篇报告顺序为摘要→正文→原始投影（下载文件同源）", async () => {
+test("#1251 有审计数据时整篇报告顺序为结果→审计摘要→原始投影→模型正文（下载文件同源）", async () => {
   const { projectPlanGaps } = await import("./domains/plan-protocol/gap-projection.js");
   const { PlanAuditRecord } = await import("@deepsonar/shared-types");
   const plan = { v: 1 as const, goal: "确认当前鉴权边界的实际范围", assumptions: [], tasks: [{ id: "collect", title: "收集当前鉴权边界证据并留档", role: "test",
@@ -381,12 +381,15 @@ test("#1251 有审计数据时整篇报告顺序为摘要→正文→原始投�
     termination_reason: null, updated_at: "2026-11-24T00:00:00.000Z" });
   const entry = projectPlanGaps("job-gap", { plan_protocol: audit });
   const input = reportInput({ plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: false, limit: 32 } });
-  const result = finalizeTaskReportMarkdown(input, "# 任务结果\n\n收集到边界证据。\n");
-  const summary = result.markdown.indexOf("## 目标与缺口");
-  const body = result.markdown.indexOf("# 任务报告");
-  const detail = result.markdown.indexOf("### 详细审计数据");
-  assert.ok(summary >= 0 && body > summary && detail > body, `顺序应为摘要→正文→详情，实际 ${summary}/${body}/${detail}`);
-  assert.match(result.markdown.slice(detail), /"job_id":\s*"job-gap"/u, "原始投影保留在产品投影里");
+  const body = "# 任务报告\n\n## 已确认问题\n\nfinding-1\n";
+  const result = finalizeTaskReportMarkdown(input, body);
+  const markdown = result.markdown;
+  const reportHead = markdown.indexOf("# 任务报告");
+  const summary = markdown.indexOf("## 目标与缺口");
+  const detail = markdown.indexOf("### 详细审计数据");
+  assert.ok(reportHead >= 0 && reportHead < summary && summary < detail,
+    `顺序应为 可信结果→审计摘要→原始投影，实际 ${reportHead}/${summary}/${detail}`);
+  assert.match(markdown.slice(detail), /"job_id":\s*"job-gap"/u, "原始投影保留在产品投影里");
 });
 
 test("coverage-valid model tails cannot swallow the mandatory leading gap section", () => {

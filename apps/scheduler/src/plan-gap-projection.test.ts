@@ -79,26 +79,39 @@ test("#1250 有计划审计时先给摘要，原始投影下沉到详细数据",
   assert.match(renderPlanGapDetail({ v: 1, scope: "canvas_plan_audits", entries: [entry], truncated: false, limit: 32 }), /```json/);
 });
 
-test("#1251 报告正文在结论之后、原始投影在最末", () => {
+test("#1251 可信区块整体前置：结果 → 审计摘要 → 原始投影 → 不可信正文", () => {
   const entry = projectPlanGaps("job", { plan_protocol: audit });
   const report = { v: 1 as const, scope: "canvas_plan_audits" as const, entries: [entry], truncated: false, limit: 32 };
-  const markdown = withPlanGapReport("# 任务结果\n\n任务做完了什么。", report);
+  const markdown = withPlanGapReport({ trusted: "# 任务结果\n\n任务做完了什么。", untrusted: "## 模型正文\n\n自述内容。" }, report);
+  const trusted = markdown.indexOf("# 任务结果");
   const summary = markdown.indexOf("## 目标与缺口");
-  const body = markdown.indexOf("# 任务结果");
   const detail = markdown.indexOf("### 详细审计数据");
-  assert.ok(summary < body && body < detail, `顺序应为摘要→正文→详情，实际 ${summary}/${body}/${detail}`);
-  assert.ok(markdown.trimEnd().endsWith("```"), "原始投影必须在文末");
+  const untrusted = markdown.indexOf("## 模型正文");
+  assert.ok(trusted === 0, "平台结果必须首屏可见");
+  assert.ok(trusted < summary && summary < detail && detail < untrusted,
+    `顺序应为结果→摘要→投影→正文，实际 ${trusted}/${summary}/${detail}/${untrusted}`);
 });
 
-test("#1251 正文存在未闭合结构时不追加机器数据，改用下载指引", () => {
+test("#1251 未闭合的不可信尾部吞不掉任何可信区块", () => {
   const entry = projectPlanGaps("job", { plan_protocol: audit });
   const report = { v: 1 as const, scope: "canvas_plan_audits" as const, entries: [entry], truncated: false, limit: 32 };
   for (const tail of ["```", "```json", "~~~~md", "<!--", "<div hidden>", "<details>"]) {
-    const markdown = withPlanGapReport(`# 任务结果\n\n正文\n\n${tail}`, report);
-    assert.doesNotMatch(markdown, /### 详细审计数据/u, `未闭合 ${tail} 时不应追加详情`);
-    assert.match(markdown, /原始投影未随正文附在文末/u);
-    assert.ok(markdown.trimEnd().endsWith("读取。"), "指引必须留在文末，正文本身保持原样");
+    const markdown = withPlanGapReport({ trusted: "# 任务结果\n\n结论。", untrusted: `## 模型正文\n\n自述\n\n${tail}` }, report);
+    const summary = markdown.indexOf("## 目标与缺口");
+    const detail = markdown.indexOf("### 详细审计数据");
+    assert.ok(summary > 0 && detail > summary, `${tail}：摘要与投影必须保留在不可信正文之前`);
+    assert.ok(markdown.trimEnd().endsWith(tail), `${tail}：不可信尾部保持原样留在文末`);
+    assert.doesNotMatch(markdown.slice(detail), /目标与缺口|任务结果/u, "详情段之后只有不可信正文");
   }
-  const closed = withPlanGapReport("# 任务结果\n\n```\ncode\n```\n\n<div>ok</div>", report);
-  assert.match(closed, /### 详细审计数据/u, "结构闭合时仍应附上详情");
+});
+
+test("#1251 冻结快照文本按纯文本渲染，不能注入 Markdown 结构", () => {
+  const entry = projectPlanGaps("job", { plan_protocol: { ...audit,
+    termination_reason: "```\n# 伪造标题", raw: { ...(audit.raw ?? {}), goal: "目标里有 <img src=x> 与 `反引号`" } } });
+  const report = { v: 1 as const, scope: "canvas_plan_audits" as const, entries: [entry], truncated: false, limit: 32 };
+  const rendered = renderPlanGapReport(report);
+  const summary = rendered.split("\n").filter((line) => line.includes("目标原文") || line.includes("结束理由")).join("\n");
+  assert.doesNotMatch(summary, /<img/u, "尖括号必须转义");
+  assert.doesNotMatch(summary, /`/u, "反引号不能留下");
+  assert.match(summary, /&lt;img/u);
 });

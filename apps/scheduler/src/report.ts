@@ -795,27 +795,33 @@ export function finalizeTaskReportMarkdown(
 } {
   if (goalReportRequired(input.task_outcome)) {
     const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
-    const markdown = withPlanGapReport(goalReportMarkdown(input.task_outcome!, declared, {
+    const markdown = withPlanGapReport({ trusted: goalReportMarkdown(input.task_outcome!, declared, {
       task: input.task, scope_and_coverage: input.scope_and_coverage, technical_statistics: input.statistics,
       findings: input.findings, facts: input.facts, seed_findings: input.seed_findings, evidence: input.evidence,
-    }), input.plan_gaps);
+    }) }, input.plan_gaps);
     return { markdown, numeric: checkReportNumericFidelity(declared, { markdown }), coverageOk: true, usedDefault: "task_outcome" };
   }
-  let markdown = agentText.trim();
-  const coverageOk = taskReportCoverageOk(input, markdown);
+  const candidate = agentText.trim();
+  const coverageOk = taskReportCoverageOk(input, candidate);
+  // 模型正文即使通过覆盖与数值校验仍是不可信输入，必须排在全部可信区块之后。
+  let untrusted = candidate;
+  let trusted = "";
   let usedDefault: ReportMarkdownFallback = null;
-  if (markdown.length < 20 || !coverageOk) {
-    markdown = defaultMarkdown(input);
+  if (candidate.length < 20 || !coverageOk) {
+    trusted = defaultMarkdown(input);
+    untrusted = "";
     usedDefault = "coverage";
   }
   const declared = declaredQuantitiesFromPayloads(input.confirmed_findings, input.facts ?? []);
-  let numeric = checkReportNumericFidelity(declared, { markdown });
+  const bodyText = [trusted, untrusted].filter((part) => part.length > 0).join("\n\n");
+  let numeric = checkReportNumericFidelity(declared, { markdown: bodyText });
   if (!numeric.ok && usedDefault === null && coverageOk) {
-    markdown = defaultMarkdown(input);
+    trusted = defaultMarkdown(input);
+    untrusted = "";
     usedDefault = "numeric";
-    numeric = checkReportNumericFidelity(declared, { markdown });
+    numeric = checkReportNumericFidelity(declared, { markdown: trusted });
   }
-  markdown = withPlanGapReport(markdown, input.plan_gaps);
+  const markdown = withPlanGapReport({ trusted, untrusted }, input.plan_gaps);
   return { markdown, numeric, coverageOk, usedDefault };
 }
 
