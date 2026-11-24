@@ -7,7 +7,9 @@
 #1118 的[持久跨项目公平领取](06-runtime-view.md#持久跨项目公平领取1118)采用项目服务序号及有界持久扫描，复用现有 claim 锁和准入。schema 77 完整保留 #1159 的 schema 76，真实 PG 与独立进程回归接既有 dispatch-limits Actions，最终 SHA 待验。
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
-> 同步日期：2026-11-21
+> 同步日期：2026-11-24
+
+#1230 的[结算回执定位](09-interface-specs.md#model-gateway)映射 FR-CRED-003 / FR-CRED-004。回执按唯一持久请求身份读取，活动 Attempt 继续约束恢复准入与 `not_started` 判定。PostgreSQL 回归接既有 platform-api Actions，最终 SHA 待验。
 
 #1252 的[Responses 完成尾部与结算时序](../MODEL_GATEWAY_TRANSPARENCY.md#responses-完成尾部与结算时序1252)映射 FR-CRED-003 与 IR-002。保持最终用量、原字节、额度和未知效果门，回归接既有 Actions，现场尾帧与最终 SHA 验收分开。
 

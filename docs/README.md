@@ -8,7 +8,7 @@
 #1236 的[重试确认前检查](architecture/09-interface-specs.md#清空重试的确认前检查1236)让任务列表和详情在清空确认前读取具体保留原因，实际 POST 的 409 同样消费结构化分类和下一步。设备、知识治理及续做预算记录分别展示，保留原任务后可通过任务工作台的「下达任务」按原目标新建任务。最终候选 Actions 另验。
 #1236 在保持顶层错误码 `TASK_DELETE_KNOWLEDGE_RETAINED` 兼容的前提下，用 `retained_kinds` / `retained_reason` 区分「设备历史引用旧 Job」与「知识/治理记录」，并把续做预算留痕单列一类；设备历史情形下拒绝后旧 Job 与 released 租约都保持不动。
 任务声明的前置条件反馈（#1245）在 [接口规格](architecture/09-interface-specs.md#任务声明的前置条件反馈12452026-11-23) 中按快照分档。正常省略返回 `task_result_contract_missing`，现有无效契约返回 `task_result_contract_invalid`，均为当前 Agent 无法修正的永久前置条件。正常创建到实际 Control HTTP 与事件入账回归接既有 Actions，最终候选另验。
-#1230 修正了 [`GET /gateway/_settlement/:id`](architecture/09-interface-specs.md#model-gateway) 的定位范围：收取回执时不再要求 token 必须解析到 active Attempt。`job_tokens` 不存 `attempt_id`，此前靠 active Attempt 推导，Job 收尾窗口里 Attempt 已终态就会以 `attempt_id = NULL` 过滤，把已经 settled 的请求读成 `not_found`，客户端据此判 `stage=settlement, status=404` 永久失败并丢掉整个 Job 的成果（现场 2 天 8 例）。现在无活动 Attempt 时按记录该请求的 Attempt 定位，仍受 Job + token + workload + request id 约束，未知 request id 依旧 404；回归在 `ci:integration:platform-api` 的同 Job 模型恢复套件里，最终 SHA Actions 待验。
+#1230 的 [`GET /gateway/_settlement/:id`](architecture/09-interface-specs.md#model-gateway) 按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一持久身份读取，原 Attempt 已终态或出现后续活动 Attempt 时仍可读。多条匹配回答 `unknown`，真缺失仍为 404，失效 token 和终态 Job 仍拒绝。历史 `settled` 只表示账本已经结算，模型结果和恢复准入分别判定。PostgreSQL 回归接 `ci:integration:platform-api`，最终 SHA Actions 待验，现场 8 次失败的逐条归因与真实模型效果未验证。
 
 #1228 把运行时自带的 Undici 跟到已修复版本：Kali 镜像的 Node 24.22.2→24.22.3（自带 Undici 7.30.2，两架构校验和同步更新）、控制面四个 Node 镜像 digest 由 24.21.0 升到 24.22.3、agent 基础镜像换成 24.22.3-alpine/bookworm-slim 摘要、工作区 `undici` 直接依赖收到 `^7.30.2`、DSH 运行时用 `overrides` 固定 8.12.4，并在两处 Dockerfile 打印 `process.version` / `process.versions.undici` 作为候选产物证据。顺带修掉 kali 清单里指向 `v22.23.2` 的 Node 下载地址。Pi 1.6.0 另行单独验证，不在本次范围；版本取证以 Actions 镜像构建日志为准，未运行真实模型。
 
@@ -39,7 +39,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 #1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，合法原 Job 的冻结恢复身份先于默认，满额时等待原账号，保留预算门；#1078 新 Job 按余量比例、真实在途数、历史及当前分配数、默认平局优先、稳定 ID 排序；三层容量、临时健康过滤、全满保留 pending 与无秘密冻结审计对齐现有 Dispatcher，5 秒合并唤醒不引入排队取消期限，跨 Provider 治理等价仍未交付，详见同一运行时视图；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-23
+> 同步日期：2026-11-24
 > **进度消费与保活（#1092）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)记录 chunk/RPC 的协作 I/O 让出和普通多行文本脱敏优化，保留完整进度、转义/畸形 OM 隐私与退出诊断。独立 Worker＋真实 Undici 的回归接既有 Actions，最终 head 见 PR #1093；无任务重跑或部署。
 > **可行动人工请求（2026-11-09）**：严格 guidance、完整 body_json、L0/L1 按需读取、waiting_human 当前 Scheduler 投影及同 Job 待办去重已同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](architecture/01-system-specification.md)、[接口/运行时视图](architecture/09-interface-specs.md#可行动人工请求2026-11-09)和[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。请求原文与平台操作的展示边界见[安全视图](architecture/10-security-and-trust-boundaries.md#人工断点业务文件权限)。消息账本、恢复准入、ACK 和完成仍独立；最终 SHA Actions 待验，注意力收益未测量。
 > **Pi 请求错误诊断（#1083）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)与[运行时视图](architecture/06-runtime-view.md#pi-请求失败诊断与恢复分类1083)记录允许名单化错误阶段/cause 投影、分类与恢复许可分离及共享 DSH reader 边界。请求包装失败不新增 CLI 重启或未知效果重放；本轮最终 SHA Actions 待验，原失败根因未全部确定。

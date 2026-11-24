@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-21
+> 同步日期：2026-11-24
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -357,7 +357,7 @@ Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_
 
 #1097 的 [managed proxy 逐跳隔离](../MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)消费 Connection 动态字段，连接寿命与 framing 由各跳生成；业务内容、认证/控制字段及流式边界保持，历史错误归因与协议修复证据分别记录。
 
-Model Gateway 支持原始方法/相对路径/query、未知端到端头及原始 body；保留上游状态、错误、头和 SSE，不隐式重试或重定向。Host、认证及必要逐跳/framing 在内核边界处理。`x-deepsonar-request-id` 与 `x-deepsonar-retry-of` 是被消费的精确控制字段，后者仅在原 scoped no-start 证明、最新 live owner、冻结跨代际恢复许可及原累计预算全部通过时准入新的关联 main 调用，不授予重放；详见[同 Job 模型恢复](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。`GET /gateway/_settlement/:id` 是当前 Job/token/workload 范围内、不可缓存的只读结算查询（有活动 Attempt 时并入该 Attempt 过滤；Attempt 已进入终态时按记录该请求的 Attempt 定位，收尾窗口不会因 `attempt_id` 消失把已结算请求读成 `not_found`，#1230），不是上游路由或模型调用。返回 settled、not_started、policy_rejected、pending、unknown 或 not_found，不泄露其他 scope 的 ledger。预算准入可返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`，客户端须显式提供受预算约束的输出参数。原始请求流有界缓冲、HEAD/OPTIONS、编码及升级限制见[契约](../MODEL_GATEWAY_TRANSPARENCY.md)，实现见[Gateway](../../apps/scheduler/src/gateway.ts)。
+Model Gateway 支持原始方法/相对路径/query、未知端到端头及原始 body；保留上游状态、错误、头和 SSE，不隐式重试或重定向。Host、认证及必要逐跳/framing 在内核边界处理。`x-deepsonar-request-id` 与 `x-deepsonar-retry-of` 是被消费的精确控制字段，后者仅在原 scoped no-start 证明、最新 live owner、冻结跨代际恢复许可及原累计预算全部通过时准入新的关联 main 调用，不授予重放；详见[同 Job 模型恢复](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。`GET /gateway/_settlement/:id` 是当前 Job/token/workload 范围内、不可缓存的只读结算查询（按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一持久身份定位，原 Attempt 终态或已有后续活动 Attempt 时仍可读，#1230），不是上游路由或模型调用。返回 settled、not_started、policy_rejected、pending、unknown 或 not_found，不泄露其他 scope 的 ledger。多条匹配回答 `unknown`。活动 Attempt 的比较只用于判定当前自身零用量错误结算能否回答 `not_started`，历史同类记录回答 `settled`。历史 `settled` 表示原 effect 与用量账本已经结算，模型结果仍按原 SDK 结果判定，重试继续经过现有恢复准入。预算准入可返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`，客户端须显式提供受预算约束的输出参数。原始请求流有界缓冲、HEAD/OPTIONS、编码及升级限制见[契约](../MODEL_GATEWAY_TRANSPARENCY.md)，实现见[Gateway](../../apps/scheduler/src/gateway.ts)。
 
 `GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。查询在 Job 锁内读取原预算，不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。主执行由沙箱请求生成适配器处理输出参数，OM 由受审 wrapper 处理；两者都不替代 Gateway 准入。
 

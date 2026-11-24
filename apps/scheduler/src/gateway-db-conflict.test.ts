@@ -84,15 +84,15 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
       if (query.includes("FROM job_event_rate_limits")) return [{ job_id: jobId, window_started_at: new Date(),
         progress_count: 0, standard_count: 0, terminal_count: 0 }];
       if (query.startsWith("SELECT e.status, e.settlement_json, l.settlement_status, l.source, e.attempt_id")) {
-        // #1230: the receipt is located by durable identity (job, original token, request id,
-        // workload), so the request id is the third value; two rows for one identity stay
-        // visible here because the real query asks for LIMIT 2 to detect that ambiguity.
-        // 生产查询显式限定 effect_kind：workload 只是用途字段，不能替代 effect_kind。
+        // Match the production receipt identity and original Attempt/effect ledger join.
         return state.effects.filter((entry) => entry.effect_kind === "gateway_model_request"
-          && (entry.intent_json as Row)?.gateway_request_id === values[2]).map((effect) => ({
-          ...effect, settlement_status: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.settlement_status,
-          source: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.source,
-        }));
+          && entry.job_id === values[0]
+          && (entry.resource_identity_json as Row)?.job_token_id === values[1]
+          && (entry.intent_json as Row)?.gateway_request_id === values[2]
+          && (entry.intent_json as Row)?.workload === values[3]).slice(0, 2).map((effect) => {
+          const ledger = state.ledger.find((entry) => entry.attempt_id === effect.attempt_id && entry.effect_id === effect.effect_id);
+          return { ...effect, settlement_status: ledger?.settlement_status, source: ledger?.source };
+        });
       }
       if (query.startsWith("SELECT jt.*")) return [tokenRow(state)];
       if (query.startsWith("SELECT * FROM credentials")) return [credential];
