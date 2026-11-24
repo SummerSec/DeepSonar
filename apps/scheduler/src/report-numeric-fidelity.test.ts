@@ -440,7 +440,7 @@ test("#1251 非强制目标报告：结论→审计→原始投影→保留的�
   assert.ok(conclusion === 0, `首段必须是平台结论，实际 ${conclusion}`);
   assert.ok(conclusion < summary && summary < detail && detail < body, `顺序应为 结论→摘要→投影→正文，实际 ${conclusion}/${summary}/${detail}/${body}`);
   assert.ok(!final.markdown.includes("# 任务报告："), "不得复制整份默认报告");
-  
+
 });
 
 test("contracted task reports cannot promote model prose or technical confirmation to task success", async () => {
