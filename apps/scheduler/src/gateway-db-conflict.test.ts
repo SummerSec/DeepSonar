@@ -254,6 +254,24 @@ test("#1260 allowance 入口只投影需要的快照键，不整列搬运冻结�
   }
 });
 
+async function counterValue(name: string, labels = ""): Promise<number> {
+  const prefix = `${name}${labels} `;
+  const line = (await renderMetrics()).split("\n").find((entry) => entry.startsWith(prefix));
+  return line ? Number(line.slice(prefix.length)) : 0;
+}
+
+test("#1262 settlement 查不到回执时计入 not_found 指标", async (t) => {
+  const f = setup(t, "main", "40P01", 0);
+  const labels = '{result="not_found"}';
+  const before = await counterValue("deepsonar_gateway_settlement_total", labels);
+  const response = await f.inject({ method: "GET", url: `/gateway/_settlement/${randomUUID()}`,
+    headers: { authorization: `Bearer ${token}` } });
+  assert.equal(response.statusCode, 404, response.body);
+  assert.deepEqual(JSON.parse(response.body), { status: "not_found" });
+  const after = await counterValue("deepsonar_gateway_settlement_total", labels);
+  assert.equal(after, before + 1, "not_found 必须落指标");
+});
+
 async function conflictCount(code: string, exhausted = false): Promise<number> {
   const metric = exhausted ? "exhausted" : "retries";
   const prefix = `deepsonar_gateway_db_conflict_${metric}_total{workload="${workload}",code="${code}"} `;

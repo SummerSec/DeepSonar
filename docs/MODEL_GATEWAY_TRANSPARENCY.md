@@ -15,6 +15,22 @@ Responses SSE 在合法 `response.completed` 中取得完整最终用量后，�
 
 scanner 正反例和真实 HTTP/PG 用量、额度读回、Pi 式完成即关闭、完成前取消、完成后上游中断与凭据回显回归，分别接既有 `pnpm ci:unit:executor-real` 与 `pnpm ci:integration:platform-api`。完整 JSON 缺末尾帧分隔的失败、重复完成和业务数据同样拒收。最终 SHA Actions 待验，生产重跑与真实模型验证未执行。
 
+## Managed proxy 的访问日志（#1262）
+
+代理为每个请求写一行访问日志：方法、**路径模板**（`/gateway/_settlement/:id`、`/gateway/_allowance`、`/gateway/model-request`、`/gateway/other`、`/control/v1/jobs/:job/:operation`）与**结果分类**——`local-reject`（代理自己拒绝，含缺前缀路径）、上游状态码、`upstream-error`（502）或 `aborted`（响应写出前连接结束）。模板跟着实际路由分支走，缺前缀的 `/_settlement/:id` 记成 `/unrouted` + `local-reject`，不会冒充 `/gateway` 路径；结果也不从可能未设置的 `statusCode` 反推。查询串、请求头、`Authorization`、request id 与 body 一律不落日志。
+
+写入有界且**结算单独预留**：普通请求与结算查询各有独立的 240 行/窗口预算，普通流量写满不会挤掉要定位的结算记录。超出预算时**立即**写一行 `log-budget exhausted ordinary=<cap> settlement=<cap>`（不等到窗口滚动），窗口滚动时再补写精确的分桶计数 `log-budget dropped ordinary=N settlement=M`。因此繁忙代理不会无上限写宿主磁盘，也不会把「窗口里没看到 404」当成没发生。
+
+两个口径要记住：预算预留按**模板**判定，所以成功的结算查询也占预留桶（404 只有拿到响应才知道，事后无法重分类）；缺 `/gateway` 前缀的 `/_settlement/<uuid>` 同样计入预留桶，但模板仍记 `/unrouted` + `local-reject`，不会伪装成网关路径。
+
+窗口默认 60 秒，超限与时钟步长只为回归开放：`DEEPSONAR_GATEWAY_LOG_WINDOW_MS`（50–3600000）、`DEEPSONAR_GATEWAY_LOG_MAX` / `DEEPSONAR_GATEWAY_LOG_SETTLEMENT_MAX`（1–100000）、`DEEPSONAR_GATEWAY_LOG_CLOCK_STEP_MS`（0–3600000，虚拟时钟每写一次前进这么多毫秒，用来在不依赖真实耗时的情况下验证窗口滚动）。宿主侧仍需给容器配置日志轮转（例如 `--log-opt max-size`）：这一层只管住写入速率，不负责回收。
+
+结果里的 `complete` 以 `finish` + `writableFinished` 为准，只有写出真正结束才算完整。
+
+Scheduler 侧补 `deepsonar_gateway_settlement_total{result}`（`settled`/`not_started`/`pending`/`unknown`/`not_found`），并在 `not_found` 时记 request id、job、是否仍有活动 Attempt 与 workload（不含 token/body）。
+
+**边界**：这两层各自说明「我收到了什么、我怎么回的」，但同一条请求无法跨层关联——代理日志不含 request id，Scheduler 日志不含客户端来源，Pi 侧诊断本轮未改。因此当怀疑请求没到达时，可以用两边的计数与模板判断「代理有没有收到这类请求」「Scheduler 有没有收到此类查询」，不能据此断定某个具体 Job 停在哪一层；跨层关联需要另加一个不泄露 URL/凭据/响应体的关联标识。
+
 ## Managed proxy 的逐跳连接策略（#1097）
 
 Sandbox → managed proxy → Scheduler 是不同 HTTP 连接。代理双向消费固定逐跳字段和 `Connection` 动态点名字段，由各跳生成自身 Host、连接策略与 framing；不能把后端 `Keep-Alive` 的寿命广告送给客户端。普通 Job Authorization 和 `x-deepsonar-*` 字段仍须到达 Scheduler，除非被入站 Connection 明确点名；此边界不同于 Scheduler → Provider 对认证和控制字段的消费。

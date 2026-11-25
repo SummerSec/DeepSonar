@@ -1,8 +1,7 @@
 # DeepSonar 文档索引
 
 本轮修复 `/gateway/_allowance` 的等待放大：该端点只做额度咨询，却拿了 1–2 个 jobs 行锁并整行读取 ~440KB 冻结快照，实测 P95 23–27s，超过客户端 15s 超时，导致 30.5% 的 Job 在首个模型请求前失败。现在查询改为无锁只读，入口只投影 provider binding 与预算用到的快照键（客户端 15s 超时不变，准入仍在锁内重新核准）；`jobs` 快照瘦身与 allowance 指标是后续独立项（[预算与 OM 迁移](MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)、[安全边界](architecture/10-security-and-trust-boundaries.md)）。同步日期：2026-11-25。
-
-
+网关结算观测补两层（#1262）：受管 gateway-proxy 增加逐请求访问日志（方法/路径模板/结果分类，`local-reject` 与 `aborted` 各自成类，不含 token、查询串、request id 与 body），Scheduler 侧新增 `deepsonar_gateway_settlement_total{result}` 与 `not_found` 自证日志。两层不做同请求关联，因此只支持「这类请求有没有到过代理 / Scheduler 回了什么」，不支持断定某个 Job 停在哪一层。见 [MODEL_GATEWAY_TRANSPARENCY §Managed proxy 的访问日志](MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的访问日志1262)。
 
 任务总报告改成「可信区块整体前置」（#1251）：平台结果摘要 → 审计摘要 → 原始投影 → 不可信正文，未闭合的模型尾部后面不再有任何可吞掉的内容，冻结快照里的目标与结束理由按纯文本渲染；页面与下载 Markdown 顺序一致。实现与验收见 [接口规格 · 任务总报告的读者口径](architecture/09-interface-specs.md#任务总报告的读者口径125012512026-11-24)。
 
