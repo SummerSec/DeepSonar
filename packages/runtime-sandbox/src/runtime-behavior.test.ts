@@ -21,6 +21,29 @@ test("human native import keeps conversation identities but excludes old runtime
   // #1228：1.6.0 仍是 version 3 布局，投影规则与 1.5.2 相同；未核验版本保持拒绝。
   assert.equal(nativeHumanSessionCapability("pi","1.6.0").status,"supported");
   assert.equal(nativeHumanSessionCapability("pi","1.7.0").status,"unsupported");
+
+test("#1228 1.6.0 会话投影保留人类文本、剔除运行元数据并拒绝越界身份", () => {
+  const id = "7f1f0a1e-1111-4111-8111-11111111111a";
+  const source = [
+    { type: "session", version: 3, id, cwd: "/workspace", timestamp: "2026-11-25T00:00:00Z",
+      meta: { cli: "1.6.0", host: "private-host" } },
+    { type: "message", id: "u1", parentId: null, timestamp: "2026-11-25T00:00:01Z",
+      message: { role: "user", content: "HUMAN_KEPT_TEXT 保留这段人类原话" } },
+    { type: "message", id: "a1", parentId: "u1", timestamp: "2026-11-25T00:00:02Z",
+      message: { role: "assistant", content: [{ type: "text", text: "ASSISTANT_KEPT_TEXT" }] } },
+  ].map(value => JSON.stringify(value)).join("\n");
+  const projected = projectNativeHumanSession("pi", "1.6.0", id, source);
+  assert.equal(projected.status, "supported");
+  assert.match(projected.content ?? "", /HUMAN_KEPT_TEXT/u);
+  assert.match(projected.content ?? "", /ASSISTANT_KEPT_TEXT/u);
+  // 只导入文本历史：会话头里的运行元数据不进结果。
+  assert.doesNotMatch(projected.content ?? "", /private-host/u);
+  // 越界身份在投影阶段直接拒绝（capability 只判断版本是否已核验）。
+  assert.equal(projectNativeHumanSession("pi", "1.6.0", id,
+    source.replace('"cwd":"/workspace"', '"cwd":"/tmp"')).status, "rejected");
+  assert.equal(projectNativeHumanSession("pi", "1.6.0", "ffffffff-ffff-4fff-8fff-ffffffffffff", source).status, "rejected");
+  assert.equal(nativeHumanSessionCapability("pi", "1.8.0").status, "unsupported");
+});
   assert.doesNotMatch(nativeHumanSessionCapability("pi","1.7.0").reason ?? '', /text_history_only/);
   assert.equal(projectNativeHumanSession("pi","0",id,source).status,"unsupported");
   assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n{bad").status,"rejected");
