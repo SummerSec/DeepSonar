@@ -160,12 +160,24 @@ if (testDatabaseUrl) {
       // interrupted 收口（markAttemptInterrupted 会 settle 掉未决网关请求），但该夹具没有
       // 完整的冻结预算，重跑仍会被预算检查拒绝——所以这里断言放弃路径的只读性：
       // 被拒时人工请求必须完全没动，不能先关请求再报错。
+      // #1223 评审：只认任意 409 不够，必须证明被拒在预算这一层且没有留半截状态。
+      const [jobBefore] = await sql`SELECT status, started_at, finished_at FROM jobs WHERE id = ${rerunAnswered.jobId}`;
+      const attemptsBefore = await sql`SELECT attempt_no, status, phase FROM job_attempts
+        WHERE job_id = ${rerunAnswered.jobId} ORDER BY attempt_no`;
       const refusedByBudget = await call(rerunAnswered.jobId, "rerun-current", { abandon_checkpoint: true });
-      assert.notEqual(refusedByBudget.statusCode, 200, refusedByBudget.body);
+      assert.equal(refusedByBudget.statusCode, 409, refusedByBudget.body);
+      assert.equal(refusedByBudget.json().error_code, "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING", refusedByBudget.body);
       const [requestAfterAbandon] = await sql`SELECT status, close_reason, resumed_at FROM human_requests
         WHERE id = ${rerunAnswered.requestId}`;
       assert.deepEqual({ status: requestAfterAbandon.status, close_reason: requestAfterAbandon.close_reason,
         resumed_at: requestAfterAbandon.resumed_at }, { status: "answered", close_reason: null, resumed_at: null });
+      const [jobAfterBudget] = await sql`SELECT status, started_at, finished_at FROM jobs WHERE id = ${rerunAnswered.jobId}`;
+      assert.deepEqual(jobAfterBudget, jobBefore, "被拒后 Job 状态与时间戳不得变化");
+      const attemptsAfter = await sql`SELECT attempt_no, status, phase FROM job_attempts
+        WHERE job_id = ${rerunAnswered.jobId} ORDER BY attempt_no`;
+      assert.deepEqual(attemptsAfter, attemptsBefore, "被拒后不得新增或改写 Attempt");
+      assert.deepEqual(refusedByBudget.json().missing_fields, ["agent_snapshot_json.runtime_knobs"],
+        "被拒必须指向冻结预算缺失，而不是别的拒绝");
 
       // 断点仍在保存（preparing）时同样不算不可恢复，拒绝且不改状态。
       const preparing = await insertWaitingJob("answered");
