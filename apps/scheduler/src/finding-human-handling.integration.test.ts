@@ -279,6 +279,114 @@ if (!testDatabaseUrl) {
         expected: { verify_status: "needs_human", subject_revision: null, latest_round_id: null } }, detachedFindingId);
       assert.equal(detachedClose.statusCode, 409, detachedClose.payload);
       assert.equal(detachedClose.json().error_code, "FINDING_CANVAS_INVALID");
+
+      // #1264：人工证据按「单次处置」从审计记录给出，且只在有 tasks:read 时解析成目标；
+      // 旧字段 evidence_refs_json 里人工追加的引用对无权限调用方不可见。
+      const evidenceToken = generateToken();
+      await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
+        VALUES ('证据可读',${projectId},${evidenceToken.prefix},${evidenceToken.hash},${['findings:read','findings:write','tasks:read']})`;
+      const [evidenceFinding] = await sql`SELECT job_id FROM findings WHERE id = ${findingId}`;
+      const seedEvidence = async (label: string) => {
+        const artifactId = randomUUID();
+        const evidenceId = randomUUID();
+        await sql`INSERT INTO artifacts(id,project_id,job_id,artifact_key,kind,source_operation)
+          VALUES (${artifactId},${projectId},${String(evidenceFinding.job_id)},${`human-confirm-${label}`},'fact','emit_fact')`;
+        await sql`INSERT INTO artifact_evidence(id,artifact_id,statement,kind)
+          VALUES (${evidenceId},${artifactId},${`人工复现证据 ${label}`},'observation')`;
+        return evidenceId;
+      };
+      const evidenceA = await seedEvidence("A");
+      const firstConfirm = await app.inject({
+        method: "PATCH", url: `/findings/${findingId}/disposition`, headers,
+        payload: { disposition: "confirmed_vuln", note: "人工确认 A", evidence_refs: [evidenceA] },
+      });
+      assert.equal(firstConfirm.statusCode, 200, firstConfirm.payload);
+      const withEvidence = await app.inject({
+        method: "GET", url: `/findings/${findingId}`,
+        headers: { authorization: `Bearer ${evidenceToken.plaintext}` },
+      });
+      assert.equal(withEvidence.statusCode, 200, withEvidence.payload);
+      const firstHistory = withEvidence.json().disposition_history;
+      assert.equal(Array.isArray(firstHistory) && firstHistory.length, 1, "有 tasks:read 时必须给出逐次处置历史");
+      assert.equal(firstHistory[0].disposition, "confirmed_vuln");
+      assert.equal(firstHistory[0].evidence[0].evidence_id, evidenceA);
+      assert.equal(firstHistory[0].evidence[0].canvas_id, canvasId);
+      assert.equal(firstHistory[0].evidence[0].statement, "人工复现证据 A");
+      assert.equal("uri" in firstHistory[0].evidence[0], false, "不把原始 uri 当可点击目标下发");
+
+      // 改判：每条决定各自保留自己的证据，旧决定仍可核查。
+      const evidenceB = await seedEvidence("B");
+      const rejudge = await app.inject({
+        method: "PATCH", url: `/findings/${findingId}/disposition`, headers,
+        payload: { disposition: "resolved", note: "改判 B", evidence_refs: [evidenceB] },
+      });
+      assert.equal(rejudge.statusCode, 200, rejudge.payload);
+      const afterRejudge = await app.inject({
+        method: "GET", url: `/findings/${findingId}`,
+        headers: { authorization: `Bearer ${evidenceToken.plaintext}` },
+      });
+      const history = afterRejudge.json().disposition_history as Array<{
+        disposition: string;
+        note: string | null;
+        evidence: Array<{ evidence_id: string }>;
+      }>;
+      assert.equal(history.length, 2, "两次处置各自留一条历史");
+      assert.equal(history[0].disposition, "resolved");
+      assert.deepEqual(history[0].evidence.map((item) => item.evidence_id), [evidenceB]);
+      assert.equal(history[1].disposition, "confirmed_vuln");
+      assert.deepEqual(history[1].evidence.map((item) => item.evidence_id), [evidenceA], "旧决定的证据仍可核查");
+
+      const withoutTasksRead = await app.inject({ method: "GET", url: `/findings/${findingId}`, headers });
+      assert.equal(withoutTasksRead.statusCode, 200, withoutTasksRead.payload);
+      const masked = withoutTasksRead.json();
+      assert.equal(masked.disposition_history, undefined, "没有 tasks:read 时不给逐次证据");
+      assert.deepEqual(
+        (masked.finding.evidence_refs_json as string[]).filter((ref) => ref === evidenceA || ref === evidenceB),
+        [],
+        "人工追加的证据引用不得顺着旧字段漏出",
+      );
+
+      // 同项目其他画布的证据也能点击（tasks:read 是项目级，不按画布收窄）。
+      const otherCanvas = randomUUID();
+      const otherCanvasJob = randomUUID();
+      await sql`INSERT INTO canvases(id,project_id,title,status) VALUES (${otherCanvas},${projectId},'另一个画布','active')`;
+      await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+        VALUES (${otherCanvasJob},${projectId},${otherCanvas},'explore','succeeded',${sql.json({})})`;
+      const evidenceC = randomUUID();
+      const artifactC = randomUUID();
+      await sql`INSERT INTO artifacts(id,project_id,job_id,artifact_key,kind,source_operation)
+        VALUES (${artifactC},${projectId},${otherCanvasJob},'human-confirm-C','fact','emit_fact')`;
+      await sql`INSERT INTO artifact_evidence(id,artifact_id,statement,kind)
+        VALUES (${evidenceC},${artifactC},'另一个画布上的证据 C','observation')`;
+      const thirdDecision = await app.inject({
+        method: "PATCH", url: `/findings/${findingId}/disposition`, headers,
+        payload: { disposition: "accepted", note: "补充别的画布证据", evidence_refs: [evidenceC] },
+      });
+      assert.equal(thirdDecision.statusCode, 200, thirdDecision.payload);
+      const crossCanvas = await app.inject({
+        method: "GET", url: `/findings/${findingId}`,
+        headers: { authorization: `Bearer ${evidenceToken.plaintext}` },
+      });
+      const crossCanvasHistory = crossCanvas.json().disposition_history as Array<{
+        disposition: string;
+        evidence: Array<{ evidence_id: string; canvas_id: string | null; job_id: string }>;
+      }>;
+      assert.equal(crossCanvasHistory[0].disposition, "accepted");
+      assert.equal(crossCanvasHistory[0].evidence[0].evidence_id, evidenceC);
+      assert.equal(crossCanvasHistory[0].evidence[0].canvas_id, otherCanvas, "同项目其他画布的证据也要给出来源画布");
+      assert.equal(crossCanvasHistory[0].evidence[0].job_id, otherCanvasJob);
+
+      // 跨项目令牌看不到这条 Finding。
+      const otherProject = randomUUID();
+      await sql`INSERT INTO projects(id,name) VALUES (${otherProject},'另一个项目')`;
+      const otherToken = generateToken();
+      await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
+        VALUES ('别的项目',${otherProject},${otherToken.prefix},${otherToken.hash},${['findings:read','tasks:read']})`;
+      const crossProject = await app.inject({
+        method: "GET", url: `/findings/${findingId}`,
+        headers: { authorization: `Bearer ${otherToken.plaintext}` },
+      });
+      assert.ok(crossProject.statusCode >= 400, `跨项目必须拒绝，实际 ${crossProject.statusCode}: ${crossProject.payload}`);
     } finally {
       if (stopListening) await stopListening().catch(() => undefined);
       if (closeApp) await closeApp().catch(() => undefined);
