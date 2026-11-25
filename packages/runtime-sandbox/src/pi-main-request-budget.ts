@@ -22,7 +22,15 @@ function diagnosticField(value, key) {
   try {
     for (let depth = 0; value && (typeof value === 'object' || typeof value === 'function') && depth < 4; depth++) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor) return 'value' in descriptor ? descriptor.value : undefined;
+      if (descriptor) {
+        if ('value' in descriptor) return descriptor.value;
+        // #1228: DOMException 之类的 name/code 是原型上的访问器；只读 data property 会把
+        // abort 类错误投影成「什么都没有」。这里在读值时兜住异常，仍然不复制任何正文。
+        if (typeof descriptor.get === 'function') {
+          try { return descriptor.get.call(value); } catch { return undefined; }
+        }
+        return undefined;
+      }
       value = Object.getPrototypeOf(value);
     }
   } catch {}
@@ -47,6 +55,10 @@ function requestDiagnostic(error, stage, signal) {
     const name = diagnosticField(value, 'name');
     const code = diagnosticField(value, 'code');
     if (diagnosticNames.has(name)) result.name = name;
+    // #1228: 只保留安全形状（键名），不含任何取值，用于区分「没有 name 的普通对象」
+    // 和真正的 SDK 错误；键名限制长度与字符集，最多 6 个。
+    const keys = Object.keys(value).filter(key => /^[a-z_]{1,24}$/i.test(key)).slice(0, 6);
+    if (keys.length > 0) result.keys = keys;
     // #1262: 结算 404 需要知道「打到了哪个 origin」，否则无法判断是自己人还是中间层。
     // 只保留 origin（scheme+host+port），不含路径、查询、凭据或用户名。
     const origin = diagnosticField(value, 'endpoint');
