@@ -496,6 +496,149 @@ test("#1097 hop filtering preserves content bytes and framing for every supporte
   }
 });
 
+test("#1262 proxy access log separates local reject, status and completeness", { timeout: 20000 }, async (t) => {
+  const upstream = http.createServer((req, res) => {
+    const url = String(req.url);
+    if (url.includes("slow")) return; // never answer: close before headers
+    if (url.includes("partial")) {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("partial");
+      setTimeout(() => res.destroy(), 20);
+      return;
+    }
+    res.writeHead(url.includes("_settlement") ? 404 : 200).end("upstream");
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = (upstream.address() as net.AddressInfo).port;
+  const port = await freePort();
+  const child = spawn(process.execPath, ["-e", proxyScriptOnPort(port)], {
+    env: { ...process.env, DEEPSONAR_GATEWAY_UPSTREAM: `http://127.0.0.1:${upstreamPort}/gateway` },
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const lines: string[] = [];
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => { lines.push(...chunk.split("\n").filter(Boolean)); });
+  t.after(() => {
+    child.kill("SIGKILL");
+    upstream.closeAllConnections();
+    upstream.close();
+  });
+  let ready = false;
+  for (let i = 0; i < 100 && !ready; i++) {
+    ready = await proxyRequest(port, "GET", "/_deepsonar_health").then((r) => r.status === 200, () => false);
+    if (!ready) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(ready, "proxy did not start");
+
+  const requestId = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  assert.equal((await proxyRequest(port, "GET", `/gateway/_settlement/${requestId}`)).status, 404);
+  assert.equal((await proxyRequest(port, "GET", `/gateway/ok`)).status, 200);
+  assert.equal((await proxyRequest(port, "GET", `/_settlement/${requestId}`)).status, 404);
+  // 上游发出状态头后断开：必须记 incomplete，不能记成普通 200。
+  await new Promise<void>((resolve) => {
+    const req = http.request({ host: "127.0.0.1", port, method: "GET", path: "/gateway/partial", agent: false }, (res) => {
+      res.on("error", () => resolve());
+      res.on("close", () => resolve());
+      res.resume();
+    });
+    req.on("error", () => resolve());
+    req.end();
+    setTimeout(resolve, 1_000);
+  });
+  // 上游一字未回时客户端断开：记 aborted。
+  await new Promise<void>((resolve) => {
+    const req = http.request({ host: "127.0.0.1", port, method: "GET", path: "/gateway/slow", agent: false });
+    req.on("error", () => resolve());
+    req.end();
+    setTimeout(() => { req.destroy(); resolve(); }, 60);
+  });
+
+  const needs = [
+    /\/gateway\/_settlement\/:id -> 404 complete \d+ms$/u,
+    /\/gateway\/other -> 200 complete \d+ms$/u,
+    /\/unrouted -> local-reject \d+ms$/u,
+    /\/gateway\/other -> 200 incomplete \d+ms$/u,
+    /-> aborted \d+ms$/u,
+  ];
+  for (let i = 0; i < 100 && !needs.every((pattern) => lines.some((line) => pattern.test(line))); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(lines.some((line) => /\/gateway\/_settlement\/:id -> 404 complete \d+ms$/u.test(line)), lines.join(" | "));
+  assert.ok(lines.some((line) => /\/unrouted -> local-reject \d+ms$/u.test(line)), lines.join(" | "));
+  assert.ok(lines.some((line) => /\/gateway\/other -> 200 complete \d+ms$/u.test(line)), lines.join(" | "));
+  assert.ok(lines.some((line) => /\/gateway\/other -> 200 incomplete \d+ms$/u.test(line)), lines.join(" | "));
+  assert.ok(lines.some((line) => /-> aborted \d+ms$/u.test(line)), lines.join(" | "));
+  // 访问日志只记模板与结果：真实 request id 与查询串一律不落日志。
+  assert.ok(!lines.join("\n").includes(requestId), "访问日志不得记录 request id");
+});
+
+test("#1262 settlement logs keep a reserved budget and report drops per bucket", { timeout: 40000 }, async (t) => {
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(String(req.url).includes("_settlement") ? 404 : 200).end("ok");
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const upstreamPort = (upstream.address() as net.AddressInfo).port;
+  const port = await freePort();
+  const child = spawn(process.execPath, ["-e", proxyScriptOnPort(port)], {
+    env: {
+      ...process.env,
+      DEEPSONAR_GATEWAY_UPSTREAM: `http://127.0.0.1:${upstreamPort}/gateway`,
+      // Deterministic window logic: tiny quotas, and a virtual clock that advances
+      // per log call instead of relying on wall-clock timing.
+      DEEPSONAR_GATEWAY_LOG_MAX: "3",
+      DEEPSONAR_GATEWAY_LOG_SETTLEMENT_MAX: "3",
+      DEEPSONAR_GATEWAY_LOG_WINDOW_MS: "1000",
+      DEEPSONAR_GATEWAY_LOG_CLOCK_STEP_MS: "50",
+    },
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const lines: string[] = [];
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => { lines.push(...chunk.split("\n").filter(Boolean)); });
+  t.after(() => {
+    child.kill("SIGKILL");
+    upstream.closeAllConnections();
+    upstream.close();
+  });
+  let ready = false;
+  for (let i = 0; i < 100 && !ready; i++) {
+    ready = await proxyRequest(port, "GET", "/_deepsonar_health").then((r) => r.status === 200, () => false);
+    if (!ready) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(ready, "proxy did not start");
+
+  for (let i = 0; i < 12; i++) await proxyRequest(port, "GET", "/gateway/ok");
+  const exhaustedAt = lines.findIndex((line) => line.includes("log-budget exhausted"));
+  const ordinaryLogged = lines.filter((line) => line.startsWith("[gateway-proxy] GET ") && !line.includes("_settlement"));
+  assert.ok(exhaustedAt >= 0, `普通预算耗尽必须立即可见：${lines.join(" | ")}`);
+  assert.ok(ordinaryLogged.length >= 3 && ordinaryLogged.length < 12,
+    `普通写入应在上限附近而不是每次全记：${ordinaryLogged.length}`);
+
+  // 普通预算耗尽之后，结算查询仍必须被记录（同一窗内预留）。
+  lines.length = 0;
+  assert.equal((await proxyRequest(port, "GET", "/gateway/_settlement/3f2504e0-4f89-41d3-9a0c-0305e82c3301")).status, 404);
+  // 缺前缀的结算查询同样落预留桶，不会混进普通桶。
+  assert.equal((await proxyRequest(port, "GET", "/_settlement/3f2504e0-4f89-41d3-9a0c-0305e82c3301")).status, 404);
+  const forwarded = () => lines.find((line) => /\/gateway\/_settlement\/:id -> 404 complete \d+ms$/u.test(line));
+  const rejected = () => lines.find((line) => /\/unrouted -> local-reject \d+ms$/u.test(line));
+  for (let i = 0; i < 100 && !(forwarded() && rejected()); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(forwarded(), `转发结算查询必须仍被记录：${lines.join(" | ")}`);
+  assert.ok(rejected(), `缺前缀的结算查询必须仍被记录（预留桶）：${lines.join(" | ")}`);
+
+  // 窗口滚动后按下限汇总：普通与结算分别计数。
+  lines.length = 0;
+  for (let i = 0; i < 40; i++) await proxyRequest(port, "GET", "/gateway/ok");
+  for (let i = 0; i < 100 && !lines.some((line) => line.includes("log-budget dropped")); i++) {
+    await proxyRequest(port, "GET", "/gateway/ok");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const summary = lines.find((line) => line.includes("log-budget dropped"));
+  assert.ok(summary, `缺分桶超限汇总：${lines.join(" | ")}`);
+  assert.match(String(summary), /dropped ordinary=\d+ settlement=\d+$/u);
+});
+
 test("#1097 declared trailers preserve duplicates and consume dynamic hop and forbidden fields", { timeout: 10000 }, async t => {
   let seen: string[] = [];
   let declaration: string | undefined;

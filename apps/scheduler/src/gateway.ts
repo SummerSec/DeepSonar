@@ -1434,23 +1434,46 @@ export function registerGateway(app: FastifyInstance): void {
           AND e.intent_json->>'workload'=${String(jt.workload)}
           ORDER BY e.created_at DESC LIMIT 2`;
         reply.header("cache-control", "no-store");
-        if (receipts.length > 1) return { status: "unknown" };
+        // #1262：三个候选层（沙箱内策略代理 → gateway-proxy → Scheduler）里只有最后一层
+        // 能判断回执到底有没有落库。这里按结果打点和记一行自证日志（只含 request id 与
+        // 结果，不含 token/body），加上 gateway-proxy 的访问日志就能回答
+        // "请求到没到、到的是哪一层"。
+        if (receipts.length > 1) {
+          inc("deepsonar_gateway_settlement_total", { result: "unknown" });
+          console.log(`[gateway] settlement ${receiptPath[1]!} -> unknown (duplicate identity)`);
+          return { status: "unknown" };
+        }
         const receipt = receipts[0];
         if (!receipt) {
           const noEffect = jt.attempt_id && await readNoEffectReceipt(sql, { jobId: String(jt.job_id),
             attemptId: String(jt.attempt_id), tokenId: String(jt.id), workload: gatewayWorkload(jt.workload), requestId: receiptPath[1]! });
-          return noEffect || reply.code(404).send({ status: "not_found" });
+          if (noEffect) {
+            inc("deepsonar_gateway_settlement_total", { result: "not_started" });
+            return noEffect;
+          }
+          inc("deepsonar_gateway_settlement_total", { result: "not_found" });
+          // not_found 有两种来源：回执确实没落库，或身份（Job/token/request id/workload）
+          // 不匹配。日志给出 job 与 attempt 是否存在，便于区分，不记 token 值。
+          console.log(`[gateway] settlement ${receiptPath[1]!} -> not_found (job=${String(jt.job_id)} active_attempt=${jt.attempt_id ? "present" : "none"} workload=${String(jt.workload)})`);
+          return reply.code(404).send({ status: "not_found" });
         }
         if (receipt.status === "settled" && receipt.settlement_status === "settled") {
           // #1230：只有当前活动 Attempt 自己的 no-start 结算才构成"未开始"证据；
           // 历史 Attempt 的 gateway_error 记录只回答"已结算"，绝不升级成新的 not_started 证明。
           const ownActiveAttempt = jt.attempt_id !== null && String(receipt.attempt_id) === String(jt.attempt_id);
           if (receipt.source === "gateway_error" && receipt.settlement_json?.external_effect === false && ownActiveAttempt) {
+            inc("deepsonar_gateway_settlement_total", { result: "not_started" });
             return { status: "not_started", reason: "gateway_transient" };
           }
+          inc("deepsonar_gateway_settlement_total", { result: "settled" });
           return { status: "settled" };
         }
-        return { status: receipt.status === "effect_pending" && !receipt.settlement_status ? "pending" : "unknown" };
+        if (receipt.status === "effect_pending" && !receipt.settlement_status) {
+          inc("deepsonar_gateway_settlement_total", { result: "pending" });
+          return { status: "pending" };
+        }
+        inc("deepsonar_gateway_settlement_total", { result: "unknown" });
+        return { status: "unknown" };
       }
       if (jt.workload !== "observational_memory" && jobTokenQuotaExhausted(jt.used_requests as number, jt.max_requests as number)) {
         await saveAdmissionReceipt("quota_exhausted");

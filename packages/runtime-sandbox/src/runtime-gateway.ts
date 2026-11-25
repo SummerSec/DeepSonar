@@ -74,22 +74,130 @@ function supportedTransferCoding(source) {
   return source.headers["transfer-encoding"] === undefined
     || String(source.headers["transfer-encoding"]).trim().toLowerCase() === "chunked";
 }
+// #1262: the sidecar had no access log, so "did this Job reach me?" was
+// unanswerable. Logs are diagnostic only: the template follows the actual routing
+// branch (gateway path, control path, or a local reject), and the outcome says
+// which of the three things happened — local reject, upstream status, or an
+// aborted connection. Nothing is inferred from a possibly-unset statusCode.
+const GATEWAY_TEMPLATES = [
+  [/\/_settlement\/[0-9a-fA-F-]{36}$/, "/_settlement/:id"],
+  [/\/_allowance$/, "/_allowance"],
+  [/\/(?:v1\/)?(?:messages|chat\/completions|responses|completions)$/, "/model-request"],
+];
+function relativeTemplate(relative) {
+  for (const [pattern, template] of GATEWAY_TEMPLATES) if (pattern.test(relative)) return template;
+  return "/other";
+}
+function controlTemplate(relative) {
+  if (/^\/jobs\/[^/]+\/[^/]+$/.test(relative)) return "/jobs/:job/:operation";
+  if (/^\/jobs\/[^/]+\//.test(relative)) return "/jobs/:job/:operation/…";
+  return "/other";
+}
+// #1262: per-request logs are bounded in-process so a busy proxy cannot grow the
+// host disk without limit. Settlement queries get their OWN reserved budget: the
+// failures worth diagnosing must never be the lines dropped by ordinary traffic.
+// Caps and the window are fixed defaults; the env knobs below exist so a
+// regression can prove the window logic without depending on wall-clock timing
+// (DEEPSONAR_GATEWAY_LOG_CLOCK_STEP_MS advances a virtual clock per log line and
+// is meant for tests only). Host log rotation is still required — this only caps
+// the writer.
+function logSetting(name, fallback, min, max) {
+  const raw = Number(process.env[name]);
+  return Number.isSafeInteger(raw) && raw >= min && raw <= max ? raw : fallback;
+}
+const LOG_WINDOW_MS = logSetting("DEEPSONAR_GATEWAY_LOG_WINDOW_MS", 60000, 50, 3600000);
+const LOG_MAX_PER_WINDOW = logSetting("DEEPSONAR_GATEWAY_LOG_MAX", 240, 1, 100000);
+const LOG_SETTLEMENT_MAX_PER_WINDOW = logSetting("DEEPSONAR_GATEWAY_LOG_SETTLEMENT_MAX", 240, 1, 100000);
+const LOG_CLOCK_STEP_MS = logSetting("DEEPSONAR_GATEWAY_LOG_CLOCK_STEP_MS", 0, 0, 3600000);
+const logCounts = { ordinary: 0, settlement: 0 };
+const logDropped = { ordinary: 0, settlement: 0 };
+let logWindowStart = 0;
+let logExhaustedReported = false;
+let virtualClock = 0;
+function logNow() {
+  if (LOG_CLOCK_STEP_MS > 0) { virtualClock += LOG_CLOCK_STEP_MS; return virtualClock; }
+  return Date.now();
+}
+function logLineRaw(text) { process.stdout.write(text + "\n"); }
+function logReset(now) {
+  logWindowStart = now;
+  logCounts.ordinary = 0; logCounts.settlement = 0;
+  logDropped.ordinary = 0; logDropped.settlement = 0;
+  logExhaustedReported = false;
+}
+function logRollover(now) {
+  if (logWindowStart === 0) { logReset(now); return; }
+  if (now - logWindowStart < LOG_WINDOW_MS) return;
+  if (logDropped.ordinary || logDropped.settlement) {
+    logLineRaw("[gateway-proxy] log-budget dropped ordinary=" + logDropped.ordinary
+      + " settlement=" + logDropped.settlement);
+  }
+  logReset(now);
+}
+function logLine(text, bucket) {
+  const now = logNow();
+  logRollover(now);
+  const limit = bucket === "settlement" ? LOG_SETTLEMENT_MAX_PER_WINDOW : LOG_MAX_PER_WINDOW;
+  if (logCounts[bucket] >= limit) {
+    logDropped[bucket]++;
+    // Report the first drop immediately: an operator must not have to wait for a
+    // rollover (or for another request) to learn that lines are being dropped.
+    if (!logExhaustedReported) {
+      logExhaustedReported = true;
+      logLineRaw("[gateway-proxy] log-budget exhausted ordinary=" + LOG_MAX_PER_WINDOW
+        + " settlement=" + LOG_SETTLEMENT_MAX_PER_WINDOW);
+    }
+    return;
+  }
+  logCounts[bucket]++;
+  logLineRaw(text);
+}
 const server = http.createServer((req, res) => {
   const incoming = new URL(req.url || "/", "http://proxy.local");
+  const startedAt = Date.now();
   if (incoming.pathname === "/_deepsonar_health") {
     res.writeHead(200).end("ok");
     return;
   }
   const isGatewayPath = incoming.pathname === prefix || incoming.pathname.startsWith(prefix + "/");
   const isControlPath = incoming.pathname === controlPrefix || incoming.pathname.startsWith(controlPrefix + "/");
+  // #1262: template mirrors the branch that is actually taken, so a path rejected
+  // locally can never look like a forwarded gateway path.
+  const template = isGatewayPath
+    ? prefix + relativeTemplate(incoming.pathname.slice(prefix.length))
+    : isControlPath ? controlPrefix + controlTemplate(incoming.pathname.slice(controlPrefix.length))
+      : "/unrouted";
+  // #1262: two independent facts are logged — the upstream HTTP status (once
+  // headers arrive) and whether the response actually finished. A close after the
+  // headers but before the body ends is "incomplete", never a plain 200.
+  let phase = "aborted";
+  let upstreamStatus = null;
+  let completed = false;
+  // A settlement query that answers with an error is exactly the line an operator
+  // needs, so it is charged to the reserved budget instead of the ordinary one.
+  // A settlement query stays on the reserved bucket even when it is rejected
+  // locally for a missing /gateway prefix — that is exactly the shape a broken
+  // client produces, and it must not be drowned by ordinary traffic.
+  const bucket = template.endsWith("/_settlement/:id") || /\/_settlement\/[0-9a-fA-F-]{36}$/.test(incoming.pathname)
+    ? "settlement" : "ordinary";
+  res.once("finish", () => { if (res.writableFinished) completed = true; });
+  res.once("close", () => {
+    const outcome = phase !== "upstream" ? phase
+      : upstreamStatus === null ? "aborted"
+        : upstreamStatus + (res.writableFinished && completed ? " complete" : " incomplete");
+    logLine("[gateway-proxy] " + req.method + " " + template + " -> " + outcome
+      + " " + (Date.now() - startedAt) + "ms", bucket);
+  });
   // The sidecar is intentionally a fixed-path forwarder. It exposes the
   // existing model Gateway and the Job-scoped control API only; arbitrary
   // proxying, CONNECT, and other Scheduler routes remain unavailable.
   if (!isGatewayPath && !isControlPath) {
+    phase = "local-reject";
     res.writeHead(404).end("not found");
     return;
   }
   if (!supportedTransferCoding(req)) {
+    phase = "local-reject";
     req.resume();
     res.writeHead(400).end("unsupported transfer coding");
     return;
@@ -102,6 +210,9 @@ const server = http.createServer((req, res) => {
   if (headers["content-length"] === undefined && (req.headers["transfer-encoding"] !== undefined
     || req.headers["content-length"] !== undefined)) headers["transfer-encoding"] = "chunked";
   const fail = () => {
+    // Once an upstream status arrived, the interesting fact is that the response
+    // body never completed; overwriting it with upstream-error would hide that.
+    if (upstreamStatus === null) phase = "upstream-error";
     if (res.headersSent || res.destroyed) {
       res.destroy();
       return;
@@ -129,6 +240,8 @@ const server = http.createServer((req, res) => {
     }
     const responseRemoved = connectionFields(reply);
     const status = reply.statusCode || 502;
+    phase = "upstream";
+    upstreamStatus = status;
     const bodyAllowed = req.method !== "HEAD" && status !== 204 && status !== 304 && status >= 200;
     const trailersAllowed = bodyAllowed && req.httpVersionMajor === 1 && req.httpVersionMinor >= 1;
     const responseHeaders = forwardHeaders(reply, responseRemoved, trailersAllowed);
