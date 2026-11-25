@@ -31,10 +31,16 @@ export function resolveRequestBudget(rows: readonly Record<string, unknown>[], w
     exhausted: (totalLimit > 0 && totalUsed >= totalLimit) || (workloadLimit > 0 && workloadUsed >= workloadLimit) };
 }
 
-/** Caller holds the Job lock. Expired/revoked generations remain authoritative. */
-export async function readHistoricalRequestBudget(db: typeof sql, jobId: string, workload: string, plan?: RequestPlan | null) {
+/** Admission holds the Job lock; expired/revoked generations remain authoritative.
+ * #1260: the advisory allowance read passes `lock: false` — it must not queue behind
+ * admission's locks, and a lock-free snapshot is enough for advisory numbers. */
+export async function readHistoricalRequestBudget(db: typeof sql, jobId: string, workload: string,
+  plan?: RequestPlan | null, options: { lock?: boolean } = {}) {
   const { jobIds } = await continuationBudgetScope(db, jobId);
-  const rows = await db`SELECT workload, used_requests, max_requests, request_total_limit
-    FROM job_tokens WHERE job_id=ANY(${jobIds}::uuid[]) ORDER BY id FOR UPDATE`;
+  const rows = options.lock === false
+    ? await db`SELECT workload, used_requests, max_requests, request_total_limit
+        FROM job_tokens WHERE job_id=ANY(${jobIds}::uuid[]) ORDER BY id`
+    : await db`SELECT workload, used_requests, max_requests, request_total_limit
+        FROM job_tokens WHERE job_id=ANY(${jobIds}::uuid[]) ORDER BY id FOR UPDATE`;
   return resolveRequestBudget(rows, workload, plan);
 }

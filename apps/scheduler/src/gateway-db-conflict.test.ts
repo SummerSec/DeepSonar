@@ -41,12 +41,15 @@ function tokenRow(state: Store) {
     agent_snapshot_json: snapshot, attempt_id: attemptId, attempt_no: 1 };
 }
 
+const seenQueries: string[] = [];
+
 function makeSql(current: () => Store, onAdmission = () => {}) {
   return Object.assign((input: TemplateStringsArray | Row, ...values: unknown[]) => {
     if (!Array.isArray(input)) return input;
     const query = input.join("?").replace(/\s+/gu, " ").trim();
     const state = current();
     const rows = (): Row[] => {
+      seenQueries.push(query);
       // This fixture has one Job, which owns and executes its entire budget scope.
       if (query === "SELECT COALESCE(budget_owner_job_id,id) AS root FROM jobs WHERE id=?") {
         assert.deepEqual(values, [jobId]);
@@ -93,6 +96,14 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
           const ledger = state.ledger.find((entry) => entry.attempt_id === effect.attempt_id && entry.effect_id === effect.effect_id);
           return { ...effect, settlement_status: ledger?.settlement_status, source: ledger?.source };
         });
+      }
+      // #1260：allowance 入口按路径做快照投影（`jsonb_exists` 还原键的是否存在）。
+      if (query.startsWith("SELECT jt.*") && query.includes("has_runtime_knobs")) {
+        const source = snapshot as Row;
+        return [{ ...tokenRow(state), binding_snapshot: source.gateway_provider_binding ?? null,
+          has_runtime_knobs: "runtime_knobs" in source, runtime_knobs: source.runtime_knobs,
+          has_agent_cli: "agent_cli" in source, agent_cli: source.agent_cli,
+          has_pi_extensions: "pi_extensions" in source, pi_extensions: source.pi_extensions }];
       }
       if (query.startsWith("SELECT jt.*")) return [tokenRow(state)];
       if (query.startsWith("SELECT * FROM credentials")) return [credential];
@@ -225,6 +236,23 @@ function setup(t: TestContext, selected: GatewayWorkload, code: string, failures
     headers: { authorization: `Bearer ${token}`, "x-deepsonar-request-id": requestId },
     payload: { model, messages: [{ role: "user", content: "offline" }] } }) };
 }
+
+test("#1260 allowance 入口只投影需要的快照键，不整列搬运冻结快照", async (t) => {
+  const f = setup(t, "main", "40P01", 0);
+  seenQueries.length = 0;
+  const response = await f.inject({ method: "GET", url: "/gateway/_allowance",
+    headers: { authorization: `Bearer ${token}` } });
+  assert.equal(response.statusCode, 200, response.body);
+  const tokenQueries = seenQueries.filter((query) => query.startsWith("SELECT jt.*"));
+  assert.ok(tokenQueries.length >= 1, "allowance 必须走 token 查询");
+  for (const query of tokenQueries) {
+    assert.match(query, /jsonb_exists/u, "allowance 入口必须用投影查询取快照键");
+    // 整列选择的长相是「j.agent_snapshot_json, a.id AS attempt_id」；投影查询里
+    // jsonb_exists(...) 后面也会跟逗号，所以按这条形状判定，而不是按列名。
+    assert.doesNotMatch(query, /j\.agent_snapshot_json, a\.id AS attempt_id/u,
+      "allowance 入口不得整列搬运冻结快照");
+  }
+});
 
 async function conflictCount(code: string, exhausted = false): Promise<number> {
   const metric = exhausted ? "exhausted" : "retries";

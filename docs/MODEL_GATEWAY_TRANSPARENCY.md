@@ -137,7 +137,7 @@ scanner 单测接 `pnpm ci:unit:executor-real`（gate-runtime），真实普通 
 
 [输出预算](../apps/scheduler/src/gateway-transparent-policy.ts) 不再给已放行 body 补写或压低输出参数。受预算约束的调用者必须显式提供剩余额度内的输出上限，以及该协议要求的 terminal usage（例如 Chat SSE `stream_options.include_usage`）；否则出站前返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`。输入/缓存成本仍在响应后确认，累计熔断不等于精确调用前总成本上限。
 
-`GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。查询在 Job 锁内读取原预算，不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。
+`GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。客户端 15s 只读超时保持不变：慢的根因在服务端等待放大，修好后无需放宽客户端超时，也就不会把路由层的瞬时中断静默延长成更长的阻塞。查询是**无锁只读咨询**（#1260：不拿 Job/Attempt/job_tokens 行锁，因此不会互相排队；入口也只投影快照里 provider binding 与预算真正用到的键，不整份搬运冻结快照），不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。
 
 主执行的 Pi、DSH、Claude start/resume 命令由显式[请求准入适配器](../packages/runtime-sandbox/src/model-request-policy.ts)包装，运行器上传自包含 Node 脚本，生命周期与 CLI 绑定。Scheduler 仅将运行时主 Provider 配置、DSH profile 与 env 的 endpoint 指向沙箱 loopback `http://127.0.0.1:38127/gateway`（核对基线 2026-11-05），不改冻结历史；OM 后台配置仍直连真实 Gateway。
 
