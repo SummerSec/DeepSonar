@@ -180,16 +180,27 @@ export function assertRepairTokenBudget(budget: RepairTokenBudget | null, newReq
 }
 
 /** The Job lock also serializes admission against the first rejection and terminal acceptance. */
-export async function admitGatewayRepair(db: typeof sql, jobId: string, attemptId: string): Promise<RepairTokenBudget | null> {
-  const [job] = await db`SELECT status,lease_expires_at>clock_timestamp() AS leased,
-    COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second')>clock_timestamp() AS within_time
-    FROM jobs WHERE id=${jobId} FOR UPDATE`;
+/** #1260: the advisory allowance read passes `lock: false` so it never queues behind
+ * admission's Job/Attempt locks; authoritative admission keeps the locked form. */
+export async function admitGatewayRepair(db: typeof sql, jobId: string, attemptId: string,
+  options: { lock?: boolean } = {}): Promise<RepairTokenBudget | null> {
+  // 仓库约定：不把 postgres.js 片段嵌套进另一个模板，因此两条静态语句分开写。
+  const [job] = options.lock === false
+    ? await db`SELECT status,lease_expires_at>clock_timestamp() AS leased,
+        COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second')>clock_timestamp() AS within_time
+        FROM jobs WHERE id=${jobId}`
+    : await db`SELECT status,lease_expires_at>clock_timestamp() AS leased,
+        COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second')>clock_timestamp() AS within_time
+        FROM jobs WHERE id=${jobId} FOR UPDATE`;
   const budget = await readRepairTokenBudget(db, jobId);
   if (!budget) return null;
   if (budget.attempt_id !== attemptId) throw new RepairTokenBudgetError(
     "REPAIR_ATTEMPT_CHANGED", "Another Attempt cannot resume the original repair session", budget);
-  const [attempt] = await db`SELECT id FROM job_attempts WHERE id=${attemptId} AND job_id=${jobId}
-    AND status='active' AND NOT cancel_requested FOR UPDATE`;
+  const [attempt] = options.lock === false
+    ? await db`SELECT id FROM job_attempts WHERE id=${attemptId} AND job_id=${jobId}
+        AND status='active' AND NOT cancel_requested`
+    : await db`SELECT id FROM job_attempts WHERE id=${attemptId} AND job_id=${jobId}
+        AND status='active' AND NOT cancel_requested FOR UPDATE`;
   if (!job || job.status !== "running" || !job.leased || !job.within_time || !attempt) {
     throw new RepairTokenBudgetError("REPAIR_JOB_INACTIVE", "Repair requires an active Job, Attempt, lease and time budget", budget);
   }

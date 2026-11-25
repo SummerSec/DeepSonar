@@ -198,7 +198,7 @@ FR-FIND-008 只信任经过权限校验的操作员材料准入和独立评审�
 
 #923 同时拒绝重复认证字段和业务字段中的入站 Job token；上游 header/trailer 与跨 chunk 原始 body 的绑定 key 明文回显会中止。gzip/deflate/br 在每段原压缩字节转发前由独立解码观察扫描，未知编码、非法压缩或解码超限断流；该机制不能推定任意业务自定义编码/变换的 key echo 已受保护；限制见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
 
-`/gateway/_allowance` 向当前有效 token/Attempt 的自身 workload 提供预算交集提示；main 与后台不互读额度。只读无预留、不消耗模型请求配额；pending/unknown 拒绝，最终请求仍锁内重新准入。沙箱生成适配器只持 Job token，不授予绕过预算/模型/目标的能力。
+`/gateway/_allowance` 向当前有效 token/Attempt 的自身 workload 提供预算交集提示；main 与后台不互读额度。只读无预留、不消耗模型请求配额；查询本身不加行锁（准入仍在锁内重新核准，#1260）；pending/unknown 拒绝，最终请求仍锁内重新准入。沙箱生成适配器只持 Job token，不授予绕过预算/模型/目标的能力。
 
 quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/gateway_admission` 确认 not_started；回执有 kernel authority、完整 scope、UUID 去重与事件限流，写入失败保持 unknown。Provider 原文不能替代回执。
 

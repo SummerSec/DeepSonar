@@ -344,8 +344,61 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       assert.equal(lastUpstreamHeaders["x-om-model"], "frozen-main", "OM fills headers from its frozen source model only");
       assert.equal(lastUpstreamHeaders["x-om-precedence"], "model");
     }
+    // 循环最后一轮会把共享凭据留在 /v1 前缀，后续 fixture 依赖复位后的基础 URL。
     await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
       WHERE id = ${credentialId}`;
+
+    await t.test("#1260 400KB 合成快照下并发咨询的 P95 不受快照体积拖累", async () => {
+      const job = await createJob();
+      const token = await issue(job.jobId, "main");
+      // 合成 400KB 填充：现场 ~440KB 的冻结快照就是这个量级。
+      await sql`UPDATE jobs SET agent_snapshot_json = agent_snapshot_json
+        || jsonb_build_object('synthetic_padding', repeat('x', 400000)) WHERE id=${job.jobId}`;
+      const durations: number[] = [];
+      const failures: string[] = [];
+      const rounds = 5;
+      const workers = 8;
+      await Promise.all(Array.from({ length: workers }, async () => {
+        for (let round = 0; round < rounds; round += 1) {
+          const startedAt = Date.now();
+          const response = await app.inject({ method: "GET", url: "/gateway/_allowance",
+            headers: { authorization: `Bearer ${token.plaintext}` } });
+          durations.push(Date.now() - startedAt);
+          if (response.statusCode !== 200) failures.push(`${response.statusCode}:${response.body}`);
+        }
+      }));
+      durations.sort((left, right) => left - right);
+      const p95 = durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)]!;
+      const max = durations[durations.length - 1]!;
+      assert.deepEqual(failures.slice(0, 3), [], `并发咨询出现非 200：${failures.length} 条`);
+      assert.ok(p95 < 3_000, `${workers} 并发 × ${rounds} 轮的 allowance P95=${p95}ms，max=${max}ms`);
+    });
+
+    await t.test("#1260 allowance 不排队等 jobs 行锁", async () => {
+      // 现场判据：allowance 曾要 23–27s（1–2 个 jobs 行锁 + ~440KB 快照），
+      // 超过客户端 15s 超时，30.5% 的 Job 在首个模型请求前就失败。
+      const busy = await createJob();
+      const token = await issue(busy.jobId, "main");
+      // 另开一条连接把 jobs 行锁住：只读咨询若还拿 FOR UPDATE，这里会一直等到超时。
+      const holder = await sql.reserve();
+      try {
+        await holder.unsafe("BEGIN");
+        await holder`SELECT id FROM jobs WHERE id=${busy.jobId} FOR UPDATE`;
+        const startedAt = Date.now();
+        const allowance = await Promise.race([
+          app.inject({ method: "GET", url: "/gateway/_allowance",
+            headers: { authorization: `Bearer ${token.plaintext}` } }),
+          new Promise<{ statusCode: number; body: string }>((resolve) =>
+            setTimeout(() => resolve({ statusCode: 0, body: "timeout" }), 5_000)),
+        ]);
+        const elapsed = Date.now() - startedAt;
+        assert.equal(allowance.statusCode, 200, `allowance 被行锁挡住了：${allowance.body}`);
+        assert.ok(elapsed < 5_000, `allowance 必须不等待 Job 行锁，实际 ${elapsed}ms`);
+      } finally {
+        await holder.unsafe("ROLLBACK");
+        holder.release();
+      }
+    });
 
     const { persistNoEffectReceipt, readNoEffectReceipt } = await import("./gateway-admission-receipt.js");
     const receiptJob = await createJob();
