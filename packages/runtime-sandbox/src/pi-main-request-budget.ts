@@ -3,6 +3,9 @@ import { PRIVATE_CREDENTIAL_READER_SOURCE } from "./private-credential-reader.js
 /** Embedded in both generated Pi and DSH policies; never serializes error prose. */
 const PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE = String.raw`
 const hostFailures = new WeakMap();
+// #1228: 已核验的 pi-ai 版本集合必须定义在模板内部；引用模板外的常量会在生成的
+// 运行时模块里变成 ReferenceError（1.6.0 的 clamp 路径就是这样炸的）。
+const SDK_VERSIONS = Object.freeze(['1.6.0', '1.5.2']);
 function fail(code) {
   const error = new Error(code);
   hostFailures.set(error, code);
@@ -184,7 +187,7 @@ export async function loadPiContextClamp(root) {
   let manifest;
   try { manifest = JSON.parse(raw); }
   catch { fail('PI_MAIN_BUDGET_CLAMP_MANIFEST_PARSE_FAILED'); }
-  if (manifest?.name !== '@earendil-works/pi-ai' || !PI_MAIN_BUDGET_SDK_VERSIONS.includes(manifest.version)) fail('PI_MAIN_BUDGET_SDK_VERSION');
+  if (manifest?.name !== '@earendil-works/pi-ai' || !SDK_VERSIONS.includes(manifest.version)) fail('PI_MAIN_BUDGET_SDK_VERSION');
   const entry = manifest.exports?.['./api/*']?.import;
   if (typeof entry !== 'string' || !entry.startsWith('./') || entry.includes('..')) fail('PI_MAIN_BUDGET_SDK_EXPORT');
   let sdk;
