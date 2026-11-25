@@ -30,7 +30,7 @@ import { useFlashMessage } from "./use-flash-message";
 import { FindingCandidates } from "./FindingCandidates";
 import { FindingLexicalSearch } from "./FindingLexicalSearch";
 import { SearchableSelect } from "./SearchableSelect";
-import { SeverityBadge, StatusBadge, formatTime } from "./ui";
+import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
 import { FindingSharedAssets } from "./SharedAssetsPanel";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { RepairFeedbackPanel } from "./task-workbench/RepairFeedbackPanel";
@@ -889,6 +889,20 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                 <SidebarField label="状态">
                   <FindingDispositionEditor disposition={f.disposition ?? "open"} verifyStatus={f.verify_status}
                     busy={busy} note={note} onNoteChange={setNote} onChange={setDisposition} />
+                </SidebarField>
+
+                <SidebarField label="人工确认">
+                  {f.disposition ? <>
+                    <p className="text-[12px] leading-5 text-zinc-300">
+                      {DISPOSITION_OPTIONS.find((option) => option.value === f.disposition)?.label ?? f.disposition}
+                    </p>
+                    <p className="mt-0.5 text-[11px] leading-4 text-zinc-600">
+                      与平台技术验证分开记录
+                    </p>
+                    {f.disposition_note && (
+                      <p className="mt-1 whitespace-pre-wrap text-[11px] leading-4 text-zinc-500">{f.disposition_note}</p>
+                    )}
+                  </> : <p className="text-[12px] leading-5 text-zinc-600">尚无人工处置</p>}
                 </SidebarField>
 
                 <SidebarField label="技术验证">

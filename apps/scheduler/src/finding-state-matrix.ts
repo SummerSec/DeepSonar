@@ -6,8 +6,6 @@
  * Research ranking never writes verify_status or severity.
  */
 
-import type { FindingDisposition } from "./finding-disposition.js";
-
 export const VERIFY_STATUSES = [
   "pending",
   "verifying",
@@ -69,7 +67,7 @@ export const FINDING_STATE_MATRIX: readonly FindingStateRow[] = [
     value: "confirmed",
     owner: "Scheduler",
     writer: "verify_finding 硬门（唯一）",
-    meaning: "技术验证通过；不是人工处置，也不能旁路 confirmed_vuln",
+    meaning: "技术验证通过；不是人工处置，人工确认是独立事实",
     report: "可派 Finding Report；进入 Task Report 已确认章节与 SARIF",
     terminal: true,
   },
@@ -87,7 +85,7 @@ export const FINDING_STATE_MATRIX: readonly FindingStateRow[] = [
     value: "refuted",
     owner: "Scheduler",
     writer: "fact-first 全量匹配修订 refutes（唯一）",
-    meaning: "结构化否定证据成立，原命题不成立；不是人工误报处置，也不能旁路 confirmed_vuln",
+    meaning: "结构化否定证据成立，原命题不成立；不改写人工处置",
     report: "已排除章节；不进 SARIF",
     terminal: true,
   },
@@ -140,8 +138,8 @@ export const FINDING_STATE_MATRIX: readonly FindingStateRow[] = [
     dimension: "disposition",
     value: "confirmed_vuln",
     owner: "Human",
-    writer: "PATCH /findings/:id/disposition（仅当 verify_status=confirmed）",
-    meaning: "人工确认漏洞存在；必须以系统 Verify confirmed 为前提",
+    writer: "PATCH /findings/:id/disposition（findings:write，不要求 verify_status）",
+    meaning: "人工确认漏洞存在；与系统技术验证结果分开记录，不互相改写",
     report: "业务已确认风险；仍不是 Verify 本身",
     terminal: true,
   },
@@ -210,8 +208,6 @@ export const FINDING_STATE_MATRIX: readonly FindingStateRow[] = [
   },
 ] as const;
 
-export const CONFIRMED_VULN_REQUIRES_VERIFY = "confirmed_vuln_requires_verify" as const;
-
 export function isClosedDisposition(disposition: string): boolean {
   return (CLOSED_DISPOSITIONS as readonly string[]).includes(disposition);
 }
@@ -231,21 +227,4 @@ export function isOpenHighRiskFinding(input: {
 }): boolean {
   const disposition = String(input.disposition ?? "open");
   return isHighRiskSeverity(input.severity) && isOpenDisposition(disposition);
-}
-
-export function dispositionAllowed(
-  verifyStatus: string,
-  disposition: string,
-): { ok: true } | { ok: false; error_code: typeof CONFIRMED_VULN_REQUIRES_VERIFY } {
-  if (disposition === "confirmed_vuln" && verifyStatus !== "confirmed") {
-    return { ok: false, error_code: CONFIRMED_VULN_REQUIRES_VERIFY };
-  }
-  return { ok: true };
-}
-
-export function assertDispositionAllowed(verifyStatus: string, disposition: FindingDisposition): void {
-  const result = dispositionAllowed(verifyStatus, disposition);
-  if (!result.ok) {
-    throw Object.assign(new Error(result.error_code), { code: result.error_code });
-  }
 }

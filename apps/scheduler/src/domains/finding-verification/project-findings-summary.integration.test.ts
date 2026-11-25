@@ -89,16 +89,29 @@ if (!testDatabaseUrl) {
       assert.equal(reproduce.statusCode, 200, reproduce.payload);
       assert.equal(JSON.parse(reproduce.payload).disposition, "human_reproducing");
 
-      const bypass = await app.inject({
+      // #1264：人工确认不需要平台技术验证先通过，也不能改写 verify_status。
+      const unownedEvidence = await app.inject({
         method: "PATCH",
         url: `/findings/${findingA}/disposition`,
-        payload: { disposition: "confirmed_vuln" },
+        payload: { disposition: "confirmed_vuln", evidence_refs: ["11111111-1111-4111-8111-111111111111"] },
       });
-      assert.equal(bypass.statusCode, 409);
-      assert.equal(JSON.parse(bypass.payload).error, "confirmed_vuln_requires_verify");
+      assert.equal(unownedEvidence.statusCode, 400, unownedEvidence.payload);
+      assert.equal(JSON.parse(unownedEvidence.payload).error_code, "EVIDENCE_REF_NOT_FOUND");
+
+      const humanConfirm = await app.inject({
+        method: "PATCH",
+        url: `/findings/${findingA}/disposition`,
+        payload: { disposition: "confirmed_vuln", note: "人工在平台外复现成功" },
+      });
+      assert.equal(humanConfirm.statusCode, 200, humanConfirm.payload);
+      const confirmed = JSON.parse(humanConfirm.payload);
+      assert.equal(confirmed.disposition, "confirmed_vuln");
+      assert.equal(confirmed.verify_status, "pending", "人工确认不得改写系统技术验证状态");
+      assert.ok(typeof confirmed.disposition_by === "string" && confirmed.disposition_by.length > 0);
+      assert.ok(confirmed.disposition_at);
 
       const after = await app.inject({ method: "GET", url: `/projects/${projectId}/findings/summary` });
-      assert.equal(JSON.parse(after.payload).disposition.find((item: { key: string; count: number }) => item.key === "human_reproducing")?.count, 1);
+      assert.equal(JSON.parse(after.payload).disposition.find((item: { key: string; count: number }) => item.key === "confirmed_vuln")?.count, 1);
 
       // More than the former 500-row window; tie timestamps exercise UUID ordering.
       await sql`

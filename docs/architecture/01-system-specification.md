@@ -519,11 +519,11 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-FIND-003 Verify 状态与人工处置分离
 
-- **规范要求**：Finding 的 `verify_status` 必须与人工 `disposition` 独立维护；`confirmed_vuln` 只有在 verify_status=confirmed 时允许，人工误报/修复/归档不得反向改写技术验证态。
-- **决策来源**：技术事实、业务处置和人工责任属于不同状态机。
-- **实现状态**：as-built；非法组合返回稳定 `confirmed_vuln_requires_verify`。
+- **规范要求**：Finding 的 `verify_status` 必须与人工 `disposition` 独立维护；任何人工处置（含 `confirmed_vuln`）都不得改写技术验证态，技术验证也不得改写人工处置。人工已复现成功时可无视 `verify_status` 直接确认 `confirmed_vuln`（#1264），两者分开展示与记录：人工确认写 `disposition_by/at/note` 与追加的证据引用，平台验证仍只由 Scheduler Verify 写 `verify_status`。
+- **决策来源**：技术事实、业务处置和人工责任属于不同状态机；人工复现不需要平台 Verify 批准才成立（#1264）。
+- **实现状态**：as-built；`PATCH /findings/:id/disposition` 不再返回 `confirmed_vuln_requires_verify`，改记审计 `disposition_source=human` 与 `evidence_refs`（限本项目 `artifact_evidence`，越界返回 400 `EVIDENCE_REF_NOT_FOUND`）。
 - **代码入口**：[Finding state matrix](../../apps/scheduler/src/finding-state-matrix.ts)、[Finding disposition](../../apps/scheduler/src/finding-disposition.ts)、[Finding routes](../../apps/scheduler/src/domains/finding-verification/routes.ts)。
-- **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:finding-protocol`、`pnpm ci:integration:verify-eligibility`。
+- **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:finding-protocol`、`pnpm ci:integration:verify-eligibility`、`pnpm ci:unit:web-facts`。
 
 ### FR-FIND-004 Finding 协作内容受约束
 

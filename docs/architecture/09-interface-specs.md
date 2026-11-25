@@ -17,7 +17,7 @@ Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用
 
 任务页的未筛选首页由一份持续查询维护，供默认发现列表、页签计数及工作台投影复用。有筛选或游标时才启用独立的可见列表查询。关系索引在进入任务时有界读取，并合并刷新时已见的发现，保留被新记录挤出首页的关联。Job 刷新独立进行，发现或 Job 请求失败分别呈现，成功响应各自生效。
 
-详情中的人工处置与技术验证仍各自独立。`confirmed_vuln` 仅在技术状态为 `confirmed` 时可选，其余状态显示禁用原因，服务端继续执行最终校验。
+详情中的人工处置与技术验证仍各自独立。`confirmed_vuln` 不再要求技术状态为 `confirmed`（#1264）：人工复现成功后可直接确认，页面分别展示人工确认与平台技术验证两个事实，`verify_status` 不被改写。
 
 注意力成本方面，中文标签和可见的禁用原因减少对照内部状态值及失败后猜原因的负担。有界分页增加查看后续记录和返回第一页的操作，筛选自动回到第一页，避免用户手工清除旧游标。复用既有筛选、查询与权限边界，收益尚未实测。
 
@@ -128,6 +128,20 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 
 本切片不提供猜测资产/版本筛选、关联边或数据完整性承诺；同项目跨 canvas 重复候选见[重复候选与重复处置](#finding-重复候选与重复处置1206)。来源提前去重修复、权威特征覆盖率与样本质量、查询规模性能需分别验收；字面文本检索不是语义同一性判断。既有默认无分页 API 窗口仍供其他调用方使用，项目页面不再依赖该窗口。
 
+### 人工确认漏洞存在（#1264）
+
+人工在平台外复现成功即可确认漏洞存在，不需要平台技术验证先通过；两个事实分开记录、互不改写。
+
+| 事实 | 写入方 | 存储 | 展示 |
+| --- | --- | --- | --- |
+| 人工确认 | 有 `findings:write` 的人 | `disposition`、`disposition_by`、`disposition_at`、`disposition_note`、`evidence_refs_json`（只追加） | 详情侧栏「人工确认」，与「技术验证」并列 |
+| 平台技术验证 | Scheduler Verify | `verify_status`、验证轮次 | 详情侧栏「技术验证」 |
+
+- `PATCH /findings/:id/disposition` 不再因为 `verify_status != confirmed` 返回 409；响应里的 `verify_status` 保持原值。
+- 请求体可带 `evidence_refs`（≤10 个 uuid），必须指向当前项目里已存在的 `artifact_evidence`，否则 400 `EVIDENCE_REF_NOT_FOUND`；引用只追加不覆盖，便于事后核查 PoC、日志或附件。
+- 审计 `finding.disposition` 的 after 里显式写 `disposition_source: "human"`、备注与证据引用；技术验证侧不受影响。
+- 越权写入仍由路由 scope（`findings:write`）拒绝，人工确认不引入新的权限通道。
+
 ### Finding 重复候选与重复处置（#1206）
 
 记录仍是不可变历史真相：重复只体现在查询与计数口径，不合并、不改写 `emit_finding` 冲突语义，也不把 `fingerprint` 升为跨任务问题身份。
@@ -136,7 +150,7 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 | --- | --- | --- |
 | `GET /findings/:id/duplicates` | `findings:read` | 同项目跨 canvas 三类候选并集：`fingerprint` 精确、`location` 双向 `starts_with` 前缀、同 canvas research cluster；逐条给出 `match_reason`。只读，不返回证据正文或凭据；显式 `project_id` 与本记录不同时返回 403 `CROSS_PROJECT_DUPLICATE_QUERY`，`limit` 1–200 |
 | `GET /findings`（`fingerprint` 过滤） | `findings:read` | 逗号分隔精确匹配，用于跨 Job 同值查询；仍受项目 scope 与游标页约束 |
-| `PATCH /findings/:id/disposition`（`duplicate`） | `findings:write` | `disposition=duplicate` 必须提供同项目、存在、非自身的 `duplicate_of`；目标不在当前项目可见范围时返回 400 `DUPLICATE_TARGET_NOT_FOUND`；非 duplicate 携带 `duplicate_of` 返回 400 `DUPLICATE_TARGET_NOT_ALLOWED`；`confirmed_vuln` 仍要求 `verify_status=confirmed` |
+| `PATCH /findings/:id/disposition`（`duplicate`） | `findings:write` | `disposition=duplicate` 必须提供同项目、存在、非自身的 `duplicate_of`；目标不在当前项目可见范围时返回 400 `DUPLICATE_TARGET_NOT_FOUND`；非 duplicate 携带 `duplicate_of` 返回 400 `DUPLICATE_TARGET_NOT_ALLOWED`；`confirmed_vuln` 可独立于 `verify_status` 由人工确认（#1264），响应与审计都只记人工事实 |
 | `GET /projects/:id/findings/summary` | `findings:read` | 记录数之外返回 `distinct_by_fingerprint` / `distinct_by_cluster`（筛选命中的每组计一次，未分组按记录计）；`duplicate` 在 disposition 桶中单列，不与 `refuted`/`inconclusive` 混算 |
 
 数据库侧由复合外键 `(project_id, duplicate_of) → findings(project_id, id)` 与成对约束 `duplicate ⟺ duplicate_of NOT NULL` 兜底；`duplicate_of` 指向自身由 CHECK 拒绝。

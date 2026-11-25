@@ -2,6 +2,7 @@
 
 本轮修复 `/gateway/_allowance` 的等待放大：该端点只做额度咨询，却拿了 1–2 个 jobs 行锁并整行读取 ~440KB 冻结快照，实测 P95 23–27s，超过客户端 15s 超时，导致 30.5% 的 Job 在首个模型请求前失败。现在查询改为无锁只读，入口只投影 provider binding 与预算用到的快照键（客户端 15s 超时不变，准入仍在锁内重新核准）；`jobs` 快照瘦身与 allowance 指标是后续独立项（[预算与 OM 迁移](MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)、[安全边界](architecture/10-security-and-trust-boundaries.md)）。同步日期：2026-11-25。
 网关结算观测补两层（#1262）：受管 gateway-proxy 增加逐请求访问日志（方法/路径模板/结果分类，`local-reject` 与 `aborted` 各自成类，不含 token、查询串、request id 与 body），Scheduler 侧新增 `deepsonar_gateway_settlement_total{result}` 与 `not_found` 自证日志。两层不做同请求关联，因此只支持「这类请求有没有到过代理 / Scheduler 回了什么」，不支持断定某个 Job 停在哪一层。见 [MODEL_GATEWAY_TRANSPARENCY §Managed proxy 的访问日志](MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的访问日志1262)。
+#1264 的[人工确认漏洞存在](architecture/09-interface-specs.md#人工确认漏洞存在1264)把人工处置与平台技术验证彻底分成两个事实：人工复现成功后可直接确认 `confirmed_vuln`，`verify_status` 不被改写；人工确认记录操作者、时间、备注并追加本项目已存在的证据引用（越界返回 400 `EVIDENCE_REF_NOT_FOUND`），详情页并列展示人工确认与技术验证。前端、后端与共享契约同步，取舍见 FR-FIND-003。
 
 任务总报告改成「可信区块整体前置」（#1251）：平台结果摘要 → 审计摘要 → 原始投影 → 不可信正文，未闭合的模型尾部后面不再有任何可吞掉的内容，冻结快照里的目标与结束理由按纯文本渲染；页面与下载 Markdown 顺序一致。实现与验收见 [接口规格 · 任务总报告的读者口径](architecture/09-interface-specs.md#任务总报告的读者口径125012512026-11-24)。
 
@@ -53,7 +54,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 #1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，合法原 Job 的冻结恢复身份先于默认，满额时等待原账号，保留预算门；#1078 新 Job 按余量比例、真实在途数、历史及当前分配数、默认平局优先、稳定 ID 排序；三层容量、临时健康过滤、全满保留 pending 与无秘密冻结审计对齐现有 Dispatcher，5 秒合并唤醒不引入排队取消期限，跨 Provider 治理等价仍未交付，详见同一运行时视图；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-24
+> 同步日期：2026-11-25
 > **进度消费与保活（#1092）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)记录 chunk/RPC 的协作 I/O 让出和普通多行文本脱敏优化，保留完整进度、转义/畸形 OM 隐私与退出诊断。独立 Worker＋真实 Undici 的回归接既有 Actions，最终 head 见 PR #1093；无任务重跑或部署。
 > **可行动人工请求（2026-11-09）**：严格 guidance、完整 body_json、L0/L1 按需读取、waiting_human 当前 Scheduler 投影及同 Job 待办去重已同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](architecture/01-system-specification.md)、[接口/运行时视图](architecture/09-interface-specs.md#可行动人工请求2026-11-09)和[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。请求原文与平台操作的展示边界见[安全视图](architecture/10-security-and-trust-boundaries.md#人工断点业务文件权限)。消息账本、恢复准入、ACK 和完成仍独立；最终 SHA Actions 待验，注意力收益未测量。
 > **Pi 请求错误诊断（#1083）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)与[运行时视图](architecture/06-runtime-view.md#pi-请求失败诊断与恢复分类1083)记录允许名单化错误阶段/cause 投影、分类与恢复许可分离及共享 DSH reader 边界。请求包装失败不新增 CLI 重启或未知效果重放；本轮最终 SHA Actions 待验，原失败根因未全部确定。
