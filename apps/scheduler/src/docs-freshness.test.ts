@@ -358,3 +358,21 @@ test("#1221 窄文档面也守卫对外文案（文档快车道会跑，不依�
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("#1278 scheduler 源码静态引用的 agent-harness 文件必须出现在镜像构建上下文", () => {
+  const dockerfile = readFileSync(path.join(ROOT, "deploy/Dockerfile.scheduler"), "utf8");
+  // 只看静态 import：动态 import(new URL(...)) 与 readFileSync 只在测试运行时才读，
+  // 不参与镜像里的 tsc 构建；静态 import 缺文件会直接 TS2307。
+  const pattern = /^\s*import[^;]*from\s+["'](?:\.\.\/)+(agent-harness\/[^"']+)["']/gmu;
+  const required = new Set<string>();
+  for (const file of relativeFiles("apps/scheduler/src", [".ts", ".tsx"])) {
+    for (const match of readFileSync(path.join(ROOT, file), "utf8").matchAll(pattern)) required.add(match[1]!);
+  }
+  assert.ok(required.size > 0, "至少应扫到一个 agent-harness 静态引用，否则守卫本身失效");
+  // COPY 可以有多个来源（最后一个 token 才是目标），逐个来源都算覆盖。
+  const copies = [...dockerfile.matchAll(/^COPY\s+(.+)$/gmu)]
+    .flatMap(match => match[1]!.trim().split(/\s+/u).slice(0, -1));
+  const missing = [...required].filter(source =>
+    !copies.some(copy => source === copy || source.startsWith(`${copy.replace(/\/$/u, "")}/`)));
+  assert.deepEqual(missing, [], "镜像构建缺少这些被静态引用的 agent-harness 文件");
+});
