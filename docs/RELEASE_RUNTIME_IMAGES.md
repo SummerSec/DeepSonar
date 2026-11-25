@@ -1,7 +1,11 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；最新正式版 v0.6.23，于 2026-11-22 正式发布（release run 45021547917）；既有 tag 与镜像保持不可变**。
-> 同步日期：2026-11-24
+> 状态：**运维 as-built；最新正式版 v0.6.26，于 2026-11-25 正式发布（release run 45689672668）；既有 tag 与镜像保持不可变**。
+> 同步日期：2026-11-25
+>
+> **v0.6.26 发布结果（2026-11-25）**。候选 base 为 v0.6.24 之后的 main，compare 为 `v0.6.25...v0.6.26`（`v0.6.25` 为未发布失败版本，见下）。注释 tag 对象 `35603425` 解引用到提交 `5ad86ced`，五个门禁在同一 SHA 手动分发并全绿：ci `45685228356`、chrome-runtime `45685236592`、mobile-runtime `45685244006`、openharmony-runtime `45685253031`、reverse-runtime `45685263565`。Release 工作流 `45689672668` 一次成功，GitHub Release 于 2026-11-25T20:25:36Z 发布，附件 5 个（management-skill、reverse-evidence、platform-signature-evidence、两份 runtime-image-registry JSON）。schema 保持 79，与 v0.6.24 相同，升级为同 schema 镜像更新，无需重建。清单回写为 PR #1281（`bot/sync-runtime-registry-v0.6.26`）。
+>
+> **v0.6.25 失败版本（保留历史，不复用同名 tag）**。tag `0dc0e362` 推送后，release 运行 `45675443416` 在 `images (scheduler …)` 以 `TS2307: Cannot find module '../../../agent-harness/doc-copy-guard.mjs'` 失败：`#1225` 抽出的文档守卫脚本没有进入 `deploy/Dockerfile.scheduler` 的构建上下文，而门禁里没有真正构建 scheduler 镜像。修复为 #1277（补 COPY），门禁缺口登记为 #1278 并由 #1280 加了静态引用守卫。该版本从未正式发布（无 GitHub Release、无回写），因此 v0.6.26 从最新 main 重新走完整闭环。
 >
 > **v0.6.24 发布准备（2026-11-24）**。本轮用户要求补齐 #1230 后发布新版本。已核对最高既有稳定 tag 与正式 Release 为 v0.6.23，候选 compare 为 `v0.6.23...v0.6.24`，schema 为 79。候选包含 #1230 结算回执修复，以及 v0.6.23 后已合入的 #1252 Responses 结算时序、人工断点与请求说明、设备需求与绑定诊断、清空重试前置检查、Finding 位置复制和 #1228 运行时依赖更新。完整范围见 [CHANGELOG](../CHANGELOG.md)。
 >
