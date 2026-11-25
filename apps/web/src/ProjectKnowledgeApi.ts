@@ -13,6 +13,10 @@ export interface KnowledgeItem {
   content_sha256: string | null;
   generation: number;
   updated_at: string;
+  /** #1256：当前生效版本的一句话短文（服务端截断），没有正文或非 memory 时为 null。 */
+  summary?: string | null;
+  /** #1256：按本条当前版本聚合的评价计数；没有记录时各计数为 0。 */
+  feedback?: { total: number; success: number; failure: number; inapplicable: number; unrated: number };
 }
 
 export interface KnowledgeVersion {

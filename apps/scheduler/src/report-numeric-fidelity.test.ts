@@ -503,3 +503,34 @@ test("deterministic task reports retain identity, goal and scope even without a 
     assert.ok(result.markdown.includes("\\u0060\\u0060\\u0060"), "untrusted title cannot close the data fence");
   }
 });
+
+test("#1256 报告只写匿名知识摘要：没有条目/版本 id 与标题", async () => {
+  const { knowledgeSummary, renderKnowledgeRefsSection } = await import("./report.js");
+  const summary = knowledgeSummary([
+    { version_id: "ver-1", reads: 2, outcome: "success" },
+    { version_id: "ver-2", reads: 1, outcome: null },
+  ]);
+  assert.deepEqual(summary, { versions: 2, reads: 3, rated: 1 });
+  const section = renderKnowledgeRefsSection(summary);
+  assert.match(section, /共读取 2 个知识版本，累计 3 次/u);
+  assert.match(section, /其中 1 个版本有显式反馈/u);
+  assert.match(section, /读取不等于采用/u);
+  assert.ok(!section.includes("ver-1"), "版本 id 不得进入正文");
+  assert.equal(renderKnowledgeRefsSection({ versions: 0, reads: 0, rated: 0 }), "");
+  assert.equal(renderKnowledgeRefsSection(undefined), "");
+});
+
+test("#1256 非目标报告把知识摘要放在结论之后、审计之前", async () => {
+  const { finalizeTaskReportMarkdown } = await import("./report.js");
+  const input = reportInput({
+    knowledge_summary: { versions: 1, reads: 3, rated: 0 },
+    plan_gaps: { v: 1, scope: "canvas_plan_audits", entries: [], truncated: false, limit: 32 },
+  });
+  const final = finalizeTaskReportMarkdown(input, "too short");
+  const body = final.markdown.indexOf("# 任务报告");
+  const knowledge = final.markdown.indexOf("## 本轮读取的项目知识（摘要）");
+  const audit = final.markdown.indexOf("## 目标与缺口");
+  assert.ok(body === 0, "默认报告仍是最前");
+  assert.ok(body < knowledge && knowledge < audit, `顺序应为 正文→摘要→审计，实际 ${body}/${knowledge}/${audit}`);
+  assert.match(final.markdown, /共读取 1 个知识版本，累计 3 次/u);
+});

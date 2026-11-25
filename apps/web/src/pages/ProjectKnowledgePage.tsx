@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 import { canAccessAnyScope } from "../permissions";
 import { SearchableSelect } from "../SearchableSelect";
 import { PageHeader } from "../ui";
+import { feedbackLine } from "../project-knowledge-card.js";
 import { ProjectKnowledgeActivity } from "./ProjectKnowledgeActivity";
 import { ProjectKnowledgeBackfill } from "./ProjectKnowledgeBackfill";
 import {
@@ -18,6 +19,7 @@ import {
 
 const field = "rounded-lg border border-white/10 bg-white/[.03] px-3 py-2 text-sm text-zinc-200 outline-none focus:border-acc-400/50";
 const button = "rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[.06] disabled:cursor-not-allowed disabled:opacity-40";
+
 const card = "rounded-xl border border-white/[.07] bg-white/[.025] p-4";
 const date = (value: string | null | undefined) => value ? new Date(value).toLocaleString("zh-CN") : "—";
 const short = (value: string | null | undefined) => value ? `${value.slice(0, 8)}…` : "—";
@@ -197,7 +199,9 @@ export function ProjectKnowledgePage() {
             <span className="rounded bg-white/[.05] px-2 py-1 font-mono text-[10px] text-zinc-400">{item.status}</span>
           </div>
           <div className="mt-2 break-all font-mono text-[11px] text-zinc-600">{item.kind} · {item.logical_key}</div>
-          <div className="mt-2 text-[11px] text-zinc-600">v{item.version ?? "—"} · {date(item.updated_at)}</div>
+          {item.summary ? <p className="mt-2 text-xs leading-relaxed text-zinc-400">{item.summary}</p> : null}
+          <div className="mt-2 text-[11px] text-zinc-600">{feedbackLine(item.feedback)}</div>
+          <div className="mt-1 text-[11px] text-zinc-600">v{item.version ?? "—"} · {date(item.updated_at)}</div>
         </button>)}
         <div className="flex justify-between gap-2">
           <button type="button" className={button} disabled={offset === 0}

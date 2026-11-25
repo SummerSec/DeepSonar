@@ -21,11 +21,12 @@ export const KNOWLEDGE_MANAGEMENT_OPERATIONS: Op[] = [
     type: "object", additionalProperties: false, required: ["candidate_ref"],
     properties: { candidate_ref: { type: "string", pattern: "^[a-f0-9]{64}$" } },
   }),
-  get(prefix, "项目知识目录（包含候选和历史状态，无人工激活入口）", { ...page, kind: { type: "string", enum: ["memory", "skill"] }, status: { type: "string", enum: ["draft", "active", "stale", "retired", "revoked"] }, query: { type: "string", maxLength: 200 } }),
+  get(prefix, "项目知识目录（包含候选和历史状态，无人工激活入口；每项附带当前版本短文摘要 summary 与按该版本聚合的 feedback 计数，含 unrated，零记录时各计数为 0）", { ...page, kind: { type: "string", enum: ["memory", "skill"] }, status: { type: "string", enum: ["draft", "active", "stale", "retired", "revoked"] }, query: { type: "string", maxLength: 200 } }),
   { ...get(prefix + "/receipts", "按原 Job 读取持久操作回执，适用于终态与重启后", { ...page, job_id: { type: "string", format: "uuid" } }), requiredQuery: ["job_id"] },
   get(prefix + "/receipts/{receiptId}", "读取项目范围内持久回执"),
   get(prefix + "/{itemId}", "知识详情、版本、来源、评测审查和使用记录"),
   get(prefix + "/{itemId}/versions", "分页读取历史版本", page),
+  get(version + "/feedback", "某版本的评价计数与明细（时间倒序；outcome=success|failure|inapplicable|unrated，unrated 表示读过但未分类评价；只有所属项目可读，来源引用保持不透明）", { ...page, outcome: { type: "string", enum: ["success", "failure", "inapplicable", "unrated"] } }),
   get(version, "读取知识精确版本（来源项目管理权限）"),
   get(version + "/grants", "查看精确版本授权"),
   post(version + "/grants", "来源项目授权另一个项目使用精确 Skill 版本，不授权来源资料", {

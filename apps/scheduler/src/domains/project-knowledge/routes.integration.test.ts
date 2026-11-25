@@ -15,6 +15,7 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
     const grantee = await seedKnowledgeJob(db);
     const skillItem = randomUUID(), skillVersion = randomUUID();
     const memoryItem = randomUUID(), memoryVersion = randomUUID();
+    const candidateVersion2 = randomUUID();
     const candidate = { kind: "skill", logical_key: "sample", title: "Sample", keywords: [], files: { "SKILL.md": "# Sample" } };
     const bytes = Buffer.from(JSON.stringify(candidate), "utf8");
     const hash = createHash("sha256").update(bytes).digest("hex");
@@ -55,6 +56,52 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
       res = await app.inject({ method: "GET", url: `${path}?query=skill&limit=1` });
       assert.equal(res.statusCode, 200);
       assert.deepEqual(res.json().items.map((item: { kind: string }) => item.kind), ["skill"]);
+      // #1256：列表卡片一次请求就要带上评价计数；没有评价时明确零样本。
+      res = await app.inject({ method: "GET", url: path });
+      assert.deepEqual(res.json().items.map((item: { feedback: { total: number } }) => item.feedback.total), [0, 0]);
+      await db`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,owner_project_id,version_id,feedback_json)
+        VALUES(${owner.projectId},${owner.jobId},${owner.attemptId},'project-memory:card@1',${hash},${owner.projectId},${memoryVersion},
+          '{"outcome":"success","reason":"时区与请求 ID 两条判据都用上了"}'::jsonb)`;
+      res = await app.inject({ method: "GET", url: path });
+      const card = res.json().items.find((item: { id: string }) => item.id === memoryItem);
+      assert.equal(card.feedback.success, 1);
+      assert.equal(card.feedback.total, 1);
+      assert.equal(typeof card.feedback.failure, "number");
+      // 同页反例：skill 与 memory 引用同一份候选字节（同 hash），计票必须按版本各归各。
+      const sibling = res.json().items.find((item: { id: string }) => item.id === skillItem);
+      assert.equal(sibling.content_sha256, card.content_sha256, "两条目确实共用同一 hash");
+      assert.equal(sibling.feedback.total, 0, "同 hash 的另一个条目不得继承这条评价");
+      // #1256：按版本读评价明细；unrated 表示读过但没分类评价。
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.json().counts.success, 1);
+      assert.equal(res.json().counts.total, 1);
+      assert.equal(res.json().items[0].outcome, "success");
+      // #1256 复核：明细里的来源任务需要 tasks:read；仅有 projects:read 时不得带 job/reason。
+      actor = { ...actor, scopes: ["projects:read", "projects:write", "tasks:read"], name: "owner-exec" };
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
+      assert.equal(res.statusCode, 200);
+      assert.ok(res.json().items[0].job_id, "tasks:read 角色应能定位来源任务");
+      assert.equal(res.json().items[0].reason, "时区与请求 ID 两条判据都用上了", "有 tasks:read 时必须返回真实理由原文");
+      actor = { ...actor, scopes: ["projects:read"], name: "reader" };
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback` });
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.json().items[0].job_id, null);
+      assert.equal(res.json().items[0].reason, null, "没有 tasks:read 时理由与来源一样不可见");
+      actor = { ...actor, scopes: ["projects:read", "projects:write"], name: "owner" };
+      // 同一 content_sha256 的第二个版本不得重复计票；明细也不得串到别的版本。
+      await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
+        SELECT ${candidateVersion2},project_id,item_id,2,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash
+        FROM project_knowledge_versions WHERE id=${memoryVersion}`;
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${candidateVersion2}/feedback` });
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.json().counts.total, 0, "同 hash 双版本必须分开计票");
+      assert.deepEqual(res.json().items, []);
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${memoryVersion}/feedback?outcome=unrated` });
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.json().items, []);
+      res = await app.inject({ method: "GET", url: `${path}/${memoryItem}/versions/${randomUUID()}/feedback` });
+      assert.equal(res.statusCode, 404);
       res = await app.inject({ method: "GET", url: `${path}/${skillItem}` });
       assert.equal(res.statusCode, 200);
       assert.equal(res.json().versions[0].id, skillVersion);

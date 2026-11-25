@@ -26,6 +26,8 @@ const List = Page.extend({
 const GrantBody = z.object({ grantee_project_id: Id }).strict();
 const RevokeBody = z.object({ reason: z.string().trim().min(1).max(2000) }).strict();
 const ReceiptList = Page.extend({ job_id: Id });
+// #1256：评价明细按版本读取；unrated 表示读过但没有分类评价。
+const FeedbackList = Page.extend({ outcome: z.enum(["success", "failure", "inapplicable", "unrated"]).optional() });
 
 type Db = KnowledgeDb;
 type Row = Record<string, unknown>;
@@ -103,6 +105,95 @@ async function itemDetail(db: Db, projectId: string, itemId: string) {
     proposals, evaluations, usages };
 }
 
+/** 评价 JSON 是不可信历史内容，只读已知字段，缺失即 null。 */
+function recordField(value: unknown, key: string): string | null {
+  if (typeof value !== "object" || value === null || !(key in value)) return null;
+  const field = Object.getOwnPropertyDescriptor(value, key)?.value;
+  return typeof field === "string" ? field : null;
+}
+
+/** #1256 复核：明细与计数必须绑定同一 version_id，且只统计本项目 owner 的使用记录；同 hash 双版本绝不混票。 */
+async function readVersionFeedbackRows(db: Db, projectId: string, versionId: string, contentSha256: string,
+  outcome: "success" | "failure" | "inapplicable" | "unrated" | null, limit: number, offset: number,
+): Promise<{ counts: FeedbackCounts; rows: Row[] }> {
+  const counts = await readVersionFeedbackCounts(db, projectId, versionId, contentSha256);
+  const rows = await db<Array<Row>>`
+    SELECT u.id,u.job_id,u.created_at,u.feedback_json
+    FROM project_knowledge_usages u
+    WHERE u.project_id=${projectId} AND u.version_id=${versionId}
+      AND u.owner_project_id=${projectId}
+      AND (${outcome}::text IS NULL
+        OR (${outcome}::text = 'unrated' AND u.feedback_json IS NULL)
+        OR u.feedback_json->>'outcome'=${outcome})
+    ORDER BY u.created_at DESC,u.id DESC LIMIT ${limit + 1} OFFSET ${offset}`;
+  return { counts, rows };
+}
+
+/** #1256：一个版本的三类评价计数与未评价数，供卡片与明细共用。 */
+async function readVersionFeedbackCounts(db: Db, projectId: string, versionId: string, knownHash: string): Promise<FeedbackCounts> {
+  // #1256 复核：同一 content_sha256 可能同时属于两个版本，计票必须绑定 version_id；
+  // owner_project_id 限定只统计本项目自己的使用，不把消费方的票或理由混进来。
+  const rows = await db<Array<{ outcome: string | null; count: number }>>`
+    SELECT feedback_json->>'outcome' AS outcome, count(*)::int AS count
+    FROM project_knowledge_usages WHERE project_id=${projectId} AND version_id=${versionId}
+      AND owner_project_id=${projectId} AND content_sha256=${knownHash}
+    GROUP BY feedback_json->>'outcome'`;
+  const counts: FeedbackCounts = { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 };
+  for (const row of rows) {
+    counts.total += Number(row.count);
+    if (row.outcome === "success") counts.success += Number(row.count);
+    else if (row.outcome === "failure") counts.failure += Number(row.count);
+    else if (row.outcome === "inapplicable") counts.inapplicable += Number(row.count);
+    else counts.unrated += Number(row.count);
+  }
+  return counts;
+}
+
+/** #1256：卡片要的一句话结论与三类评价计数；一次批量聚合，不随页大小增加往返。 */
+type FeedbackCounts = { total: number; success: number; failure: number; inapplicable: number; unrated: number };
+const EMPTY_FEEDBACK: FeedbackCounts = { total: 0, success: 0, failure: 0, inapplicable: 0, unrated: 0 };
+const CARD_SUMMARY_READ_LIMIT = 50;
+
+async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promise<{
+  summaries: Map<string, string>; feedback: Map<string, FeedbackCounts>;
+}> {
+  const feedback = new Map<string, FeedbackCounts>();
+  const summaries = new Map<string, string>();
+  // 计票与摘要都只认可见的当前版本：join 已按 publicKnowledgeVersion 过滤，隐藏版本不会带 hash。
+  const visible = rows.filter((row): row is Row & { active_version_id: string; content_sha256: string } =>
+    typeof row.active_version_id === "string" && typeof row.content_sha256 === "string");
+  if (!visible.length) return { summaries, feedback };
+  for (const row of visible) feedback.set(String(row.active_version_id), { ...EMPTY_FEEDBACK });
+  const versionIds = visible.map((row) => String(row.active_version_id));
+  // 一页条目一次分组查询：口径绑定 (project, version_id, owner_project_id)，同 hash 不同版本互不串票。
+  const grouped = await db<Array<{ version_id: string; outcome: string | null; count: number }>>`
+    SELECT u.version_id, u.feedback_json->>'outcome' AS outcome, count(*)::int AS count
+    FROM project_knowledge_usages u
+    WHERE u.project_id=${projectId} AND u.owner_project_id=${projectId}
+      AND u.version_id = ANY(${versionIds}::uuid[])
+    GROUP BY u.version_id, u.feedback_json->>'outcome'`;
+  for (const row of grouped) {
+    const counts = feedback.get(String(row.version_id));
+    if (!counts) continue;
+    counts.total += Number(row.count);
+    if (row.outcome === "success") counts.success += Number(row.count);
+    else if (row.outcome === "failure") counts.failure += Number(row.count);
+    else if (row.outcome === "inapplicable") counts.inapplicable += Number(row.count);
+    else counts.unrated += Number(row.count);
+  }
+  const hashes = [...new Set(visible.map((row) => String(row.content_sha256)))].slice(0, CARD_SUMMARY_READ_LIMIT);
+  for (const hash of hashes) {
+    try {
+      const candidate: unknown = await readKnowledgeBlob(db, hash);
+      // 版本 CAS 字节是完整 KnowledgeCandidate；这里只读可选的 content 作为卡片摘要。
+      const content = typeof candidate === "object" && candidate !== null && "content" in candidate
+        ? candidate.content : undefined;
+      if (typeof content === "string") summaries.set(hash, content.replace(/\s+/gu, " ").trim().slice(0, 240));
+    } catch { /* 摘要缺失不影响列表本身 */ }
+  }
+  return { summaries, feedback };
+}
+
 /** Routes are locally scoped too; auth.ts must additionally register their route scopes. */
 export function registerProjectKnowledgeRoutes(
   app: FastifyInstance,
@@ -123,12 +214,20 @@ export function registerProjectKnowledgeRoutes(
           v.version,v.content_sha256
         FROM project_knowledge_items i
         LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
+          AND ${publicKnowledgeVersion(db)}
         WHERE i.project_id=${projectId} AND ${publicKnowledgeItem(db)}
           AND (${input.kind ?? null}::text IS NULL OR i.kind=${input.kind ?? null})
           AND (${input.status ?? null}::text IS NULL OR i.status=${input.status ?? null})
           AND (${pattern}::text IS NULL OR i.title ILIKE ${pattern} ESCAPE '\\' OR i.logical_key ILIKE ${pattern} ESCAPE '\\')
         ORDER BY i.updated_at DESC,i.id DESC LIMIT ${input.limit + 1} OFFSET ${input.offset}`;
-      return { items: rows.slice(0, input.limit), next_offset: rows.length > input.limit ? input.offset + input.limit : null };
+      const page = rows.slice(0, input.limit);
+      const { summaries, feedback } = await knowledgeCardFacts(db, projectId, page);
+      const items = page.map((row) => ({
+        ...row,
+        summary: typeof row.content_sha256 === "string" ? summaries.get(row.content_sha256) ?? null : null,
+        feedback: row.active_version_id ? feedback.get(String(row.active_version_id)) ?? EMPTY_FEEDBACK : EMPTY_FEEDBACK,
+      }));
+      return { items, next_offset: rows.length > input.limit ? input.offset + input.limit : null };
     } catch (error) { return errorReply(reply, error); }
   });
 
@@ -196,6 +295,34 @@ export function registerProjectKnowledgeRoutes(
       // Only the owning project can inspect historical content. Source refs remain opaque.
       const candidate = await readKnowledgeBlob(db, String(version.content_sha256));
       return { ...version, item: { id: item.id, kind: item.kind, title: item.title, logical_key: item.logical_key }, candidate };
+    } catch (error) { return errorReply(reply, error); }
+  });
+
+  // #1256：某一版本的评价计数与明细（时间倒序分页）；只有所属项目可读，来源引用保持不透明。
+  app.get("/projects/:id/knowledge/:itemId/versions/:versionId/feedback", async (req, reply) => {
+    try {
+      const { id, itemId, versionId } = req.params as { id: string; itemId: string; versionId: string };
+      const projectId = Id.parse(id);
+      if (!access(req, reply, projectId)) return;
+      const version = await versionFor(db, projectId, Id.parse(itemId), Id.parse(versionId));
+      if (!version) return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
+      const input = FeedbackList.parse(req.query);
+      const canSeeSources = req.actor ? actorHasScope(req.actor, "tasks:read") : false;
+      const hash = String(version.content_sha256);
+      const page = await readVersionFeedbackRows(db, projectId, String(version.id), hash,
+        input.outcome ?? null, input.limit, input.offset);
+      return {
+        counts: page.counts,
+        items: page.rows.slice(0, input.limit).map((row) => ({
+          id: row.id, created_at: row.created_at,
+          outcome: recordField(row.feedback_json, "outcome"),
+          // 理由是任务产生的自由文本，与来源任务同权限：没有 tasks:read 一律不返回。
+          reason: canSeeSources ? recordField(row.feedback_json, "reason") : null,
+          // 来源任务与理由属于项目内执行记录：没有 tasks:read 就不给，避免只读目录者看到任务侧内容。
+          job_id: canSeeSources ? row.job_id : null,
+        })),
+        next_offset: page.rows.length > input.limit ? input.offset + input.limit : null,
+      };
     } catch (error) { return errorReply(reply, error); }
   });
 

@@ -505,6 +505,7 @@ AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当�
 | GET | /projects/:id/knowledge/activity | projects:read | 积累/复用摘要与分页 work：`?limit=10&offset=0`，含来源登记/纳入/跳过、生效 Memory/Skill、usage/模型反馈、阻塞原因；来源正文不返回，反馈不表示质量认证 |
 | GET | /projects/:id/knowledge/:itemId | projects:read | 条目详情（含 active 版本指针）；不存在 `404 KNOWLEDGE_ITEM_NOT_FOUND` |
 | GET | /projects/:id/knowledge/:itemId/versions | projects:read | 版本历史分页（`limit/offset`），含 `content_sha256`、来源、`revoked_at/reason` |
+| GET | /projects/:id/knowledge/:itemId/versions/:versionId/feedback | projects:read | 该版本的评价计数（success/failure/inapplicable/unrated/total）与明细，按时间倒序；`outcome=unrated` 表示读过但没有分类评价；只有所属项目可读 |
 | GET | /projects/:id/knowledge/:itemId/versions/:versionId | projects:read | 精确版本正文 + 条目摘要；只有所属项目能读历史内容，来源引用保持不透明 |
 | GET | /projects/:id/knowledge/:itemId/versions/:versionId/grants | projects:read | 该版本已发出的项目间授权（最多 100 条） |
 | POST | /projects/:id/knowledge/:itemId/versions/:versionId/grants | projects:write | `{grantee_project_id}`；仅 `kind=skill` 且已通过评测、未撤销的版本可授；自授 `400 KNOWLEDGE_GRANT_SELF`、接收方无效 `404`、条件不符 `409 KNOWLEDGE_GRANT_DENIED`、重复 `409 KNOWLEDGE_GRANT_EXISTS` |

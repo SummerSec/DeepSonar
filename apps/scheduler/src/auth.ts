@@ -82,6 +82,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /projects/:id/knowledge/receipts/:receiptId": "projects:read",
   "GET /projects/:id/knowledge/:itemId": "projects:read",
   "GET /projects/:id/knowledge/:itemId/versions/:versionId": "projects:read",
+  "GET /projects/:id/knowledge/:itemId/versions/:versionId/feedback": "projects:read",
   "GET /projects/:id/knowledge/:itemId/versions": "projects:read",
   "GET /projects/:id/knowledge/:itemId/versions/:versionId/grants": "projects:read",
   "POST /projects/:id/knowledge/:itemId/versions/:versionId/grants": "projects:write",

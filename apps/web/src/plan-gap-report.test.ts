@@ -184,3 +184,14 @@ test("v2 Plan audits remain visible while historical v1 and native reports stay 
   assert.match(html, /running/);
   assert.equal(withPlanGapReport({ trusted: "native report" }, undefined), "native report");
 });
+
+test("#1256 报告里的知识摘要不携带可识别元数据，页面也不会生成链接或图片", async () => {
+  const { renderKnowledgeRefsSection } = await import("../../scheduler/src/report.js");
+  const section = renderKnowledgeRefsSection({ versions: 2, reads: 5, rated: 1 });
+  assert.match(section, /共读取 2 个知识版本，累计 5 次/u);
+  assert.ok(!section.includes("[点我]"), "摘要里不应出现条目级内容");
+  const html = renderToStaticMarkup(createElement(MarkdownView, { markdown: `## 结论\n\n任务已完成。\n\n${section}`, controls: false }));
+  assert.doesNotMatch(html, /<a\s[^>]*href=/iu);
+  assert.doesNotMatch(html, /<img\s/iu);
+  assert.match(html, /本轮读取的项目知识/u);
+});
