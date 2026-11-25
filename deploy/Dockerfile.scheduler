@@ -30,6 +30,8 @@ COPY apps/scheduler apps/scheduler
 COPY packages packages
 COPY database database
 COPY agent-harness/demo-repo agent-harness/demo-repo
+# docs-freshness.test.ts 与 apps/web 的文档守卫共用这个 .mjs（含类型声明）
+COPY agent-harness/doc-copy-guard.mjs agent-harness/doc-copy-guard.d.mts agent-harness/
 COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
 COPY deploy/worker-register.mjs deploy/worker-register-contract.mjs deploy/
 
