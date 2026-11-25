@@ -305,6 +305,8 @@ test("#1262 settlement 404 keeps an allowlisted body hint instead of prose", asy
     assert.equal(detail.stage, "settlement");
     assert.equal(detail.status, 404);
     assert.equal(detail.bodyHint, scenario.bodyHint);
+    // #1262：结算 404 还要能看出打到了哪个 origin（只到 origin，不含路径/凭据）。
+    assert.match(String(detail.endpoint), /^http:\/\/127\.0\.0\.1:\d+$/u);
     assert.equal(f.queries.length, 2, "failed settlement query is not polled or replayed");
     // No prose, URL or header value may leak through the hint.
     assert.doesNotMatch(JSON.stringify(events), /proxy default page|<html>|private|synthetic-/u);
