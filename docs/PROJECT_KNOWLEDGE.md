@@ -166,6 +166,8 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 - **显式 Skill 提交与治理评审**：候选、评估、复核、录用链路不变；
 - **任务沉淀送评**（`POST /projects/:id/knowledge/closeout/:rootId/evaluate`）与详情读取。
 
+**哪些来源不再自动收集**（需要明确列举）：未显式投稿的任务，即使它有 Fact、Evidence 或已接受的用后反馈，也不再自动进入旧采集链；只有显式 Memory 投稿（`submit_task_knowledge_suggestion`）会入库，Skill 仍走显式送评。切换前已登记的来源与在途 `project_knowledge_work` 继续按原样收尾（唤醒与采集代码保留），历史审计、证据与已发布版本保持可查。
+
 因此现在没有新的来源会进入旧采集链：`project_knowledge_work` 的自动准备行不再产生，采集与唤醒代码暂时保留（等在列表与审计里确认无消费方后，再按 #1219 第四阶段第三步删除，届时会移除 `GET /projects/:id/knowledge/backfill`，属破坏性变更）。
 
 历史 `source_registered` / `source_collected` 审计与既有 `project_knowledge_work` 记录保持只读，不改写。
