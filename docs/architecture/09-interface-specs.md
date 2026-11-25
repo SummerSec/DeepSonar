@@ -139,7 +139,8 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 
 - `PATCH /findings/:id/disposition` 不再因为 `verify_status != confirmed` 返回 409；响应里的 `verify_status` 保持原值。
 - 请求体可带 `evidence_refs`（≤10 个 uuid），必须指向当前项目里已存在的 `artifact_evidence`，否则 400 `EVIDENCE_REF_NOT_FOUND`；合并与去重在同一条 `UPDATE` 里由数据库读最新行完成，两笔并发追加都会保留，没有附证据时整列不动；审计与处置在同一事务内提交，审计写失败则整笔回滚。
-- 审计 `finding.disposition` 的 after 里显式写 `disposition_source: "human"`、备注与证据引用；技术验证侧不受影响。
+- 审计 `finding.disposition` 的 before 来自事务内 `FOR UPDATE` 读到的行，记录的是这次真正覆盖的状态；after 显式写 `disposition_source: "human"`、备注与证据引用。技术验证侧不受影响。
+- 证据的逐次查看与打开入口（`artifact_evidence` → 证据目标）尚未在本切片交付：当前只显示累计条数，待 API 面确定后补（见 #1264 的后续验收项）。
 - 越权写入仍由路由 scope（`findings:write`）拒绝，人工确认不引入新的权限通道。
 
 ### Finding 重复候选与重复处置（#1206）

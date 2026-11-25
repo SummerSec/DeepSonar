@@ -152,6 +152,31 @@ if (!testDatabaseUrl) {
         "没有附证据时不得重写证据列",
       );
 
+      // #1264 评审：并发处置的审计 before 必须是被这次写入实际覆盖的状态。
+      const patchTo = (disposition: string) => app.inject({
+        method: "PATCH",
+        url: `/findings/${findingA}/disposition`,
+        payload: { disposition },
+      });
+      const [left, right] = await Promise.all([patchTo("rejected_fp"), patchTo("resolved")]);
+      assert.equal(left.statusCode, 200, left.payload);
+      assert.equal(right.statusCode, 200, right.payload);
+      const auditRows = await sql`
+        SELECT before_json, after_json FROM audit_logs
+        WHERE action = 'finding.disposition' AND resource_id = ${findingA}
+        ORDER BY id DESC LIMIT 2`;
+      assert.equal(auditRows.length, 2);
+      const [later, earlier] = auditRows.map((row) => ({
+        before_json: row.before_json as { disposition: string },
+        after_json: row.after_json as { disposition: string },
+      }));
+      assert.equal(
+        later.before_json.disposition,
+        earlier.after_json.disposition,
+        "后一条审计的 before 必须等于前一条的 after，不能都写初始状态",
+      );
+      assert.notEqual(later.after_json.disposition, earlier.after_json.disposition);
+
       // More than the former 500-row window; tie timestamps exercise UUID ordering.
       await sql`
         INSERT INTO findings (project_id, job_id, fingerprint, title, severity, verify_status, disposition, created_at)
