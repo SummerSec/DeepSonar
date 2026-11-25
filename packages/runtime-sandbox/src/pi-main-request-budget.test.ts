@@ -388,3 +388,18 @@ test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平
     process.argv[1] = original;
   }
 });
+
+test("#1262 结算 404 的诊断只带有界形态，不含正文与令牌", () => {
+  const source = PI_MAIN_REQUEST_BUDGET_SOURCE;
+  // 目标来源按 origin 记录，路径与查询串（可能含有效载荷）不进入诊断。
+  assert.match(source, /endpoint: new URL\(baseUrl\)\.origin/u);
+  // 响应体只读前 2048 字节，并且只投影长度与 not_found 形态。
+  assert.match(source, /subarray\(0, 2048\)/u);
+  assert.match(source, /has_not_found: bytes\.toString\('utf8'\)\.includes\('not_found'\)/u);
+  assert.match(source, /result\.response = \{ length, has_not_found: hasNotFound \}/u);
+  // endpoint 只接受 origin 形状（无路径/凭据），否则整个字段丢弃。
+  assert.ok(source.includes("^https?:\\/\\/[^\\s/?#@]{1,255}$"), "endpoint 只接受 origin 形状");
+  // 绝不把正文或令牌写进诊断。
+  assert.doesNotMatch(source, /result\.body/u);
+  assert.doesNotMatch(source, /diagnostic[^\n]*token/u);
+});

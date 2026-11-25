@@ -4,7 +4,7 @@ import { DSH_PRIVATE_CREDENTIALS_SOURCE } from "./private-credential-reader.js";
 
 // Scheduler-owned pin for the installer output at the canonical image path.
 // The real-install regression must match this pin when the installer changes.
-export const DSH_REQUEST_BUDGET_ARTIFACT_SHA256 = "2cfa6c98eab7956d763162c7cef64f9e6aa38c1d8cd3758ddb9efe374eadde36";
+export const DSH_REQUEST_BUDGET_ARTIFACT_SHA256 = "7d3586ba3428c444f9524d8456fce3e6ba681d4dd55f9939cd453f01f3e61fed";
 
 /** Check the installed contract before Cordis can swallow a plugin-load error. */
 export const DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE = `

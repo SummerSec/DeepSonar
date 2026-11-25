@@ -48,6 +48,19 @@ function requestDiagnostic(error, stage, signal) {
     const code = diagnosticField(value, 'code');
     if (diagnosticNames.has(name)) result.name = name;
     if (transientCodes.has(code) || cancellationCodes.has(code)) result.code = code;
+    // #1262: 结算探测只带回有界、不可反推正文的事实：请求目标来源与响应体形态。
+    const endpointField = diagnosticField(value, 'endpoint');
+    if (typeof endpointField === 'string' && /^https?:\/\/[^\s/?#@]{1,255}$/.test(endpointField)) {
+      result.endpoint = endpointField;
+    }
+    const responseField = diagnosticField(value, 'response');
+    if (responseField && typeof responseField === 'object') {
+      const length = diagnosticField(responseField, 'length');
+      const hasNotFound = diagnosticField(responseField, 'has_not_found');
+      if (Number.isInteger(length) && length >= 0 && length <= 2048 && typeof hasNotFound === 'boolean') {
+        result.response = { length, has_not_found: hasNotFound };
+      }
+    }
     const status = diagnosticField(value, 'status');
     const statusCode = diagnosticField(value, 'statusCode');
     const validStatus = value => Number.isInteger(value) && value >= 100 && value <= 599;
@@ -205,7 +218,15 @@ export async function readGatewayNoStart(baseUrl, token, requestId, requestSigna
     const response = await fetch(endpoint(baseUrl) + '/_settlement/' + requestId, {
       headers: { authorization: 'Bearer ' + token }, redirect: 'manual', signal,
     });
-    if (response.status !== 200) { await response.body?.cancel(); throw { status: response.status }; }
+    if (response.status !== 200) {
+      // 只读前 2048 字节判断形态，绝不把正文写进诊断（#1262）。
+      const bytes = response.body ? Buffer.from(await response.arrayBuffer()).subarray(0, 2048) : Buffer.alloc(0);
+      throw {
+        status: response.status,
+        endpoint: new URL(baseUrl).origin,
+        response: { length: bytes.length, has_not_found: bytes.toString('utf8').includes('not_found') },
+      };
+    }
     const chunks = []; let size = 0;
     if (response.body) for await (const chunk of response.body) {
       size += chunk.length;

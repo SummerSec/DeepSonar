@@ -15,6 +15,17 @@ Responses SSE 在合法 `response.completed` 中取得完整最终用量后，�
 
 scanner 正反例和真实 HTTP/PG 用量、额度读回、Pi 式完成即关闭、完成前取消、完成后上游中断与凭据回显回归，分别接既有 `pnpm ci:unit:executor-real` 与 `pnpm ci:integration:platform-api`。完整 JSON 缺末尾帧分隔的失败、重复完成和业务数据同样拒收。最终 SHA Actions 待验，生产重跑与真实模型验证未执行。
 
+## 结算 404 的客户端诊断（#1262）
+
+Pi 的请求预算扩展在读不到「未发生」回执时，会把 `PI_MAIN_BUDGET_REQUEST_FAILED` 连同诊断写进错误消息。为了在不拿到生产访问日志的情况下分清「Scheduler 说没这条记录」和「中间层回了默认 404 页」，诊断里补两个**有界且不可反推正文**的事实：
+
+| 字段 | 含义 | 边界 |
+| --- | --- | --- |
+| `endpoint` | 本次结算探测的目标来源，只有 `scheme://host:port` | 不含路径、查询串、凭据；形状不符（带路径/用户信息/空白）时整个字段丢弃 |
+| `response` | 响应体形态 `{length, has_not_found}` | 只读前 2048 字节；`length` 是读取到的字节数，`has_not_found` 表示这 2048 字节里是否出现 `not_found`；正文一律不写进诊断 |
+
+判读口径：`status` 缺失表示本地 fetch 被超时或取消打断；`status` 存在且 `response.has_not_found=true` 指向 Scheduler 自己的 `{status:'not_found'}`；`has_not_found=false` 更可能是反向代理或路由层返回的默认 404 页。
+
 ## Managed proxy 的逐跳连接策略（#1097）
 
 Sandbox → managed proxy → Scheduler 是不同 HTTP 连接。代理双向消费固定逐跳字段和 `Connection` 动态点名字段，由各跳生成自身 Host、连接策略与 framing；不能把后端 `Keep-Alive` 的寿命广告送给客户端。普通 Job Authorization 和 `x-deepsonar-*` 字段仍须到达 Scheduler，除非被入站 Connection 明确点名；此边界不同于 Scheduler → Provider 对认证和控制字段的消费。
