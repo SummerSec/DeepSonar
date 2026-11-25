@@ -140,7 +140,10 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 - `PATCH /findings/:id/disposition` 不再因为 `verify_status != confirmed` 返回 409；响应里的 `verify_status` 保持原值。
 - 请求体可带 `evidence_refs`（≤10 个 uuid），必须指向当前项目里已存在的 `artifact_evidence`，否则 400 `EVIDENCE_REF_NOT_FOUND`；合并与去重在同一条 `UPDATE` 里由数据库读最新行完成，两笔并发追加都会保留，没有附证据时整列不动；审计与处置在同一事务内提交，审计写失败则整笔回滚。
 - 审计 `finding.disposition` 的 before 来自事务内 `FOR UPDATE` 读到的行，记录的是这次真正覆盖的状态；after 显式写 `disposition_source: "human"`、备注与证据引用。技术验证侧不受影响。
-- 证据的逐次查看与打开入口（`artifact_evidence` → 证据目标）尚未在本切片交付：当前只显示累计条数，待 API 面确定后补（见 #1264 的后续验收项）。
+- `GET /findings/:id` 新增可选 `disposition_history[]`：**逐次**人工处置取自 append-only 的 `finding.disposition` 审计记录（最近 10 次），每条给出 `disposition`、`by`、`at`、`note`，以及该次追加的证据目标（`evidence_id`、`artifact_id`、`job_id`、`canvas_id`、`statement`、`kind`）。累计列 `evidence_refs_json` 说明不了哪条证据属于哪次决定，因此不用它推断逐次历史。
+- 该字段**仅在调用方具备 `tasks:read`** 时返回；同一条件下才对证据做解析。不下发原始 `uri`，可点击目标由授权入口用 `evidence_id`/`job_id`/`canvas_id` 解析。
+- 无 `tasks:read` 时：`disposition_history` 整段省略，且人工追加过的证据引用会从旧字段 `evidence_refs_json` 里摘除，避免受限的人工证据顺着旧字段漏出；其余引用保持原样（兼容口径）。
+- 逐次查看与就地打开由前端消费 `evidence_links` 完成，界面接线随上面的人工确认区块一起落地。
 - 越权写入仍由路由 scope（`findings:write`）拒绝，人工确认不引入新的权限通道。
 
 ### Finding 重复候选与重复处置（#1206）

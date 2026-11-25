@@ -1755,7 +1755,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/findings/{id}",
     summary: "Finding 完整详情与结构化验证追踪",
-    description: "project_research_features 仅显示当前来源匹配的特征计算状态/字段覆盖；权威身份不足且关系质量门未验收，不返回跨任务同问题建议。trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。research / cluster_members / last_research_run 是语义去重与相对优先级，不改写 verify_status、severity 或报告门禁。",
+    description: "project_research_features 仅显示当前来源匹配的特征计算状态/字段覆盖；权威身份不足且关系质量门未验收，不返回跨任务同问题建议。trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。research / cluster_members / last_research_run 是语义去重与相对优先级，不改写 verify_status、severity 或报告门禁。disposition_history 给出逐次人工处置（取自 finding.disposition 审计记录）与该次追加的证据目标（evidence_id/artifact_id/job_id/canvas_id/statement/kind，不含原始 uri），仅在调用方具备 tasks:read 时返回；缺该权限时整段省略，且人工追加过的引用会从 evidence_refs_json 里摘除，避免受限证据顺着旧字段漏出。",
     scope: "findings:read",
     tags: ["Findings"],
   },

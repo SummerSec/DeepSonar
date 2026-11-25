@@ -17,6 +17,7 @@ import {
 } from "../../core.js";
 import { projectCredentialProviderError, projectJobEventPayload, projectJobPayload } from "../../credentials.js";
 import { sql } from "../../db.js";
+import { actorHasScope, type Actor } from "../../auth.js";
 import { loadFindingTrace } from "../../finding-trace.js";
 import { loadFactEvidenceTrace } from "../../fact-evidence-trace.js";
 import { FINDINGS_LIST_WINDOW } from "../../finding-disposition.js";
@@ -627,8 +628,11 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       : [];
     const trace = await loadFindingTrace(sql, finding, verification_rounds);
     const fact_evidence_trace = await loadFactEvidenceTrace(sql, finding, verification_rounds);
+    // #1264：人工确认的证据按「单次处置」从审计记录取，而不是整列累计值；
+    // 只有具备 tasks:read 才解析成可点击目标，并把人工追加的引用从旧字段里摘掉。
+    const humanEvidence = await readHumanDispositionHistory(req.actor, { ...finding, ...research });
     return {
-      finding: { ...finding, ...research },
+      finding: humanEvidence.finding,
       verification_control: control,
       project_research_features: await readFeatureStatus(id, String(finding.project_id)),
       research,
@@ -648,6 +652,7 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       verification_rounds: verification_rounds.slice(0, 1000),
       trace,
       fact_evidence_trace,
+      ...(humanEvidence.history ? { disposition_history: humanEvidence.history } : {}),
     };
   });
 
@@ -748,4 +753,85 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
       items,
     };
   });
+}
+
+interface FindingEvidenceTarget {
+  evidence_id: string;
+  artifact_id: string;
+  job_id: string;
+  canvas_id: string | null;
+  statement: string | null;
+  kind: string;
+}
+
+interface DispositionHistoryEntry {
+  disposition: string;
+  by: string | null;
+  at: string | null;
+  note: string | null;
+  evidence: FindingEvidenceTarget[];
+}
+
+const EVIDENCE_LINK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/**
+ * 人工处置历史与本次证据目标（#1264）。
+ *
+ * 累计的 `finding.evidence_refs_json` 无法说明哪条证据属于哪次决定，所以逐次历史取自
+ * 审计记录 `finding.disposition`（append-only）：每条给出处置、操作人、时间、备注，以及
+ * 该次追加的证据目标。证据目标只在调用方具备 tasks:read 时解析；同时把人工追加过的引用
+ * 从旧字段 `evidence_refs_json` 里摘掉，避免受限的人工证据顺着旧字段漏给只有 findings:read 的调用方。
+ */
+async function readHumanDispositionHistory(
+  actor: Actor | undefined,
+  finding: Record<string, unknown>,
+): Promise<{ finding: Record<string, unknown>; history: DispositionHistoryEntry[] | null }> {
+  const findingId = String(finding.id);
+  const projectId = String(finding.project_id);
+  const audits = await sql`
+    SELECT after_json FROM audit_logs
+    WHERE action = 'finding.disposition' AND resource_id = ${findingId} AND project_id = ${projectId}
+    ORDER BY id DESC LIMIT 20`;
+  const decisions = audits.map((row) => (row.after_json ?? {}) as Record<string, unknown>);
+  const humanRefs = new Set(decisions.flatMap((decision) => stringList(decision.evidence_refs)));
+  const canSeeEvidence = Boolean(actor && actorHasScope(actor, "tasks:read"));
+  const legacyRefs = stringList(finding.evidence_refs_json);
+  const visibleLegacy = canSeeEvidence ? legacyRefs : legacyRefs.filter((ref) => !humanRefs.has(ref));
+  const projectedFinding = canSeeEvidence ? finding : { ...finding, evidence_refs_json: visibleLegacy };
+  if (!canSeeEvidence || decisions.length === 0) return { finding: projectedFinding, history: null };
+  const wanted = [...humanRefs].filter((ref) => EVIDENCE_LINK_ID.test(ref)).slice(0, 50);
+  const targets = new Map<string, FindingEvidenceTarget>();
+  if (wanted.length > 0) {
+    const rows = await sql`
+      SELECT e.id::text AS evidence_id, a.id::text AS artifact_id, a.job_id::text AS job_id,
+             j.canvas_id, e.statement, e.kind
+      FROM artifact_evidence e
+      JOIN artifacts a ON a.id = e.artifact_id
+      JOIN jobs j ON j.id = a.job_id
+      WHERE e.id = ANY(${wanted}::uuid[]) AND j.project_id = ${projectId}`;
+    for (const row of rows) {
+      targets.set(String(row.evidence_id), {
+        evidence_id: String(row.evidence_id),
+        artifact_id: String(row.artifact_id),
+        job_id: String(row.job_id),
+        canvas_id: row.canvas_id ? String(row.canvas_id) : null,
+        statement: typeof row.statement === "string" ? row.statement : null,
+        kind: String(row.kind),
+      });
+    }
+  }
+  const history = decisions.slice(0, 10).map((decision) => ({
+    disposition: String(decision.disposition ?? ""),
+    by: typeof decision.disposition_by === "string" ? decision.disposition_by : null,
+    at: typeof decision.disposition_at === "string" ? decision.disposition_at : null,
+    note: typeof decision.note === "string" ? decision.note : null,
+    evidence: stringList(decision.evidence_refs)
+      .map((ref) => targets.get(ref))
+      .filter((target): target is FindingEvidenceTarget => Boolean(target)),
+  }));
+  return { finding: projectedFinding, history };
 }
