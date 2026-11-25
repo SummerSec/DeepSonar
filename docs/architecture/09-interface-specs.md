@@ -134,11 +134,11 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 
 | 事实 | 写入方 | 存储 | 展示 |
 | --- | --- | --- | --- |
-| 人工确认 | 有 `findings:write` 的人 | `disposition`、`disposition_by`、`disposition_at`、`disposition_note`、`evidence_refs_json`（同一 UPDATE 内合并去重，只追加） | 详情「状态」区就地显示确认人、时间、关联证据条数与备注；没有确认人时写「尚未人工确认，当前为默认待处理」 |
+| 人工确认 | 有 `findings:write` 的人 | `disposition`、`disposition_by`、`disposition_at`、`disposition_note`、`evidence_refs_json`（同一 UPDATE 内合并去重，只追加） | 详情「状态」区就地显示：`confirmed_vuln` 才是「人工确认」（含确认人、时间、累计关联证据条数与备注），其它处置只写「最近人工处置」；没有确认人时写「尚未人工确认，当前为默认待处理」 |
 | 平台技术验证 | Scheduler Verify | `verify_status`、验证轮次 | 详情侧栏「技术验证」 |
 
 - `PATCH /findings/:id/disposition` 不再因为 `verify_status != confirmed` 返回 409；响应里的 `verify_status` 保持原值。
-- 请求体可带 `evidence_refs`（≤10 个 uuid），必须指向当前项目里已存在的 `artifact_evidence`，否则 400 `EVIDENCE_REF_NOT_FOUND`；合并与去重在同一条 `UPDATE` 里由数据库读最新行完成，两笔并发追加都会保留，没有附证据时整列不动。
+- 请求体可带 `evidence_refs`（≤10 个 uuid），必须指向当前项目里已存在的 `artifact_evidence`，否则 400 `EVIDENCE_REF_NOT_FOUND`；合并与去重在同一条 `UPDATE` 里由数据库读最新行完成，两笔并发追加都会保留，没有附证据时整列不动；审计与处置在同一事务内提交，审计写失败则整笔回滚。
 - 审计 `finding.disposition` 的 after 里显式写 `disposition_source: "human"`、备注与证据引用；技术验证侧不受影响。
 - 越权写入仍由路由 scope（`findings:write`）拒绝，人工确认不引入新的权限通道。
 

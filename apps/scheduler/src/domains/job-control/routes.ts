@@ -13,7 +13,7 @@ import { registerEffectSettlementRoutes } from "./effect-settlement-routes.js";
 import { registerRecoveryDiagnosticsRoutes } from "./recovery-diagnostics-routes.js";
 import { z } from "zod";
 import { projectPlanGaps } from "../plan-protocol/gap-projection.js";
-import { audit } from "../../audit.js";
+import { audit, recordDurableAudit } from "../../audit.js";
 import { projectCredentialProviderError, projectJobEventPayload, projectJobPayload } from "../../credentials.js";
 import { extractDispatchPrompt, parseJsonRecord } from "../../job-dispatch-prompt.js";
 import {
@@ -397,41 +397,46 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const actorName = req.actor?.name ?? "unknown";
     // 证据引用只追加不覆盖（#1264 评审）：合并放在同一条 UPDATE 里，由数据库读最新行，
     // 避免「先读后写」用旧快照盖掉并发的另一笔追加；没有附证据时整列不动。
-    const [row] = await sql`
-      UPDATE findings SET
-        disposition = ${body.disposition},
-        disposition_note = ${body.note ?? null},
-        disposition_by = ${actorName},
-        disposition_at = now(),
-        duplicate_of = ${duplicateTarget},
-        updated_at = now(),
-        evidence_refs_json = CASE
-          WHEN ${evidenceRefs.length} = 0 THEN evidence_refs_json
-          ELSE (
-            SELECT COALESCE(jsonb_agg(DISTINCT merged.value), '[]'::jsonb)
-            FROM jsonb_array_elements_text(evidence_refs_json || ${sql.json(evidenceRefs)}::jsonb) AS merged(value)
-          )
-        END
-      WHERE id = ${id}
-      RETURNING *`;
-    // rejected_fp 仅人工业务处置；不伪造技术 confirmed，也不把未收敛 round 绕过
-    // 不再把 verify_status 写成 false_positive（新流程否定结论走 Scheduler 终态 refuted/inconclusive）
-    await audit(req, {
-      action: "finding.disposition",
-      resourceType: "finding",
-      resourceId: id,
-      projectId: row.project_id as string,
-      before: { disposition: cur.disposition, verify_status: cur.verify_status },
-      after: {
-        disposition: body.disposition,
-        disposition_source: "human",
-        note: body.note ?? null,
-        duplicate_of: duplicateTarget,
-        evidence_refs: evidenceRefs,
-        verify_status: row.verify_status,
-      },
+    // 审计与处置在同一事务：审计写不进去就整笔回滚，避免只改状态却查不到这次确认。
+    return sql.begin(async (tx) => {
+      const [row] = await tx`
+        UPDATE findings SET
+          disposition = ${body.disposition},
+          disposition_note = ${body.note ?? null},
+          disposition_by = ${actorName},
+          disposition_at = now(),
+          duplicate_of = ${duplicateTarget},
+          updated_at = now(),
+          evidence_refs_json = CASE
+            WHEN ${evidenceRefs.length} = 0 THEN evidence_refs_json
+            ELSE (
+              SELECT COALESCE(jsonb_agg(DISTINCT merged.value), '[]'::jsonb)
+              FROM jsonb_array_elements_text(evidence_refs_json || ${tx.json(evidenceRefs)}::jsonb) AS merged(value)
+            )
+          END
+        WHERE id = ${id}
+        RETURNING *`;
+      // rejected_fp 仅人工业务处置；不伪造技术 confirmed，也不把未收敛 round 绕过
+      // 不再把 verify_status 写成 false_positive（新流程否定结论走 Scheduler 终态 refuted/inconclusive）
+      // SAFETY: TransactionSql 与 Sql 只差事务句柄，仍是同一个连接上的同一个标签函数。
+      const auditDb = tx as unknown as typeof sql;
+      await recordDurableAudit(req, {
+        action: "finding.disposition",
+        resourceType: "finding",
+        resourceId: id,
+        projectId: row.project_id as string,
+        before: { disposition: cur.disposition, verify_status: cur.verify_status },
+        after: {
+          disposition: body.disposition,
+          disposition_source: "human",
+          note: body.note ?? null,
+          duplicate_of: duplicateTarget,
+          evidence_refs: evidenceRefs,
+          verify_status: row.verify_status,
+        },
+      }, auditDb);
+      return row;
     });
-    return row;
   });
 
   app.post("/findings/:id/comments", async (req, reply) => {

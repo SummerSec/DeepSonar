@@ -266,10 +266,17 @@ test("Finding detail keeps one candidate entry and its state across conditional 
   let confirmed = false;
   let showResearch = false;
   let humanConfirmed = false;
+  let humanAccepted = false;
   function detail(id: string): FindingDetail {
     return {
       verification_control: { verify_status: needsHuman ? "needs_human" : "pending", subject_revision: null, latest_round_id: null },
       finding: { ...finding(id), verify_status: confirmed ? "confirmed" : needsHuman ? "needs_human" : "pending",
+        ...(humanAccepted ? {
+          disposition: "accepted",
+          disposition_by: "reviewer-b",
+          disposition_at: "2026-02-03T00:00:00.000Z",
+          disposition_note: "先接受，等待排期",
+        } : {}),
         ...(humanConfirmed ? {
           disposition: "confirmed_vuln",
           disposition_by: "reviewer-a",
@@ -330,6 +337,14 @@ test("Finding detail keeps one candidate entry and its state across conditional 
     assert.match(humanText, /平台外人工复现成功/u);
     assert.match(humanText, /待验证/u, "技术验证仍按 Verify 自己的结果展示");
     humanConfirmed = false;
+    // 反例：接受/误报这类处置不能被写成「人工确认」。
+    humanAccepted = true;
+    await click("待处置");
+    const acceptedText = env.container.textContent ?? "";
+    assert.match(acceptedText, /最近人工处置：reviewer-b/u);
+    assert.doesNotMatch(acceptedText, /人工确认：/u);
+    assert.doesNotMatch(acceptedText, /关联证据/u);
+    humanAccepted = false;
     await click("待处置");
     await click("查看已计算候选");
     const expandedEntry = env.container.querySelector('[aria-label="已计算的词法候选"]');

@@ -889,16 +889,20 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                 <SidebarField label="状态">
                   <FindingDispositionEditor disposition={f.disposition ?? "open"} verifyStatus={f.verify_status}
                     busy={busy} note={note} onNoteChange={setNote} onChange={setDisposition} />
-                  {/* #1264：人工确认就地展示，与技术验证分开；没有确认人时明确是默认待处理。 */}
+                  {/* #1264：只有 confirmed_vuln 才是「人工确认」，其余处置只是最近一次人工处置；
+                      技术验证照旧由 Verify 记录，两者不互相改写。 */}
                   {f.disposition_by ? (
                     <div className="mt-2 space-y-1 text-[11px] leading-4 text-zinc-500">
                       <p>
-                        人工确认：{f.disposition_by}
+                        {f.disposition === "confirmed_vuln" ? "人工确认：" : "最近人工处置："}
+                        {f.disposition_by}
                         {f.disposition_at ? ` 于 ${formatTime(f.disposition_at)}` : ""}
                       </p>
-                      <p>
-                        关联证据 {f.evidence_refs_json?.length ?? 0} 条（与平台技术验证分开记录）
-                      </p>
+                      {f.disposition === "confirmed_vuln" && (
+                        <p>
+                          关联证据 {f.evidence_refs_json?.length ?? 0} 条（累计，含历史确认；与平台技术验证分开记录）
+                        </p>
+                      )}
                       {f.disposition_note && (
                         <p className="whitespace-pre-wrap text-zinc-600">{f.disposition_note}</p>
                       )}
