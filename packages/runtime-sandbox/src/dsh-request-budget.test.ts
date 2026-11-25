@@ -199,6 +199,29 @@ test("DSH shared allowance preserves exact accepted completion and rejects other
   } finally { await upstream.close(); }
 });
 
+test("#1228 认不出形状的错误对象只投影安全键名", async () => {
+  const source = String.raw`
+    let failure;
+    export function setFailure(error) { failure = error; }
+    async function fetch() { throw failure; }
+  ` + DSH_REQUEST_BUDGET_SOURCE;
+  const policy = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+  const root = "http://127.0.0.1:3100/gateway";
+  const model = { provider: "fixture", id: "model", api: "openai-completions", baseUrl: root, maxTokens: 256 };
+  const options = { apiKey: "synthetic-main-token", maxTokens: 128 };
+  const identity = { ...model, gatewayRoot: root, token: options.apiKey };
+  // Pi 1.6.0 现场就是这种对象：没有 name/code/status，只有几个自身键。
+  policy.setFailure({ synthetic_marker: "private body must never be projected" });
+  await assert.rejects(() => policy.prepareSdkCall({ model, options, frozenIdentity: identity }), (error: Error) => {
+    const detail = JSON.parse(error.message.split("; diagnostic=")[1]!);
+    assert.equal(detail.stage, "allowance");
+    assert.equal(detail.name, undefined);
+    assert.deepEqual(detail.keys, ["synthetic_marker"]);
+    assert.doesNotMatch(error.message, /private body/u);
+    return true;
+  });
+});
+
 test("#1083 DSH shared allowance transport errors retain safe diagnostics without changing stop signals", async () => {
   // Module-local fetch boundary: no process-global fetch mutation or real gateway.
   const source = String.raw`

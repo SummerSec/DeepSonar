@@ -22,6 +22,8 @@ function diagnosticField(value, key) {
   try {
     for (let depth = 0; value && (typeof value === 'object' || typeof value === 'function') && depth < 4; depth++) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      // #1083：只读 data property。访问器可能来自不可信对象，求值会执行任意代码，
+      // 所以这里刻意不调用 getter（#1228 曾尝试读访问器，被既有回归挡住并已回退）。
       if (descriptor) return 'value' in descriptor ? descriptor.value : undefined;
       value = Object.getPrototypeOf(value);
     }
@@ -63,6 +65,14 @@ function requestDiagnostic(error, stage, signal) {
     // ever recording URL, header or body text.
     const bodyHint = diagnosticField(value, 'bodyHint');
     if (bodyHint === 'not_found' || bodyHint === 'other' || bodyHint === 'empty') result.bodyHint = bodyHint;
+    // #1228: 只有「什么都认不出来」时才追加安全形状（仅键名、不含取值）。判断放在
+    // status / bodyHint 投影之后，否则带 status 的错误会被误判成认不出来。
+    const unidentified = result.name === undefined && result.code === undefined
+      && result.status === undefined && result.bodyHint === undefined;
+    if (unidentified) {
+      const keys = Object.keys(value).filter(key => /^[a-z_]{1,24}$/i.test(key)).slice(0, 6);
+      if (keys.length > 0) result.keys = keys;
+    }
     const cause = project(diagnosticField(value, 'cause'), depth + 1);
     if (cause && Object.keys(cause).length) result.cause = cause;
     return result;
