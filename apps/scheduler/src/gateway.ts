@@ -64,6 +64,20 @@ import {
 } from "./gateway-om-budget.js";
 import { observationalMemoryConfig, parseFrozenPiExtensions } from "./pi-extensions.js";
 
+/**
+ * #1260：allowance 入口只投影预算与 provider binding 需要的快照键。
+ * 用 `jsonb_exists` 的布尔列还原「键不存在」与「键值为 null」的差别，
+ * 坏快照仍按原样被预算校验拒绝。
+ */
+function allowanceSnapshot(row: Record<string, unknown>): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  if (row.binding_snapshot != null) snapshot.gateway_provider_binding = row.binding_snapshot;
+  if (row.has_runtime_knobs === true) snapshot.runtime_knobs = row.runtime_knobs;
+  if (row.has_agent_cli === true) snapshot.agent_cli = row.agent_cli;
+  if (row.has_pi_extensions === true) snapshot.pi_extensions = row.pi_extensions;
+  return snapshot;
+}
+
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 const JOB_TOKEN_RE = /^deepsonarjob_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/;
 export { GATEWAY_WORKLOADS } from "./gateway-om-budget.js";
@@ -1288,7 +1302,25 @@ export function registerGateway(app: FastifyInstance): void {
       const m = token?.match(JOB_TOKEN_RE) ?? null;
       if (!token || !m) return deny(reply, 401, "缺少或非法 DEEPSONAR_JOB_TOKEN", "invalid_token");
 
-      const [jt] = await sql`
+      // #1260：allowance 只要咨询额度，不能为了它把 ~440KB 的冻结快照整份搬过网络和
+      // 解码。这里按路径选投影：allowance 取 provider binding 与预算真正用到的三个键，
+      // 其它请求仍取完整快照。`jsonb_exists` 保留「键不存在」与「键值为 null」的区别。
+      const allowanceRequest = req.url === "/gateway/_allowance";
+      const [jt] = allowanceRequest
+        ? await sql`
+        SELECT jt.*, j.status AS job_status, j.started_at, j.timeout_sec,j.execution_deadline_at,
+               j.agent_snapshot_json->'gateway_provider_binding' AS binding_snapshot,
+               jsonb_exists(j.agent_snapshot_json, 'runtime_knobs') AS has_runtime_knobs,
+               j.agent_snapshot_json->'runtime_knobs' AS runtime_knobs,
+               jsonb_exists(j.agent_snapshot_json, 'agent_cli') AS has_agent_cli,
+               j.agent_snapshot_json->>'agent_cli' AS agent_cli,
+               jsonb_exists(j.agent_snapshot_json, 'pi_extensions') AS has_pi_extensions,
+               j.agent_snapshot_json->'pi_extensions' AS pi_extensions,
+               a.id AS attempt_id, a.attempt_no
+        FROM job_tokens jt JOIN jobs j ON j.id = jt.job_id
+        LEFT JOIN job_attempts a ON a.job_id = j.id AND a.status = 'active'
+        WHERE jt.token_prefix = ${m[1]}`
+        : await sql`
         SELECT jt.*, j.status AS job_status, j.started_at, j.timeout_sec,j.execution_deadline_at,
                j.agent_snapshot_json,
                a.id AS attempt_id, a.attempt_no
@@ -1342,7 +1374,7 @@ export function registerGateway(app: FastifyInstance): void {
         const [credential] = await sql`SELECT * FROM credentials WHERE id = ${jt.credential_id}`;
         if (!credential || credential.status !== "active") return deny(reply, 502, "Bound credential is unavailable", "credential_inactive");
         try {
-          assertGatewayProviderBinding((jt.agent_snapshot_json as Record<string, unknown>)?.gateway_provider_binding, {
+          assertGatewayProviderBinding(allowanceSnapshot(jt).gateway_provider_binding, {
             id: credential.id, provider: credential.provider, agent_cli: credential.agent_cli,
             settings_config_json: credential.settings_config_json, public_metadata_json: credential.public_metadata_json,
           });
@@ -1356,26 +1388,26 @@ export function registerGateway(app: FastifyInstance): void {
         }
         reply.header("cache-control", "no-store");
         try {
-          return await sql.begin(async (tx) => {
-            // Advisory request-generation policy, never a reservation. Admission
-            // rechecks the same budget under this Job lock before any external call.
-            const db = tx as unknown as typeof sql;
-            await lockContinuationBudget(db, String(jt.job_id));
-            const [job] = await db`SELECT status, agent_snapshot_json FROM jobs WHERE id=${jt.job_id} FOR UPDATE`;
-            if (!job || !JOB_ACTIVE.includes(String(job.status))) throw new RepairTokenBudgetError("REPAIR_JOB_INACTIVE", "Job is no longer active");
-            const workload = gatewayWorkload(jt.workload);
-            const requestPolicy = await inspectGatewayRequestBudget(db, String(jt.job_id), job.agent_snapshot_json);
-            const requests = await readHistoricalRequestBudget(db, String(jt.job_id), workload, requestPolicy);
-            if (requests.exhausted) {
-              throw new RepairTokenBudgetError("JOB_REQUEST_EXHAUSTED", "Job request allowance exhausted");
-            }
-            const repair = workload === "main" ? await admitGatewayRepair(db, String(jt.job_id), String(jt.attempt_id)) : null;
-            const total = workload === "observational_memory"
-              ? await readWorkloadTokenAllowance(db, String(jt.job_id), workload, repair)
-              : await readMainTokenAllowance(db, String(jt.job_id), job.agent_snapshot_json, repair);
-            const remaining = total === null ? repair?.remaining_tokens ?? null : Math.min(total, repair?.remaining_tokens ?? total);
-            return { remaining_tokens: remaining, policy_required: repair !== null || remaining !== null };
-          });
+          // #1260：allowance 只是「咨询剩余额度」，真正的扣减与重查发生在 admission 的
+          // Job 锁内。旧实现在这里拿了 1–2 个 jobs 行锁（root + 当前 Job）并让
+          // job_tokens/job_attempts 也跟着排队，实测把 P95 推到 23–27s，超过客户端
+          // 15s 超时，导致 30.5% 的 Job 在首个模型请求前就失败。这里改成无锁只读。
+          const [job] = await sql`SELECT status FROM jobs WHERE id=${jt.job_id}`;
+          if (!job || !JOB_ACTIVE.includes(String(job.status))) throw new RepairTokenBudgetError("REPAIR_JOB_INACTIVE", "Job is no longer active");
+          const workload = gatewayWorkload(jt.workload);
+          const requestPolicy = await inspectGatewayRequestBudget(sql, String(jt.job_id), allowanceSnapshot(jt));
+          const requests = await readHistoricalRequestBudget(sql, String(jt.job_id), workload, requestPolicy, { lock: false });
+          if (requests.exhausted) {
+            throw new RepairTokenBudgetError("JOB_REQUEST_EXHAUSTED", "Job request allowance exhausted");
+          }
+          const repair = workload === "main"
+            ? await admitGatewayRepair(sql, String(jt.job_id), String(jt.attempt_id), { lock: false })
+            : null;
+          const total = workload === "observational_memory"
+            ? await readWorkloadTokenAllowance(sql, String(jt.job_id), workload, repair)
+            : await readMainTokenAllowance(sql, String(jt.job_id), allowanceSnapshot(jt), repair);
+          const remaining = total === null ? repair?.remaining_tokens ?? null : Math.min(total, repair?.remaining_tokens ?? total);
+          return { remaining_tokens: remaining, policy_required: repair !== null || remaining !== null };
         } catch (error) {
           if (error instanceof GatewayRequestBudgetError) return deny(reply, 409, error.message, error.code);
           if (error instanceof RepairTokenBudgetError) return deny(reply, error.code.endsWith("EXHAUSTED") ? 429 : 409,

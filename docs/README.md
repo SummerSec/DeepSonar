@@ -1,5 +1,9 @@
 # DeepSonar 文档索引
 
+本轮修复 `/gateway/_allowance` 的等待放大：该端点只做额度咨询，却拿了 1–2 个 jobs 行锁并整行读取 ~440KB 冻结快照，实测 P95 23–27s，超过客户端 15s 超时，导致 30.5% 的 Job 在首个模型请求前失败。现在查询改为无锁只读，入口只投影 provider binding 与预算用到的快照键（客户端 15s 超时不变，准入仍在锁内重新核准）；`jobs` 快照瘦身与 allowance 指标是后续独立项（[预算与 OM 迁移](MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)、[安全边界](architecture/10-security-and-trust-boundaries.md)）。同步日期：2026-11-25。
+
+
+
 任务总报告改成「可信区块整体前置」（#1251）：平台结果摘要 → 审计摘要 → 原始投影 → 不可信正文，未闭合的模型尾部后面不再有任何可吞掉的内容，冻结快照里的目标与结束理由按纯文本渲染；页面与下载 Markdown 顺序一致。实现与验收见 [接口规格 · 任务总报告的读者口径](architecture/09-interface-specs.md#任务总报告的读者口径125012512026-11-24)。
 
 任务总报告改成“先结论、后依据”（#1250）：正文开头用中文交代漏洞验证计数、任务结果声明、目标达成口径和下一步责任人，计划审计与评审依据的原始 JSON 下沉到「详细审计数据 / 评审状态投影」小节；空计划审计不再倾倒空 JSON，改为一句“没有可用的计划审计记录、覆盖情况暂时无法据此判断”，并保留 unknown 不证明完成也不证明未执行的语义。
@@ -14,6 +18,7 @@
 任务声明的前置条件反馈（#1245）在 [接口规格](architecture/09-interface-specs.md#任务声明的前置条件反馈12452026-11-23) 中按快照分档。正常省略返回 `task_result_contract_missing`，现有无效契约返回 `task_result_contract_invalid`，均为当前 Agent 无法修正的永久前置条件。正常创建到实际 Control HTTP 与事件入账回归接既有 Actions，最终候选另验。
 #1230 的 [`GET /gateway/_settlement/:id`](architecture/09-interface-specs.md#model-gateway) 按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一持久身份读取，原 Attempt 已终态或出现后续活动 Attempt 时仍可读。多条匹配回答 `unknown`，真缺失仍为 404，失效 token 和终态 Job 仍拒绝。历史 `settled` 只表示账本已经结算，模型结果和恢复准入分别判定。PostgreSQL 回归接 `ci:integration:platform-api`，最终 SHA Actions 待验，现场 8 次失败的逐条归因与真实模型效果未验证。
 
+#1219 第一步把任务内沉淀的 Memory 直接写进知识条目与版本（`task-knowledge-ingest`）：同标题追加版本并置为 `active`，不经过模型评测、不额外起 Job；Skill 仍走显式送评。目录在 Job 创建时冻结，因此只影响之后创建的 Job。详见[项目知识与 Skill](PROJECT_KNOWLEDGE.md#任务沉淀直接入库1219-第一步2026-11-23)。
 #1221 的[文档快车道例外](architecture/11-engineering-specs.md#4-测试分层与实际接线)把根目录 `DESIGN.md` 与 `docs/superpowers/plans/` 下直接新增/修改的普通 Markdown 纳入已评审文档白名单；仍是同一套 `docs-freshness` + `ci-summary` 门禁，不放宽成 `docs/**`，删除/改名/复制/类型变更、混合代码或未知路径继续走完整验收。回归见 `agent-harness/classify-ci-changes.test.mjs` 与 `agent-harness/ci-routing.test.mjs`，最终 SHA Actions 待验。
 #1221 的[文档快车道例外](architecture/11-engineering-specs.md#4-测试分层与实际接线)把根目录 `DESIGN.md` 与 `docs/superpowers/plans/` 下直接新增/修改的普通 Markdown 纳入已评审文档白名单；仍是同一套 `docs-freshness` + `ci-summary` 门禁，不放宽成 `docs/**`，删除/改名/复制/类型变更、混合代码或未知路径继续走完整验收。放行要求 Git blob 模式为普通文件（`100644`，修改同时核对旧模式；符号链接/子模块/缺失模式转完整检查），分类入口与 `ci-run-plan.mjs` 共用同一解析；对外主题 id 残留守卫也共享到 `docs-freshness`。回归见 `agent-harness/classify-ci-changes.test.mjs`、`ci-run-plan.test.mjs`、`ci-routing.test.mjs`（含真实符号链接新增与改向）与 `docs-freshness.test.ts`，最终 SHA Actions 待验。（#1221 复核补充）真实工作流的计划由 `ci-run-plan.mjs` 读 diff，此前它用的是不带模式信息的 `--name-status`，导致普通 Markdown 仍被判成全量；现在它改用 `git diff --raw -z --find-renames`，与分类入口共用同一份模式校验，并用真实 Git 提交的用例证明「普通 Markdown → 文档快车道」「符号链接 → 完整检查 + `unsafe_file_mode`」。
 #1219 第二步把「用后必评」写进工具契约：读与搜的描述说明「查到不等于用了」，反馈只认真实 `usage_ref` 与 `evidence_refs`，效果未明保留未知、不得用任务成败反推；缺评只算无样本，不阻塞任务也不驱动退役。
