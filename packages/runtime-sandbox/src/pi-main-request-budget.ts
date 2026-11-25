@@ -84,7 +84,7 @@ function requestDiagnostic(error, stage, signal, phase) {
       'RateLimitError','InternalServerError'].includes(current.name)
       || transientStatuses.has(current.status)) transient = true;
   }
-  const prepared = ['identity','om-auth','prepare','clamp','headers','delegate'];
+  const prepared = ['identity','om-auth','prepare','clamp-load','clamp-call','thinking','headers','delegate'];
   const detailWithPhase = stage === 'prepare' && prepared.includes(phase) ? { ...detail, phase } : detail;
   return { version:1, stage, category:!incomplete && !permanentRequestDiagnostic(detail, signal) && transient
     ? 'transient_retryable' : 'permanent_failure', ...detailWithPhase };
@@ -394,10 +394,13 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
               const prepared = preparePiMainSdkRequest(requestedModel, options, allowance);
               if (allowance.policy_required && requestedModel.api === 'anthropic-messages' && requestedModel.reasoning && options?.reasoning
                 && requestedModel.compat?.forceAdaptiveThinking !== true && requestedModel.compat?.supportsMidConvoEffort !== true) {
-                phase = 'clamp';
+                phase = 'clamp-load';
                 contextClamp ??= loadPiContextClamp();
                 const clamp = await contextClamp;
-                assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamp(prepared.model, safeContext, prepared.options.maxTokens));
+                phase = 'clamp-call';
+                const clamped = clamp(prepared.model, safeContext, prepared.options.maxTokens);
+                phase = 'thinking';
+                assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamped);
               }
               phase = 'headers';
               const requestId = randomUUID();
