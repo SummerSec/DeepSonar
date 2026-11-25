@@ -402,12 +402,18 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
               if (allowance.policy_required && requestedModel.api === 'anthropic-messages' && requestedModel.reasoning && options?.reasoning
                 && requestedModel.compat?.forceAdaptiveThinking !== true && requestedModel.compat?.supportsMidConvoEffort !== true) {
                 phase = 'clamp-load';
-                contextClamp ??= loadPiContextClamp();
-                const clamp = await contextClamp;
-                phase = 'clamp-call';
-                const clamped = clamp(prepared.model, safeContext, prepared.options.maxTokens);
-                phase = 'thinking';
-                assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamped);
+                try {
+                  contextClamp ??= loadPiContextClamp();
+                  const clamp = await contextClamp;
+                  phase = 'clamp-call';
+                  const clamped = clamp(prepared.model, safeContext, prepared.options.maxTokens);
+                  phase = 'thinking';
+                  assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamped);
+                } catch (error) {
+                  // #1228: 这一段可能抛出外部对象（无 name/code），统一映射成宿主错误码。
+                  if (error && typeof error === 'object' && hostFailures.has(error)) throw error;
+                  fail('PI_MAIN_BUDGET_CLAMP_BLOCK_FAILED');
+                }
               }
               phase = 'headers';
               const requestId = randomUUID();
