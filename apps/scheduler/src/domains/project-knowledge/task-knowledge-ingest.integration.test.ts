@@ -8,6 +8,7 @@ import { submitTaskKnowledgeSuggestion } from "./closeout-intake.js";
 import { taskKnowledgeLogicalKey } from "./task-knowledge-ingest.js";
 import { freezeProjectKnowledgeCatalog } from "./catalog-snapshot.js";
 import { createProjectKnowledgeApplication } from "./application.js";
+import { readNextKnowledgeWake } from "../../knowledge-wake.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./test-support.js";
 
 const H = "f".repeat(64);
@@ -147,5 +148,40 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
     } finally {
       setSharedAssetBlobStoreForTests(null);
     }
+  });
+});
+
+test("restricted closeout versions stay hidden in the same project and queued work still wakes", async () => {
+  await withKnowledgeDatabase(async db => {
+    const blobs = new Map<string, Buffer>();
+    setSharedAssetBlobStoreForTests({ kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async key => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async key => blobs.has(key), materializeLocal: async () => { throw new Error("unused"); } });
+    const app = createProjectKnowledgeApplication({ db: db as never, governanceHash: H });
+    const sql = db as unknown as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>;
+    const writer = await seedKnowledgeJob(db, undefined, [operation]);
+    const fact = await seedFact(db as never, writer, 1);
+    const receipt = await submit(db as never, writer, { title: "受控来源样例", content: "只应给有权者看", factRef: fact });
+    assert.equal(receipt.accepted, true);
+    const [item] = await sql`SELECT id, active_version_id FROM project_knowledge_items WHERE project_id=${writer.projectId}`;
+    // 把这条已入库的版本标成「任务沉淀送评的私有版本」。
+    const [work] = await sql`INSERT INTO project_knowledge_work(project_id,origin_job_id,trigger_key,governance_hash,state)
+      VALUES(${writer.projectId},${writer.jobId},${"knowledge:closeout-evaluation:fixture-1"},${H},'running') RETURNING id`;
+    await sql`INSERT INTO project_knowledge_proposals(project_id,work_id,action,state,revision,candidate_version_id,
+      maker_job_id,idempotency_key,request_digest,input_digest,reason)
+      VALUES(${writer.projectId},${work!.id},'create','candidate',1,${item!.active_version_id},${writer.jobId},
+      ${randomUUID()},${H},${H},'fixture')`;
+    const reader = await seedKnowledgeJob(db, writer.projectId, ["search_project_knowledge", "read_project_knowledge"]);
+    const catalog = await freezeProjectKnowledgeCatalog(db as never, writer.projectId);
+    await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_knowledge"],
+      project_knowledge_catalog: catalog } as never)} WHERE id=${reader.jobId}`;
+    const found = await app.invoke({ jobId: reader.jobId, projectId: writer.projectId, canvasId: reader.canvasId,
+      operationId: "search_project_knowledge", input: { query: "受控" }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
+    assert.deepEqual(found.items, [], "受限来源不能出现在同项目的检索结果里");
+    // 切换前已排队的采集工作仍然被唤醒调度，历史不会被丢掉。
+    await sql`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state,next_attempt_at)
+      VALUES(${writer.projectId},${"knowledge:collect:fixture-2"},${H},'pending',now())`;
+    const wake = await readNextKnowledgeWake(db as never);
+    assert.ok(wake instanceof Date && Number.isFinite(wake.getTime()), "在途/排队的知识工作仍应有唤醒时间");
   });
 });
