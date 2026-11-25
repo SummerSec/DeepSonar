@@ -1387,12 +1387,9 @@ export function registerGateway(app: FastifyInstance): void {
           return deny(reply, 403, "Allowance query requires an active workload", "workload_scope_mismatch");
         }
         reply.header("cache-control", "no-store");
-        // #1260：P1 观测。允许客户端中途超时（历史现场 23–27s 就是被客户端 15s 掐断），
-        // 因此既记耗时分布，也记「回复写回前连接就关了」的次数，用来区分慢与断。
+        // #1260：P1 观测。历史现场 23–27s 就是被客户端 15s 掐断，因此记耗时分布，
+        // 成功/被拒/其它错误分开；中断次数由连接关闭事件单独统计（见 metrics 说明）。
         const allowanceStartedAt = performance.now();
-        reply.raw.on("close", () => {
-          if (!reply.raw.writableEnded) inc("deepsonar_gateway_allowance_aborted_total");
-        });
         try {
           // #1260：allowance 只是「咨询剩余额度」，真正的扣减与重查发生在 admission 的
           // Job 锁内。旧实现在这里拿了 1–2 个 jobs 行锁（root + 当前 Job）并让
