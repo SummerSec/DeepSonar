@@ -11,6 +11,7 @@ import type { KnowledgeDb } from "./types.js";
 import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
 import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
+import { registerTaskKnowledgeCloseoutRoutes } from "./closeout-routes.js";
 import { registerKnowledgeActivityRoutes } from "./activity-routes.js";
 
 const Id = z.string().uuid();
@@ -200,6 +201,7 @@ export function registerProjectKnowledgeRoutes(
   deps: { db?: Db; recordAudit?: typeof audit } = {},
 ): void {
   registerAutomaticKnowledgeRoutes(app, deps);
+  registerTaskKnowledgeCloseoutRoutes(app, deps);
   registerKnowledgeActivityRoutes(app, deps);
   const db = deps.db ?? sql;
   const recordAudit = deps.recordAudit ?? audit;
