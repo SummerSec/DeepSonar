@@ -54,6 +54,11 @@ function requestDiagnostic(error, stage, signal) {
     const statuses = [status, statusCode].filter(validStatus);
     const selectedStatus = statuses.find(value => !transientStatuses.has(value)) ?? statuses[0];
     if (selectedStatus !== undefined) result.status = selectedStatus;
+    // #1262: allowlisted enum only. Distinguishes the gateway's own
+    // {status:"not_found"} from a proxy default page / empty body, without
+    // ever recording URL, header or body text.
+    const bodyHint = diagnosticField(value, 'bodyHint');
+    if (bodyHint === 'not_found' || bodyHint === 'other' || bodyHint === 'empty') result.bodyHint = bodyHint;
     const cause = project(diagnosticField(value, 'cause'), depth + 1);
     if (cause && Object.keys(cause).length) result.cause = cause;
     return result;
@@ -199,13 +204,81 @@ export async function readMainAllowance(baseUrl, token, requestSignal) {
 
 // This authenticated, host-owned route never forwards a provider response. Error
 // prose/status and provider-supplied headers are not no-start evidence.
+/** #1262: bounded, allowlisted classifier for a non-200 settlement response.
+ * The reply shape tells us which layer answered - the gateway's own
+ * {"status":"not_found"} versus some other body (proxy default page, empty,
+ * non-JSON). Only the enum leaves this function; no URL, header or prose is
+ * retained, so credentials and internal topology cannot reach a Job.
+ * Samples a CUMULATIVE byte budget (not per chunk) under a short deadline so a
+ * slow body can never delay an already-received error, and always releases the
+ * stream afterwards.
+ */
+const SETTLEMENT_HINT_BYTES = 512;
+const SETTLEMENT_HINT_DEADLINE_MS = 250;
+
+function classifySettlementBody(text, complete) {
+  // 只有「完整的、短小的 JSON」才能给出 not_found；截断或非 JSON 一律 other，
+  // 避免浏览器/代理的默认页面里恰好出现同样的片段。
+  if (!complete) return 'other';
+  try {
+    const value = JSON.parse(text);
+    return value && value.status === 'not_found' ? 'not_found' : 'other';
+  } catch { return 'other'; }
+}
+
+async function settlementBodyHint(response) {
+  if (!response.body) return 'empty';
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  let complete = true;
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timedOut: true }), SETTLEMENT_HINT_DEADLINE_MS);
+  });
+  try {
+    for (;;) {
+      const step = await Promise.race([reader.read(), deadline]);
+      if (step.timedOut) { complete = false; break; }
+      if (step.done) break;
+      const chunk = Buffer.from(step.value);
+      const room = SETTLEMENT_HINT_BYTES - size;
+      if (chunk.length > room) {
+        chunks.push(chunk.subarray(0, room));
+        size += room;
+        complete = false;
+        break;
+      }
+      chunks.push(chunk);
+      size += chunk.length;
+    }
+  } catch { complete = false; }
+  finally {
+    if (timer) clearTimeout(timer);
+    await reader.cancel().catch(() => undefined);
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  if (!text.trim()) return 'empty';
+  return classifySettlementBody(text, complete);
+}
+
 export async function readGatewayNoStart(baseUrl, token, requestId, requestSignal) {
   const signal = AbortSignal.any([...(requestSignal ? [requestSignal] : []), AbortSignal.timeout(15_000)]);
   try {
     const response = await fetch(endpoint(baseUrl) + '/_settlement/' + requestId, {
       headers: { authorization: 'Bearer ' + token }, redirect: 'manual', signal,
     });
-    if (response.status !== 200) { await response.body?.cancel(); throw { status: response.status }; }
+    if (response.status !== 200) {
+      // #1262: only a 404 is ambiguous between the gateway and an intermediary.
+      // Other statuses keep their existing diagnostic shape exactly, but must
+      // still release the body so a cleanup failure can never mask the status.
+      if (response.status !== 404) {
+        await response.body?.cancel().catch(() => undefined);
+        throw { status: response.status };
+      }
+      const bodyHint = await settlementBodyHint(response).catch(() => undefined);
+      throw bodyHint ? { status: response.status, bodyHint } : { status: response.status };
+    }
     const chunks = []; let size = 0;
     if (response.body) for await (const chunk of response.body) {
       size += chunk.length;

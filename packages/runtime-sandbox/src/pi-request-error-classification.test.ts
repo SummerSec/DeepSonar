@@ -289,6 +289,28 @@ test("#1083 settlement transport, HTTP and parsing failures retain their own saf
   }
 });
 
+// #1262: the same 404 can come from the gateway itself or from something in
+// front of it. The response shape is the only evidence the client holds, so it
+// must survive as an allowlisted enum (not_found / other / empty) while body
+// text, URLs and headers stay out of the Job.
+test("#1262 settlement 404 keeps an allowlisted body hint instead of prose", async () => {
+  for (const scenario of [
+    { settlementStatus: 404, settlementBody: '{"status":"not_found"}', bodyHint: "not_found" },
+    { settlementStatus: 404, settlementBody: '<html>proxy default page</html>', bodyHint: "other" },
+    { settlementStatus: 404, settlementBody: "   ", bodyHint: "empty" },
+  ]) {
+    const f = await fixture(scenario);
+    const events = await f.request();
+    const detail = diagnostic(events);
+    assert.equal(detail.stage, "settlement");
+    assert.equal(detail.status, 404);
+    assert.equal(detail.bodyHint, scenario.bodyHint);
+    assert.equal(f.queries.length, 2, "failed settlement query is not polled or replayed");
+    // No prose, URL or header value may leak through the hint.
+    assert.doesNotMatch(JSON.stringify(events), /proxy default page|<html>|private|synthetic-/u);
+  }
+});
+
 test("#1083 genuine host identity failures keep fixed codes before any allowance or SDK generation", async () => {
   const f = await fixture();
   const auth = await f.request(undefined, { apiKey: "synthetic-wrong-key" });

@@ -140,8 +140,11 @@ export async function runNativePiMainRecovery() {
     // This copy is NEVER the production-path proof above or an installed file.
     let mutantSource = PI_MAIN_REQUEST_BUDGET_SOURCE;
     for (const [from, to] of [
-      ["if (response.status !== 200) { await response.body?.cancel(); throw { status: response.status }; }",
-        "if (response.status !== 200) { await response.body?.cancel(); return true; }"],
+      // #1262: the production guard now classifies the reply body before throwing.
+      // Mutating the throw is still the negative control: it must not refuse.
+      // 非 200 现在有两处拒绝（非 404 先释放响应体，404 再看体形），
+      // 负向对照直接关掉整段状态判断，等价于旧版「把所有非 200 都放过」。
+      ["if (response.status !== 200) {", "if (false) {"],
       ["return value?.status === 'not_started' && value.reason === 'gateway_transient';", "return true;"],
     ]) {
       assert.equal(mutantSource.split(from).length, 2, "mutation must target exactly one production guard");

@@ -9,7 +9,8 @@ import {
 // Kept in sync with agent-harness/pi-observational-memory-governed.ts by regression.
 export const PI_MEMORY_GOVERNED_WRAPPER_SHA256 = "4a5451eac7ab4dfbe9c00dc56bc7af04368eef3f11eefe77a3da0cce24f9b0f2";
 // OM imports this image-owned SDK context policy; bind its bytes as well as the wrapper.
-export const PI_MEMORY_CONTEXT_POLICY_SHA256 = "811681cc87a1b148fd6320a127e99aa95c50d8313c190205a907d10dc8a4f0b7";
+// #1262: rotated with the bodyHint diagnostic projection in pi-main-request-budget.ts.
+export const PI_MEMORY_CONTEXT_POLICY_SHA256 = "2ee9807a1e17fbb6c8deb882a0e14978589f30070824ccbbe56ce5c5d52c3fc2";
 
 /** Runs inside the selected image before Pi can receive a prompt. */
 export const PI_MEMORY_IMAGE_GUARD_SOURCE = `
