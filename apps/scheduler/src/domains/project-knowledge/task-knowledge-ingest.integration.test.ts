@@ -179,6 +179,9 @@ test("restricted closeout versions stay hidden in the same project and queued wo
       operationId: "search_project_knowledge", input: { query: "受控" }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
     assert.deepEqual(found.items, [], "受限来源不能出现在同项目的检索结果里");
     // 切换前已排队的采集工作仍然被唤醒调度，历史不会被丢掉。
+    // 先把上面那条 running 的私有 work 收尾：同一项目只允许一条 running，
+    // 否则唤醒查询会因为「有 running」而排除所有 pending。
+    await sql`UPDATE project_knowledge_work SET state='completed' WHERE id=${work!.id}`;
     await sql`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state,next_attempt_at)
       VALUES(${writer.projectId},${"knowledge:collect:fixture-2"},${H},'pending',now())`;
     const wake = await readNextKnowledgeWake(db as never);
