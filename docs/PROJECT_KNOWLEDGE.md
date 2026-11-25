@@ -156,6 +156,19 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 刻意没做：不给 `audit_logs` 加部分索引、不升 `SCHEMA_VERSION`——索引能否消除 `DISTINCT ON` 排序、重试来源的「取最新记录」路径都需要 `EXPLAIN (ANALYZE, BUFFERS)` 实测，缺证据就要求已有非空库受控重建不划算；索引与查询形态重写留作后续项。
 
+## 自动来源登记的退役（#1219 第四阶段第二步，2026-11-25）
+
+业务 Job 走到终态时不再自动写 `project_knowledge.source_registered` 审计，也不再发 `knowledge_source` 通知。原因：新路径已经可用——任务收尾提交的 Memory 会由 `submit_task_knowledge_suggestion` 直接入库并可被后续任务检索，用后必评写进了工具契约，知识卡片与版本反馈明细也已上线。
+
+保留的入口：
+
+- **任务会话收尾提交**（`submit_task_knowledge_suggestion`）：Memory 入库，Skill 仍走显式送评；
+- **显式 Skill 提交与治理评审**：候选、评估、复核、录用链路不变；
+- **任务沉淀送评**（`POST /projects/:id/knowledge/closeout/:rootId/evaluate`）与详情读取。
+
+因此现在没有新的来源会进入旧采集链：`project_knowledge_work` 的自动准备行不再产生，采集与唤醒代码暂时保留（等在列表与审计里确认无消费方后，再按 #1219 第四阶段第三步删除，届时会移除 `GET /projects/:id/knowledge/backfill`，属破坏性变更）。
+
+历史 `source_registered` / `source_collected` 审计与既有 `project_knowledge_work` 记录保持只读，不改写。
 ## 验证与运维
 
 2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。

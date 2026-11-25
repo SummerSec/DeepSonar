@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+业务 Job 终态不再自动登记知识来源（[#1219 第四阶段第二步](PROJECT_KNOWLEDGE.md#自动来源登记的退役1219-第四阶段第二步2026-11-25)）：新路径（任务收尾入库、用后必评、知识卡片与反馈明细）已经可用，旧采集链不再有新来源，采集与唤醒代码留待第三步整体删除。
+
 本轮修复 `/gateway/_allowance` 的等待放大：该端点只做额度咨询，却拿了 1–2 个 jobs 行锁并整行读取 ~440KB 冻结快照，实测 P95 23–27s，超过客户端 15s 超时，导致 30.5% 的 Job 在首个模型请求前失败。现在查询改为无锁只读，入口只投影 provider binding 与预算用到的快照键（客户端 15s 超时不变，准入仍在锁内重新核准）；`jobs` 快照瘦身与 allowance 指标是后续独立项（[预算与 OM 迁移](MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)、[安全边界](architecture/10-security-and-trust-boundaries.md)）。同步日期：2026-11-25。
 网关结算观测补两层（#1262）：受管 gateway-proxy 增加逐请求访问日志（方法/路径模板/结果分类，`local-reject` 与 `aborted` 各自成类，不含 token、查询串、request id 与 body），Scheduler 侧新增 `deepsonar_gateway_settlement_total{result}` 与 `not_found` 自证日志。两层不做同请求关联，因此只支持「这类请求有没有到过代理 / Scheduler 回了什么」，不支持断定某个 Job 停在哪一层。见 [MODEL_GATEWAY_TRANSPARENCY §Managed proxy 的访问日志](MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的访问日志1262)。
 `#1264` 的人工确认再补一处：`GET /findings/:id` 增加可选 `disposition_history[]`，逐次给出人工处置与该次追加的证据目标（取自 `finding.disposition` 审计记录），只在调用方具备 `tasks:read` 时返回；缺权限整段省略，人工追加的引用也从旧字段摘除。见[接口契约](architecture/09-interface-specs.md#人工确认漏洞存在1264)。
