@@ -54,6 +54,11 @@ function requestDiagnostic(error, stage, signal) {
     const statuses = [status, statusCode].filter(validStatus);
     const selectedStatus = statuses.find(value => !transientStatuses.has(value)) ?? statuses[0];
     if (selectedStatus !== undefined) result.status = selectedStatus;
+    // #1262: allowlisted enum only. Distinguishes the gateway's own
+    // {status:"not_found"} from a proxy default page / empty body, without
+    // ever recording URL, header or body text.
+    const bodyHint = diagnosticField(value, 'bodyHint');
+    if (bodyHint === 'not_found' || bodyHint === 'other' || bodyHint === 'empty') result.bodyHint = bodyHint;
     const cause = project(diagnosticField(value, 'cause'), depth + 1);
     if (cause && Object.keys(cause).length) result.cause = cause;
     return result;
@@ -199,13 +204,35 @@ export async function readMainAllowance(baseUrl, token, requestSignal) {
 
 // This authenticated, host-owned route never forwards a provider response. Error
 // prose/status and provider-supplied headers are not no-start evidence.
+/** #1262: bounded, allowlisted classifier for a non-200 settlement response.
+ * The reply shape tells us which layer answered - the gateway's own
+ * {"status":"not_found"} versus some other body (proxy default page, empty,
+ * non-JSON). Only the enum leaves this function; no URL, header or prose is
+ * retained, so credentials and internal topology cannot reach a Job.
+ */
+async function settlementBodyHint(response) {
+  try {
+    if (!response.body) return 'empty';
+    let text = '';
+    for await (const chunk of response.body) {
+      text += Buffer.from(chunk).subarray(0, 512).toString('utf8');
+      if (text.length >= 512) break;
+    }
+    if (!text.trim()) return 'empty';
+    return /"status"\s*:\s*"not_found"/u.test(text) ? 'not_found' : 'other';
+  } catch { return undefined; }
+}
+
 export async function readGatewayNoStart(baseUrl, token, requestId, requestSignal) {
   const signal = AbortSignal.any([...(requestSignal ? [requestSignal] : []), AbortSignal.timeout(15_000)]);
   try {
     const response = await fetch(endpoint(baseUrl) + '/_settlement/' + requestId, {
       headers: { authorization: 'Bearer ' + token }, redirect: 'manual', signal,
     });
-    if (response.status !== 200) { await response.body?.cancel(); throw { status: response.status }; }
+    if (response.status !== 200) {
+      const bodyHint = await settlementBodyHint(response).catch(() => undefined);
+      throw bodyHint ? { status: response.status, bodyHint } : { status: response.status };
+    }
     const chunks = []; let size = 0;
     if (response.body) for await (const chunk of response.body) {
       size += chunk.length;
