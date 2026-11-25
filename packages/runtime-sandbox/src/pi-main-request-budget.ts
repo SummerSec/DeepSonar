@@ -172,28 +172,24 @@ export function piAiCandidateRoots(cliEntry = process.argv[1] ?? '') {
   return roots;
 }
 export async function loadPiContextClamp(root) {
-  // #1228: 每一步单独兜底成稳定的宿主错误码，避免外部对象（没有 name/code）把诊断
-  // 变成「什么都没有」。
-  let step = 'roots';
-  try {
-    const candidates = root ? [root] : piAiCandidateRoots().filter((candidate) => existsSync(candidate + '/package.json'));
-    const resolved = candidates[0];
-    if (!resolved) fail('PI_MAIN_BUDGET_SDK_VERSION');
-    root = resolved;
-    step = 'manifest';
-    const manifest = JSON.parse(await readFile(root + '/package.json', 'utf8'));
-    if (manifest.name !== '@earendil-works/pi-ai' || !PI_MAIN_BUDGET_SDK_VERSIONS.includes(manifest.version)) fail('PI_MAIN_BUDGET_SDK_VERSION');
-    step = 'export';
-    const entry = manifest.exports?.['./api/*']?.import;
-    if (typeof entry !== 'string' || !entry.startsWith('./') || entry.includes('..')) fail('PI_MAIN_BUDGET_SDK_EXPORT');
-    step = 'import';
-    const sdk = await import(pathToFileURL(root + '/' + entry.replace('*','simple-options')).href);
-    if (typeof sdk.clampMaxTokensToContext !== 'function') fail('PI_MAIN_BUDGET_SDK_EXPORT');
-    return sdk.clampMaxTokensToContext;
-  } catch (error) {
-    if (error && typeof error === 'object' && hostFailures.has(error)) throw error;
-    fail('PI_MAIN_BUDGET_CLAMP_' + step.toUpperCase() + '_FAILED');
-  }
+  // #1228: 每一步映射成稳定宿主错误码，外部对象没有 name/code 也不会丢诊断。
+  const candidates = root ? [root] : piAiCandidateRoots().filter((candidate) => existsSync(candidate + '/package.json'));
+  const resolved = candidates[0];
+  if (!resolved) fail('PI_MAIN_BUDGET_CLAMP_NO_CANDIDATE');
+  let raw;
+  try { raw = await readFile(resolved + '/package.json', 'utf8'); }
+  catch { fail('PI_MAIN_BUDGET_CLAMP_MANIFEST_READ_FAILED'); }
+  let manifest;
+  try { manifest = JSON.parse(raw); }
+  catch { fail('PI_MAIN_BUDGET_CLAMP_MANIFEST_PARSE_FAILED'); }
+  if (manifest?.name !== '@earendil-works/pi-ai' || !PI_MAIN_BUDGET_SDK_VERSIONS.includes(manifest.version)) fail('PI_MAIN_BUDGET_SDK_VERSION');
+  const entry = manifest.exports?.['./api/*']?.import;
+  if (typeof entry !== 'string' || !entry.startsWith('./') || entry.includes('..')) fail('PI_MAIN_BUDGET_SDK_EXPORT');
+  let sdk;
+  try { sdk = await import(pathToFileURL(resolved + '/' + entry.replace('*','simple-options')).href); }
+  catch { fail('PI_MAIN_BUDGET_CLAMP_IMPORT_FAILED'); }
+  if (typeof sdk.clampMaxTokensToContext !== 'function') fail('PI_MAIN_BUDGET_SDK_EXPORT');
+  return sdk.clampMaxTokensToContext;
 }
 let contextClamp;
 
