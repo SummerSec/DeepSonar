@@ -143,7 +143,7 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 - `GET /findings/:id` 新增可选 `disposition_history[]`：**逐次**人工处置取自 append-only 的 `finding.disposition` 审计记录（最近 10 次），每条给出 `disposition`、`by`、`at`、`note`，以及该次追加的证据目标（`evidence_id`、`artifact_id`、`job_id`、`canvas_id`、`statement`、`kind`）。累计列 `evidence_refs_json` 说明不了哪条证据属于哪次决定，因此不用它推断逐次历史。
 - 该字段**仅在调用方具备 `tasks:read`** 时返回；同一条件下才对证据做解析。不下发原始 `uri`，可点击目标由授权入口用 `evidence_id`/`job_id`/`canvas_id` 解析。
 - 无 `tasks:read` 时：`disposition_history` 整段省略，且人工追加过的证据引用会从旧字段 `evidence_refs_json` 里摘除，避免受限的人工证据顺着旧字段漏出；其余引用保持原样（兼容口径）。
-- 逐次查看与就地打开由前端消费 `evidence_links` 完成，界面接线随上面的人工确认区块一起落地。
+- 逐次查看与就地打开由前端消费 `disposition_history` 完成：详情「状态」区列出逐次人工处置，每条带各自的证据标题，证据可点开跳到来源任务画布。
 - 越权写入仍由路由 scope（`findings:write`）拒绝，人工确认不引入新的权限通道。
 
 ### Finding 重复候选与重复处置（#1206）

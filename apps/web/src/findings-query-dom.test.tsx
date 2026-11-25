@@ -270,6 +270,10 @@ test("Finding detail keeps one candidate entry and its state across conditional 
   function detail(id: string): FindingDetail {
     return {
       verification_control: { verify_status: needsHuman ? "needs_human" : "pending", subject_revision: null, latest_round_id: null },
+      disposition_history: humanConfirmed ? [{ disposition: "confirmed_vuln", by: "reviewer-a",
+        at: "2026-02-02T00:00:00.000Z", note: "平台外人工复现成功",
+        evidence: [{ evidence_id: "evidence-1", artifact_id: "artifact-1", job_id: "job-a",
+          canvas_id: "canvas-1", statement: "人工复现：越权读取成功", kind: "observation" }] }] : undefined,
       finding: { ...finding(id), verify_status: confirmed ? "confirmed" : needsHuman ? "needs_human" : "pending",
         ...(humanAccepted ? {
           disposition: "accepted",
@@ -336,6 +340,12 @@ test("Finding detail keeps one candidate entry and its state across conditional 
     assert.match(humanText, /关联证据 2 条/u);
     assert.match(humanText, /平台外人工复现成功/u);
     assert.match(humanText, /待验证/u, "技术验证仍按 Verify 自己的结果展示");
+    // #1264：逐次处置各自带着那一次追加的证据，并能点开来源任务。
+    assert.match(humanText, /逐次人工处置/u);
+    assert.match(humanText, /人工复现：越权读取成功/u);
+    const evidenceLink = Array.from(env.container.querySelectorAll("a")).find((anchor) => anchor.textContent === "人工复现：越权读取成功");
+    assert.ok(evidenceLink, "证据必须可点开");
+    assert.match(evidenceLink!.getAttribute("href") ?? "", /\/tasks\/canvas-1$/u);
     humanConfirmed = false;
     // 反例：接受/误报这类处置不能被写成「人工确认」。
     humanAccepted = true;
