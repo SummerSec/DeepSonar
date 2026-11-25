@@ -355,7 +355,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       // 实际读取体积远小于 400KB，用例会全绿却不覆盖大快照的读取成本（#1260 评审）。
       const padding = incompressiblePadding(400_000, 0x9e3779b9);
       await sql`UPDATE jobs SET agent_snapshot_json = agent_snapshot_json
-        || jsonb_build_object('synthetic_padding', ${padding}) WHERE id=${job.jobId}`;
+        || jsonb_build_object('synthetic_padding', ${padding}::text) WHERE id=${job.jobId}`;
       const [stored] = await sql`SELECT pg_column_size(agent_snapshot_json) AS bytes, length(agent_snapshot_json->>'synthetic_padding')::int AS chars
         FROM jobs WHERE id=${job.jobId}`;
       assert.equal(Number(stored.chars), 400_000, "填充字符数应为 400k");
