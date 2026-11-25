@@ -230,7 +230,10 @@ export async function readGatewayNoStart(baseUrl, token, requestId, requestSigna
       headers: { authorization: 'Bearer ' + token }, redirect: 'manual', signal,
     });
     if (response.status !== 200) {
-      const bodyHint = await settlementBodyHint(response).catch(() => undefined);
+      // #1262: only a 404 is ambiguous between the gateway and an intermediary.
+      // Other statuses keep their existing diagnostic shape exactly.
+      const bodyHint = response.status === 404
+        ? await settlementBodyHint(response).catch(() => undefined) : undefined;
       throw bodyHint ? { status: response.status, bodyHint } : { status: response.status };
     }
     const chunks = []; let size = 0;
