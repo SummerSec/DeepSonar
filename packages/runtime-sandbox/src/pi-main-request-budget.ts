@@ -38,7 +38,7 @@ function permanentRequestDiagnostic(detail, signal) {
   }
   return false;
 }
-function requestDiagnostic(error, stage, signal) {
+function requestDiagnostic(error, stage, signal, phase) {
   const seen = new Set();
   let incomplete = false;
   function project(value, depth) {
@@ -84,13 +84,15 @@ function requestDiagnostic(error, stage, signal) {
       'RateLimitError','InternalServerError'].includes(current.name)
       || transientStatuses.has(current.status)) transient = true;
   }
+  const prepared = ['identity','om-auth','prepare','clamp','headers','delegate'];
+  const detailWithPhase = stage === 'prepare' && prepared.includes(phase) ? { ...detail, phase } : detail;
   return { version:1, stage, category:!incomplete && !permanentRequestDiagnostic(detail, signal) && transient
-    ? 'transient_retryable' : 'permanent_failure', ...detail };
+    ? 'transient_retryable' : 'permanent_failure', ...detailWithPhase };
 }
-function requestFailureMessage(error, stage, signal) {
+function requestFailureMessage(error, stage, signal, phase) {
   if (error === completionAlreadyAccepted) return 'COMPLETION_ALREADY_ACCEPTED';
   const hostCode = error && typeof error === 'object' ? hostFailures.get(error) : undefined;
-  return hostCode ?? 'PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=' + JSON.stringify(requestDiagnostic(error, stage, signal));
+  return hostCode ?? 'PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=' + JSON.stringify(requestDiagnostic(error, stage, signal, phase));
 }
 function failRequest(error, stage, signal) {
   // Host identities and already projected diagnostics survive shared-reader catches.
@@ -359,10 +361,12 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
         const output = createAssistantMessageEventStream();
         void (async () => {
           let stage = 'prepare';
+          // #1228: prepare 窗口里有多个检查点，用 phase 区分到底是哪一步失败。
+          let phase = 'identity';
           const failureEvent = error => ({ type: 'error', reason: 'error', error: {
             role: 'assistant', content: [], api: requestedModel.api, provider: requestedModel.provider, model: requestedModel.id,
             usage: { input:0, output:0, cacheRead:0, cacheWrite:0, totalTokens:0, cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0} },
-            stopReason:'error', errorMessage:requestFailureMessage(error, stage, options?.signal), timestamp:Date.now(),
+            stopReason:'error', errorMessage:requestFailureMessage(error, stage, options?.signal, phase), timestamp:Date.now(),
           } });
           try {
             if (requestedModel.provider !== identity.provider || requestedModel.id !== identity.id
@@ -373,6 +377,7 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
             // Resolve through the existing registry before projecting any input.
             const omModel = ctx.modelRegistry.getAll().find(entry => entry.provider === OM_PROVIDER);
             if (omModel) {
+              phase = 'om-auth';
               const auth = await ctx.modelRegistry.getApiKeyAndHeaders(omModel);
               if (auth?.ok !== true || typeof auth.apiKey !== 'string' || !auth.apiKey) fail('PI_MAIN_BUDGET_OM_AUTH_INVALID');
               requestSecrets.push(auth.apiKey);
@@ -385,19 +390,23 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
               stage = 'allowance';
               const allowance = await readMainAllowance(gateway, token, options?.signal);
               stage = 'prepare';
+              phase = 'prepare';
               const prepared = preparePiMainSdkRequest(requestedModel, options, allowance);
               if (allowance.policy_required && requestedModel.api === 'anthropic-messages' && requestedModel.reasoning && options?.reasoning
                 && requestedModel.compat?.forceAdaptiveThinking !== true && requestedModel.compat?.supportsMidConvoEffort !== true) {
+                phase = 'clamp';
                 contextClamp ??= loadPiContextClamp();
                 const clamp = await contextClamp;
                 assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamp(prepared.model, safeContext, prepared.options.maxTokens));
               }
+              phase = 'headers';
               const requestId = randomUUID();
               const headers = Object.fromEntries(Object.entries(prepared.options?.headers ?? {})
                 .filter(([name]) => !['x-deepsonar-request-id','x-deepsonar-retry-of'].includes(name.toLowerCase())));
               headers['x-deepsonar-request-id'] = requestId;
               if (retryOf) headers['x-deepsonar-retry-of'] = retryOf;
               let failure, pendingStart, thrownDiagnostic, visible = false;
+              phase = 'delegate';
               stage = 'sdk';
               try {
                 options?.signal?.throwIfAborted();
