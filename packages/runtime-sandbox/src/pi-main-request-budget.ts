@@ -48,7 +48,9 @@ function requestDiagnostic(error, stage, signal, phase) {
     const result = {};
     const name = diagnosticField(value, 'name');
     const code = diagnosticField(value, 'code');
-    if (diagnosticNames.has(name)) result.name = name;
+    // #1228: 错误类型名本身是标识符，不是正文；按形状白名单投影，能看见 ZodError 之类
+    // 我们没预置的类型名，同时不放松对 message/stack 的丢弃。
+    if (typeof name === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,31}$/u.test(name)) result.name = name;
     // #1262: 结算 404 需要知道「打到了哪个 origin」，否则无法判断是自己人还是中间层。
     // 只保留 origin（scheme+host+port），不含路径、查询、凭据或用户名。
     const origin = diagnosticField(value, 'endpoint');
@@ -410,8 +412,10 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
                   phase = 'thinking';
                   assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamped);
                 } catch (error) {
-                  // #1228: 这一段可能抛出外部对象（无 name/code），统一映射成宿主错误码。
+                  // #1228: 这一段失败时，既保留分段宿主码（便于稳定识别），
+                  // 也让原始错误名进入诊断（名称是标识符，不含正文）。
                   if (error && typeof error === 'object' && hostFailures.has(error)) throw error;
+                  if (error && typeof error === 'object') { error.reason = 'PI_MAIN_BUDGET_CLAMP_BLOCK_FAILED'; throw error; }
                   fail('PI_MAIN_BUDGET_CLAMP_BLOCK_FAILED');
                 }
               }
