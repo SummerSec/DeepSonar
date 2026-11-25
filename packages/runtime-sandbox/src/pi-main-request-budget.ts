@@ -47,6 +47,10 @@ function requestDiagnostic(error, stage, signal) {
     const name = diagnosticField(value, 'name');
     const code = diagnosticField(value, 'code');
     if (diagnosticNames.has(name)) result.name = name;
+    // #1262: 结算 404 需要知道「打到了哪个 origin」，否则无法判断是自己人还是中间层。
+    // 只保留 origin（scheme+host+port），不含路径、查询、凭据或用户名。
+    const origin = diagnosticField(value, 'endpoint');
+    if (typeof origin === 'string' && /^https?:\/\/[^\s/?#@]{1,255}$/u.test(origin)) result.endpoint = origin;
     if (transientCodes.has(code) || cancellationCodes.has(code)) result.code = code;
     const status = diagnosticField(value, 'status');
     const statusCode = diagnosticField(value, 'statusCode');
@@ -226,6 +230,11 @@ function classifySettlementBody(text, complete) {
   } catch { return 'other'; }
 }
 
+function settlementOrigin(value) {
+  // endpoint() 已经校验过协议与形状；这里只取 origin，任何异常都退回 undefined。
+  try { return new URL(value).origin; } catch { return undefined; }
+}
+
 async function settlementBodyHint(response) {
   if (!response.body) return 'empty';
   const reader = response.body.getReader();
@@ -277,7 +286,8 @@ export async function readGatewayNoStart(baseUrl, token, requestId, requestSigna
         throw { status: response.status };
       }
       const bodyHint = await settlementBodyHint(response).catch(() => undefined);
-      throw bodyHint ? { status: response.status, bodyHint } : { status: response.status };
+      const endpoint = settlementOrigin(baseUrl);
+      throw { status: response.status, bodyHint, endpoint };
     }
     const chunks = []; let size = 0;
     if (response.body) for await (const chunk of response.body) {
