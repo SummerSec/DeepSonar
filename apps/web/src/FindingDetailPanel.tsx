@@ -30,7 +30,8 @@ import { useFlashMessage } from "./use-flash-message";
 import { FindingCandidates } from "./FindingCandidates";
 import { FindingLexicalSearch } from "./FindingLexicalSearch";
 import { SearchableSelect } from "./SearchableSelect";
-import { SeverityBadge, StatusBadge, formatTime } from "./ui";
+import { DISPOSITION_OPTIONS, SeverityBadge, StatusBadge, formatTime } from "./ui";
+import { FindingDispositionHistory } from "./FindingDispositionHistory";
 import { FindingSharedAssets } from "./SharedAssetsPanel";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { RepairFeedbackPanel } from "./task-workbench/RepairFeedbackPanel";
@@ -910,6 +911,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   ) : (
                     <p className="mt-2 text-[11px] leading-4 text-zinc-600">尚未人工确认，当前为默认待处理</p>
                   )}
+                  <FindingDispositionHistory history={detail?.disposition_history} projectId={f.project_id} />
                 </SidebarField>
 
                 <SidebarField label="技术验证">

@@ -999,8 +999,28 @@ export interface WsTicket {
   purpose?: "stream" | "terminal";
 }
 
+export interface DispositionEvidenceTarget {
+  evidence_id: string;
+  artifact_id: string;
+  job_id: string;
+  canvas_id: string | null;
+  statement: string | null;
+  kind: string;
+}
+
+/** #1264：逐次人工处置与那一次追加的证据目标（来自 finding.disposition 审计记录） */
+export interface DispositionHistoryEntry {
+  disposition: FindingDisposition | string;
+  by: string | null;
+  at: string | null;
+  note: string | null;
+  evidence: DispositionEvidenceTarget[];
+}
+
 export interface FindingDetail {
   verification_control: FindingVerificationControl | null;
+  /** 仅在调用方具备 tasks:read 时返回；无权限整段省略 */
+  disposition_history?: DispositionHistoryEntry[];
   finding: FindingSummary & {
     raw_json: Record<string, unknown>;
     source_job_type: string;
