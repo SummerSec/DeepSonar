@@ -1801,7 +1801,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/findings/{id}/disposition",
     summary: "人工更新 Finding 处置态",
-    description: "disposition 为人工业务闭环；confirmed_vuln 仍要求 verify_status=confirmed，不得旁路技术确认。duplicate 必须同时提供 duplicate_of（同 project、存在、非自身），用来把「已提交同族重复」与平台 refuted/inconclusive 分开；非 duplicate 处置不接受 duplicate_of。",
+    description: "disposition 为人工业务闭环；confirmed_vuln 是人工确认的事实，可独立于 verify_status 且不改写它（#1264）；可带 evidence_refs（≤10 个本项目 artifact_evidence id，越界 400 EVIDENCE_REF_NOT_FOUND）。duplicate 必须同时提供 duplicate_of（同 project、存在、非自身），用来把「已提交同族重复」与平台 refuted/inconclusive 分开；非 duplicate 处置不接受 duplicate_of。",
     scope: "findings:write",
     tags: ["Findings"],
     body: {
@@ -1812,6 +1812,12 @@ const OPS: Op[] = [
         disposition: { type: "string", enum: [...FINDING_DISPOSITIONS] },
         note: { type: "string", maxLength: 2000 },
         duplicate_of: { type: "string", format: "uuid", description: "仅 disposition=duplicate 时必填，必须同 project 且不是自身" },
+        evidence_refs: {
+          type: "array",
+          maxItems: 10,
+          description: "可核查证据：本项目已存在的 artifact_evidence id，追加写入且去重；越界或不存在返回 400 EVIDENCE_REF_NOT_FOUND",
+          items: { type: "string", format: "uuid" },
+        },
       },
     },
   },

@@ -219,7 +219,7 @@ test("copying a Finding location preserves all paths and reports clipboard denia
   }
 });
 
-test("manual dispositions stay available across every technical status with confirmed_vuln guarded", async () => {
+test("manual confirmed_vuln stays available regardless of technical verify status", async () => {
   const env = setup();
   const writes: string[] = [];
   try {
@@ -231,17 +231,20 @@ test("manual dispositions stay available across every technical status with conf
       />));
       const buttons = Array.from(env.container.querySelectorAll("button"));
       const confirm = buttons.find(button => button.textContent?.trim() === "漏洞存在")!;
-      assert.equal(confirm.disabled, status.value !== "confirmed", status.value);
-      await act(async () => { for (const button of buttons) button.click(); });
-      assert.deepEqual(writes, status.value === "confirmed"
-        ? ["open", "accepted", "human_reproducing", "confirmed_vuln", "rejected_fp", "resolved", "archived"]
-        : ["open", "accepted", "human_reproducing", "rejected_fp", "resolved", "archived"]);
+      // #1264：人工确认不再被技术验证状态挡掉。
+      assert.equal(confirm.disabled, false, status.value);
+      assert.match(confirm.title, /人工确认与平台技术验证分开记录/u);
+      await act(async () => confirm.click());
+      assert.deepEqual(writes, ["confirmed_vuln"], status.value);
+      assert.doesNotMatch(env.container.textContent ?? "", /需先通过系统技术验证/u);
     }
-    await act(async () => env.root.render(<FindingDispositionEditor
-      disposition="open" verifyStatus="confirmed" busy={true} note=""
-      onNoteChange={() => {}} onChange={async value => { writes.push(value); }}
-    />));
-    assert.ok(Array.from(env.container.querySelectorAll("button")).every(button => button.disabled));
+    for (const status of FINDING_VERIFY_OPTIONS) {
+      await act(async () => env.root.render(<FindingDispositionEditor
+        disposition="open" verifyStatus={status.value} busy={true} note=""
+        onNoteChange={() => {}} onChange={async () => {}}
+      />));
+      assert.ok(Array.from(env.container.querySelectorAll("button")).every(button => button.disabled));
+    }
   } finally {
     await env.cleanup();
   }
@@ -262,10 +265,25 @@ test("Finding detail keeps one candidate entry and its state across conditional 
   let needsHuman = false;
   let confirmed = false;
   let showResearch = false;
+  let humanConfirmed = false;
+  let humanAccepted = false;
   function detail(id: string): FindingDetail {
     return {
       verification_control: { verify_status: needsHuman ? "needs_human" : "pending", subject_revision: null, latest_round_id: null },
       finding: { ...finding(id), verify_status: confirmed ? "confirmed" : needsHuman ? "needs_human" : "pending",
+        ...(humanAccepted ? {
+          disposition: "accepted",
+          disposition_by: "reviewer-b",
+          disposition_at: "2026-02-03T00:00:00.000Z",
+          disposition_note: "先接受，等待排期",
+        } : {}),
+        ...(humanConfirmed ? {
+          disposition: "confirmed_vuln",
+          disposition_by: "reviewer-a",
+          disposition_at: "2026-02-02T00:00:00.000Z",
+          disposition_note: "平台外人工复现成功",
+          evidence_refs_json: ["evidence-1", "evidence-2"],
+        } : {}),
         raw_json: {}, source_job_type: "analyze", source_job_status: "succeeded" },
       verification_jobs: [], verification_rounds: [], source_events: [],
       cluster_members: showResearch ? [{ finding_id: id, is_canonical: true,
@@ -305,10 +323,29 @@ test("Finding detail keeps one candidate entry and its state across conditional 
   try {
     await render("subject-a");
     const confirmedButton = () => Array.from(env.container.querySelectorAll("button")).find(button => button.textContent === "漏洞存在")!;
-    assert.equal(confirmedButton().disabled, true, "pending findings cannot be manually confirmed as vulnerabilities");
-    assert.match(confirmedButton().title, /技术验证/);
+    // #1264：人工确认不再被技术验证状态挡住，只解释两个事实分开记录。
+    assert.equal(confirmedButton().disabled, false, "pending findings stay manually confirmable");
+    assert.match(confirmedButton().title, /人工确认与平台技术验证分开记录/u);
     entries();
     assert.equal(candidateRequests.length, 0, "candidate reads stay opt-in");
+    // #1264：人工确认记录可查，且技术验证不被改写。
+    humanConfirmed = true;
+    await click("待处置");
+    const humanText = env.container.textContent ?? "";
+    assert.match(humanText, /人工确认：reviewer-a/u);
+    assert.match(humanText, /关联证据 2 条/u);
+    assert.match(humanText, /平台外人工复现成功/u);
+    assert.match(humanText, /待验证/u, "技术验证仍按 Verify 自己的结果展示");
+    humanConfirmed = false;
+    // 反例：接受/误报这类处置不能被写成「人工确认」。
+    humanAccepted = true;
+    await click("待处置");
+    const acceptedText = env.container.textContent ?? "";
+    assert.match(acceptedText, /最近人工处置：reviewer-b/u);
+    assert.doesNotMatch(acceptedText, /人工确认：/u);
+    assert.doesNotMatch(acceptedText, /关联证据/u);
+    humanAccepted = false;
+    await click("待处置");
     await click("查看已计算候选");
     const expandedEntry = env.container.querySelector('[aria-label="已计算的词法候选"]');
     for (let index = 0; index < 6; index++) {
@@ -316,7 +353,7 @@ test("Finding detail keeps one candidate entry and its state across conditional 
       confirmed = index === 5;
       showResearch = index % 3 === 0;
       await click("待处置");
-      assert.equal(confirmedButton().disabled, !confirmed, "availability follows the refreshed technical status");
+      assert.equal(confirmedButton().disabled, false, "manual confirmation never depends on the refreshed technical status");
       entries();
       assert.equal(env.container.querySelector('[aria-label="已计算的词法候选"]'), expandedEntry);
       assert.equal(expandedEntry?.querySelector("button")?.getAttribute("aria-expanded"), "true");

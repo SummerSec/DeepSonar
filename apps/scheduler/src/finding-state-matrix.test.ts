@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  CONFIRMED_VULN_REQUIRES_VERIFY,
-  dispositionAllowed,
   FINDING_STATE_MATRIX,
   HUMAN_JOB_STATUS,
   isClosedDisposition,
@@ -10,17 +8,17 @@ import {
   VERIFY_VERDICTS,
 } from "./finding-state-matrix.js";
 
-test("confirmed_vuln requires system verify_status=confirmed", () => {
-  assert.deepEqual(dispositionAllowed("confirmed", "confirmed_vuln"), { ok: true });
-  assert.deepEqual(dispositionAllowed("pending", "confirmed_vuln"), {
-    ok: false,
-    error_code: CONFIRMED_VULN_REQUIRES_VERIFY,
-  });
-  assert.deepEqual(dispositionAllowed("needs_human", "confirmed_vuln"), {
-    ok: false,
-    error_code: CONFIRMED_VULN_REQUIRES_VERIFY,
-  });
-  assert.deepEqual(dispositionAllowed("pending", "human_reproducing"), { ok: true });
+test("human confirmed_vuln is recorded independently of system verify", () => {
+  const row = FINDING_STATE_MATRIX.find(
+    (item) => item.dimension === "disposition" && item.value === "confirmed_vuln",
+  );
+  assert.ok(row, "confirmed_vuln 必须仍在矩阵里");
+  // 矩阵必须写清它是人工事实：不再声明依赖 verify_status，也不允许它改写 Verify。
+  assert.equal(row.owner, "Human");
+  assert.doesNotMatch(String(row.writer), /verify_status=confirmed/u);
+  assert.match(String(row.meaning), /分开记录/u);
+  // 既不属于待跟进，也不属于闭环否定：它是人工确认的业务事实。
+  assert.equal(isOpenHighRiskFinding({ severity: "critical", disposition: "confirmed_vuln" }), false);
 });
 
 test("open high-risk excludes confirmed_vuln and closed dispositions", () => {

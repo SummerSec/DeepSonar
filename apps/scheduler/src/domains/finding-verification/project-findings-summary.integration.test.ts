@@ -89,16 +89,93 @@ if (!testDatabaseUrl) {
       assert.equal(reproduce.statusCode, 200, reproduce.payload);
       assert.equal(JSON.parse(reproduce.payload).disposition, "human_reproducing");
 
-      const bypass = await app.inject({
+      // #1264：人工确认不需要平台技术验证先通过，也不能改写 verify_status。
+      const unownedEvidence = await app.inject({
         method: "PATCH",
         url: `/findings/${findingA}/disposition`,
-        payload: { disposition: "confirmed_vuln" },
+        payload: { disposition: "confirmed_vuln", evidence_refs: ["11111111-1111-4111-8111-111111111111"] },
       });
-      assert.equal(bypass.statusCode, 409);
-      assert.equal(JSON.parse(bypass.payload).error, "confirmed_vuln_requires_verify");
+      assert.equal(unownedEvidence.statusCode, 400, unownedEvidence.payload);
+      assert.equal(JSON.parse(unownedEvidence.payload).error_code, "EVIDENCE_REF_NOT_FOUND");
+
+      const humanConfirm = await app.inject({
+        method: "PATCH",
+        url: `/findings/${findingA}/disposition`,
+        payload: { disposition: "confirmed_vuln", note: "人工在平台外复现成功" },
+      });
+      assert.equal(humanConfirm.statusCode, 200, humanConfirm.payload);
+      const confirmed = JSON.parse(humanConfirm.payload);
+      assert.equal(confirmed.disposition, "confirmed_vuln");
+      assert.equal(confirmed.verify_status, "pending", "人工确认不得改写系统技术验证状态");
+      assert.ok(typeof confirmed.disposition_by === "string" && confirmed.disposition_by.length > 0);
+      assert.ok(confirmed.disposition_at);
 
       const after = await app.inject({ method: "GET", url: `/projects/${projectId}/findings/summary` });
-      assert.equal(JSON.parse(after.payload).disposition.find((item: { key: string; count: number }) => item.key === "human_reproducing")?.count, 1);
+      assert.equal(JSON.parse(after.payload).disposition.find((item: { key: string; count: number }) => item.key === "confirmed_vuln")?.count, 1);
+
+      // #1264 评审：证据引用只追加，两笔并发追加都必须留在同一行。
+      const evidenceIds = await Promise.all([1, 2].map(async (n) => {
+        const [artifact] = await sql`
+          INSERT INTO artifacts (project_id, job_id, artifact_key, kind, source_operation, source_event_id)
+          VALUES (${projectId}, ${jobA}, ${`human-confirm-${n}`}, 'fact', 'emit_fact', ${`human-confirm-ev-${n}`})
+          RETURNING id`;
+        const [evidence] = await sql`
+          INSERT INTO artifact_evidence (artifact_id, statement, kind)
+          VALUES (${artifact.id}, ${`人工复现证据 ${n}`}, 'observation') RETURNING id`;
+        return String(evidence.id);
+      }));
+      const patchEvidence = (ref: string) => app.inject({
+        method: "PATCH",
+        url: `/findings/${findingA}/disposition`,
+        payload: { disposition: "confirmed_vuln", note: "并发追加证据", evidence_refs: [ref] },
+      });
+      const [first, second] = await Promise.all([patchEvidence(evidenceIds[0]!), patchEvidence(evidenceIds[1]!)]);
+      assert.equal(first.statusCode, 200, first.payload);
+      assert.equal(second.statusCode, 200, second.payload);
+      const [mergedRow] = await sql`SELECT evidence_refs_json FROM findings WHERE id = ${findingA}`;
+      assert.deepEqual(
+        [...((mergedRow.evidence_refs_json as string[] | null) ?? [])].sort(),
+        [...evidenceIds].sort(),
+        "两笔并发追加的证据都必须保留",
+      );
+      // 不附证据的普通处置不改写这一列。
+      const plainDisposition = await app.inject({
+        method: "PATCH",
+        url: `/findings/${findingA}/disposition`,
+        payload: { disposition: "accepted" },
+      });
+      assert.equal(plainDisposition.statusCode, 200, plainDisposition.payload);
+      const [keptRow] = await sql`SELECT evidence_refs_json FROM findings WHERE id = ${findingA}`;
+      assert.deepEqual(
+        [...((keptRow.evidence_refs_json as string[] | null) ?? [])].sort(),
+        [...evidenceIds].sort(),
+        "没有附证据时不得重写证据列",
+      );
+
+      // #1264 评审：并发处置的审计 before 必须是被这次写入实际覆盖的状态。
+      const patchTo = (disposition: string) => app.inject({
+        method: "PATCH",
+        url: `/findings/${findingA}/disposition`,
+        payload: { disposition },
+      });
+      const [left, right] = await Promise.all([patchTo("rejected_fp"), patchTo("resolved")]);
+      assert.equal(left.statusCode, 200, left.payload);
+      assert.equal(right.statusCode, 200, right.payload);
+      const auditRows = await sql`
+        SELECT before_json, after_json FROM audit_logs
+        WHERE action = 'finding.disposition' AND resource_id = ${findingA}
+        ORDER BY id DESC LIMIT 2`;
+      assert.equal(auditRows.length, 2);
+      const [later, earlier] = auditRows.map((row) => ({
+        before_json: row.before_json as { disposition: string },
+        after_json: row.after_json as { disposition: string },
+      }));
+      assert.equal(
+        later.before_json.disposition,
+        earlier.after_json.disposition,
+        "后一条审计的 before 必须等于前一条的 after，不能都写初始状态",
+      );
+      assert.notEqual(later.after_json.disposition, earlier.after_json.disposition);
 
       // More than the former 500-row window; tie timestamps exercise UUID ordering.
       await sql`

@@ -14,6 +14,7 @@ import { registerRecoveryDiagnosticsRoutes } from "./recovery-diagnostics-routes
 import { z } from "zod";
 import { projectPlanGaps } from "../plan-protocol/gap-projection.js";
 import { audit } from "../../audit.js";
+import { applyHumanDisposition } from "./human-disposition.js";
 import { projectCredentialProviderError, projectJobEventPayload, projectJobPayload } from "../../credentials.js";
 import { extractDispatchPrompt, parseJsonRecord } from "../../job-dispatch-prompt.js";
 import {
@@ -29,7 +30,6 @@ import {
 } from "../../core.js";
 import { sql } from "../../db.js";
 import { FINDING_DISPOSITIONS } from "../../finding-disposition.js";
-import { dispositionAllowed } from "../../finding-state-matrix.js";
 import { jobProvenance } from "../../import-provenance.js";
 import { readEvidenceManifestOrInflight, readNormalizedStreamPage, readSessionArtifact, SESSION_VIEW_MAX_BYTES } from "../../evidence.js";
 import { revokeJobTokens } from "../../gateway.js";
@@ -345,6 +345,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         disposition: z.enum(DISPOSITIONS),
         note: z.string().max(2000).optional(),
         duplicate_of: z.string().uuid().optional(),
+        // #1264: 人工确认可以引用本项目已有的证据（PoC/日志/附件），不新建上传通道。
+        evidence_refs: z.array(z.string().uuid()).max(10).optional(),
       })
       .parse(req.body);
     const [cur] = await sql`SELECT id, disposition, verify_status, project_id FROM findings WHERE id = ${id}`;
@@ -373,36 +375,36 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         error: "仅 disposition=duplicate 允许 duplicate_of",
       });
     }
-    // 技术 confirmed 唯一入口是系统 Verify；人工 disposition 不得旁路
-    const allowed = dispositionAllowed(String(cur.verify_status), body.disposition);
-    if (!allowed.ok) {
-      return reply.code(409).send({
-        error: allowed.error_code,
-        message: "仅当系统 Verify 已将 verify_status 置为 confirmed 后，才允许 disposition=confirmed_vuln",
-        verify_status: cur.verify_status,
-      });
+    // #1264：人工确认与系统技术验证是两个独立事实。这里只写 disposition，
+    // 绝不改写 verify_status；Verify 的结论仍由 Scheduler 自己记录。
+    const evidenceRefs = body.evidence_refs ?? [];
+    if (evidenceRefs.length > 0) {
+      const unique = [...new Set(evidenceRefs)];
+      const owned = await sql`
+        SELECT e.id FROM artifact_evidence e
+        JOIN artifacts a ON a.id = e.artifact_id
+        JOIN jobs j ON j.id = a.job_id
+        WHERE e.id = ANY(${unique}::uuid[]) AND j.project_id = ${cur.project_id}`;
+      const ownedIds = new Set(owned.map((row) => String(row.id)));
+      const missing = unique.filter((ref) => !ownedIds.has(ref));
+      if (missing.length > 0) {
+        return reply.code(400).send({
+          error_code: "EVIDENCE_REF_NOT_FOUND",
+          error: "evidence_refs 必须指向当前项目中已存在的证据",
+          missing,
+        });
+      }
     }
     const actorName = req.actor?.name ?? "unknown";
-    const [row] = await sql`
-      UPDATE findings SET
-        disposition = ${body.disposition},
-        disposition_note = ${body.note ?? null},
-        disposition_by = ${actorName},
-        disposition_at = now(),
-        duplicate_of = ${duplicateTarget},
-        updated_at = now()
-      WHERE id = ${id}
-      RETURNING *`;
-    // rejected_fp 仅人工业务处置；不伪造技术 confirmed，也不把未收敛 round 绕过
-    // 不再把 verify_status 写成 false_positive（新流程否定结论走 Scheduler 终态 refuted/inconclusive）
-    await audit(req, {
-      action: "finding.disposition",
-      resourceType: "finding",
-      resourceId: id,
-      projectId: row.project_id as string,
-      before: { disposition: cur.disposition, verify_status: cur.verify_status },
-      after: { disposition: body.disposition, note: body.note ?? null, duplicate_of: duplicateTarget, verify_status: row.verify_status },
+    const row = await applyHumanDisposition(req, sql, {
+      findingId: id,
+      disposition: body.disposition,
+      note: body.note ?? null,
+      duplicateOf: duplicateTarget,
+      actorName,
+      evidenceRefs,
     });
+    if (!row) return reply.code(404).send({ error: "finding not found" });
     return row;
   });
 
