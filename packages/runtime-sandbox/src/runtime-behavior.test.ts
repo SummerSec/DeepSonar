@@ -18,6 +18,10 @@ test("human native import keeps conversation identities but excludes old runtime
   const records=result.content!.trim().split("\n").map(line=>JSON.parse(line));
   assert.equal(records[1].parentId,null);
   assert.equal(nativeHumanSessionCapability("dsh","0").status,"unsupported");
+  // #1228：1.6.0 仍是 version 3 布局，投影规则与 1.5.2 相同；未核验版本保持拒绝。
+  assert.equal(nativeHumanSessionCapability("pi","1.6.0").status,"supported");
+  assert.equal(nativeHumanSessionCapability("pi","1.7.0").status,"unsupported");
+  assert.doesNotMatch(nativeHumanSessionCapability("pi","1.7.0").reason ?? '', /text_history_only/);
   assert.equal(projectNativeHumanSession("pi","0",id,source).status,"unsupported");
   assert.equal(projectNativeHumanSession("pi","1.6.0",id,source+"\n{bad").status,"rejected");
   for(const type of ["custom","compaction","future_context_state"])
