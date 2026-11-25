@@ -22,15 +22,9 @@ function diagnosticField(value, key) {
   try {
     for (let depth = 0; value && (typeof value === 'object' || typeof value === 'function') && depth < 4; depth++) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor) {
-        if ('value' in descriptor) return descriptor.value;
-        // #1228: DOMException 之类的 name/code 是原型上的访问器；只读 data property 会把
-        // abort 类错误投影成「什么都没有」。这里在读值时兜住异常，仍然不复制任何正文。
-        if (typeof descriptor.get === 'function') {
-          try { return descriptor.get.call(value); } catch { return undefined; }
-        }
-        return undefined;
-      }
+      // #1083：只读 data property。访问器可能来自不可信对象，求值会执行任意代码，
+      // 所以这里刻意不调用 getter（#1228 曾尝试读访问器，被既有回归挡住并已回退）。
+      if (descriptor) return 'value' in descriptor ? descriptor.value : undefined;
       value = Object.getPrototypeOf(value);
     }
   } catch {}
