@@ -609,3 +609,20 @@ test("#1230 同用途但不同 effect_kind 的记录不会被当成结算回执"
   assert.equal(probe.statusCode, 404, probe.body);
   assert.deepEqual(probe.json(), { status: "not_found" });
 });
+
+test("#1260 allowance 咨询记耗时分布", async (t) => {
+  const metricValue = async (name: string, labels = "") => {
+    const prefix = `${name}${labels} `;
+    const line = (await renderMetrics()).split("\n").find((entry) => entry.startsWith(prefix));
+    return line ? Number(line.slice(prefix.length)) : 0;
+  };
+  const f = setup(t, "main", "40P01", 0);
+  const before = await metricValue("deepsonar_gateway_allowance_duration_seconds_count", '{result="ok"}');
+  const response = await f.inject({ method: "GET", url: "/gateway/_allowance",
+    headers: { authorization: `Bearer ${token}` } });
+  assert.equal(response.statusCode, 200, response.body);
+  const after = await metricValue("deepsonar_gateway_allowance_duration_seconds_count", '{result="ok"}');
+  assert.equal(after, before + 1, "成功的 allowance 咨询必须计入耗时分布");
+  const metrics = await renderMetrics();
+  assert.match(metrics, /# HELP deepsonar_gateway_allowance_duration_seconds /u);
+});

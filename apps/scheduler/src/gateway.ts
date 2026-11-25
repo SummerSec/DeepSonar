@@ -33,7 +33,7 @@ import {
 } from "./credentials.js";
 import { sql } from "./db.js";
 import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
-import { inc } from "./metrics.js";
+import { inc, observe } from "./metrics.js";
 import { DatabaseConflictExhaustedError, withDatabaseConflictRetry } from "./db-conflict-retry.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
@@ -1387,6 +1387,9 @@ export function registerGateway(app: FastifyInstance): void {
           return deny(reply, 403, "Allowance query requires an active workload", "workload_scope_mismatch");
         }
         reply.header("cache-control", "no-store");
+        // #1260：P1 观测。历史现场 23–27s 就是被客户端 15s 掐断，因此记耗时分布，
+        // 成功/被拒/其它错误分开；中断次数由连接关闭事件单独统计（见 metrics 说明）。
+        const allowanceStartedAt = performance.now();
         try {
           // #1260：allowance 只是「咨询剩余额度」，真正的扣减与重查发生在 admission 的
           // Job 锁内。旧实现在这里拿了 1–2 个 jobs 行锁（root + 当前 Job）并让
@@ -1407,8 +1410,11 @@ export function registerGateway(app: FastifyInstance): void {
             ? await readWorkloadTokenAllowance(sql, String(jt.job_id), workload, repair)
             : await readMainTokenAllowance(sql, String(jt.job_id), allowanceSnapshot(jt), repair);
           const remaining = total === null ? repair?.remaining_tokens ?? null : Math.min(total, repair?.remaining_tokens ?? total);
+          observe("deepsonar_gateway_allowance_duration_seconds", (performance.now() - allowanceStartedAt) / 1000, { result: "ok" });
           return { remaining_tokens: remaining, policy_required: repair !== null || remaining !== null };
         } catch (error) {
+          const result = error instanceof GatewayRequestBudgetError || error instanceof RepairTokenBudgetError ? "denied" : "error";
+          observe("deepsonar_gateway_allowance_duration_seconds", (performance.now() - allowanceStartedAt) / 1000, { result });
           if (error instanceof GatewayRequestBudgetError) return deny(reply, 409, error.message, error.code);
           if (error instanceof RepairTokenBudgetError) return deny(reply, error.code.endsWith("EXHAUSTED") ? 429 : 409,
             error.message, error.code);
