@@ -138,6 +138,8 @@ const HELP: Record<string, string> = {
   deepsonar_gateway_upstream_retries_total: "Model gateway upstream retries by reason",
   deepsonar_gateway_upstream_exhausted_total: "Model gateway upstream retry exhaustion by reason",
   deepsonar_verify_policy_gap_total: "Finding verify settlements whose reason the Scheduler could not classify (#890)",
+  deepsonar_gateway_allowance_duration_seconds: "Advisory /gateway/_allowance queries by result (ok/denied/error); advisory only, real deduction happens at admission",
+  deepsonar_gateway_allowance_aborted_total: "Allowance queries whose client went away before the reply was written (e.g. the sandbox 15s timeout)",
   deepsonar_gateway_settlement_total: "Settlement receipt queries to the model gateway by result (settled/not_started/pending/unknown/not_found/invalid)",
   deepsonar_gateway_db_conflict_retries_total: "Model gateway admission database conflicts during bounded retries, by workload and SQLSTATE",
   deepsonar_database_conflict_retries_total: "Database conflicts during bounded transaction retries, by operation and SQLSTATE",
