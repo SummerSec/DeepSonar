@@ -113,6 +113,45 @@ if (!testDatabaseUrl) {
       const after = await app.inject({ method: "GET", url: `/projects/${projectId}/findings/summary` });
       assert.equal(JSON.parse(after.payload).disposition.find((item: { key: string; count: number }) => item.key === "confirmed_vuln")?.count, 1);
 
+      // #1264 评审：证据引用只追加，两笔并发追加都必须留在同一行。
+      const evidenceIds = await Promise.all([1, 2].map(async (n) => {
+        const [artifact] = await sql`
+          INSERT INTO artifacts (project_id, job_id, artifact_key, kind, source_operation, source_event_id)
+          VALUES (${projectId}, ${jobA}, ${`human-confirm-${n}`}, 'fact', 'emit_fact', ${`human-confirm-ev-${n}`})
+          RETURNING id`;
+        const [evidence] = await sql`
+          INSERT INTO artifact_evidence (artifact_id, statement, kind)
+          VALUES (${artifact.id}, ${`人工复现证据 ${n}`}, 'observation') RETURNING id`;
+        return String(evidence.id);
+      }));
+      const patchEvidence = (ref: string) => app.inject({
+        method: "PATCH",
+        url: `/findings/${findingA}/disposition`,
+        payload: { disposition: "confirmed_vuln", note: "并发追加证据", evidence_refs: [ref] },
+      });
+      const [first, second] = await Promise.all([patchEvidence(evidenceIds[0]!), patchEvidence(evidenceIds[1]!)]);
+      assert.equal(first.statusCode, 200, first.payload);
+      assert.equal(second.statusCode, 200, second.payload);
+      const [mergedRow] = await sql`SELECT evidence_refs_json FROM findings WHERE id = ${findingA}`;
+      assert.deepEqual(
+        [...((mergedRow.evidence_refs_json as string[] | null) ?? [])].sort(),
+        [...evidenceIds].sort(),
+        "两笔并发追加的证据都必须保留",
+      );
+      // 不附证据的普通处置不改写这一列。
+      const plainDisposition = await app.inject({
+        method: "PATCH",
+        url: `/findings/${findingA}/disposition`,
+        payload: { disposition: "accepted" },
+      });
+      assert.equal(plainDisposition.statusCode, 200, plainDisposition.payload);
+      const [keptRow] = await sql`SELECT evidence_refs_json FROM findings WHERE id = ${findingA}`;
+      assert.deepEqual(
+        [...((keptRow.evidence_refs_json as string[] | null) ?? [])].sort(),
+        [...evidenceIds].sort(),
+        "没有附证据时不得重写证据列",
+      );
+
       // More than the former 500-row window; tie timestamps exercise UUID ordering.
       await sql`
         INSERT INTO findings (project_id, job_id, fingerprint, title, severity, verify_status, disposition, created_at)

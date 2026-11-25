@@ -348,8 +348,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         evidence_refs: z.array(z.string().uuid()).max(10).optional(),
       })
       .parse(req.body);
-    const [cur] = await sql`
-      SELECT id, disposition, verify_status, project_id, evidence_refs_json FROM findings WHERE id = ${id}`;
+    const [cur] = await sql`SELECT id, disposition, verify_status, project_id FROM findings WHERE id = ${id}`;
     if (!cur) return reply.code(404).send({ error: "finding not found" });
     // 重复处置必须绑定同 project 的具体记录（#1206 R4），非 duplicate 不接受目标。
     let duplicateTarget: string | null = null;
@@ -396,20 +395,23 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       }
     }
     const actorName = req.actor?.name ?? "unknown";
-    // 证据引用只追加不覆盖：人工确认留下可核查的凭据，历史引用不因一次处置被抹掉。
-    const mergedEvidence = [...new Set([
-      ...((cur.evidence_refs_json as string[] | null) ?? []),
-      ...evidenceRefs,
-    ])];
+    // 证据引用只追加不覆盖（#1264 评审）：合并放在同一条 UPDATE 里，由数据库读最新行，
+    // 避免「先读后写」用旧快照盖掉并发的另一笔追加；没有附证据时整列不动。
     const [row] = await sql`
       UPDATE findings SET
         disposition = ${body.disposition},
         disposition_note = ${body.note ?? null},
         disposition_by = ${actorName},
         disposition_at = now(),
-        evidence_refs_json = ${sql.json(mergedEvidence)},
         duplicate_of = ${duplicateTarget},
-        updated_at = now()
+        updated_at = now(),
+        evidence_refs_json = CASE
+          WHEN ${evidenceRefs.length} = 0 THEN evidence_refs_json
+          ELSE (
+            SELECT COALESCE(jsonb_agg(DISTINCT merged.value), '[]'::jsonb)
+            FROM jsonb_array_elements_text(evidence_refs_json || ${sql.json(evidenceRefs)}::jsonb) AS merged(value)
+          )
+        END
       WHERE id = ${id}
       RETURNING *`;
     // rejected_fp 仅人工业务处置；不伪造技术 confirmed，也不把未收敛 round 绕过

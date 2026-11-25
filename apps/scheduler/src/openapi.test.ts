@@ -205,3 +205,19 @@ test("governed quality OpenAPI keeps session authority, strict inputs and safe u
     $ref: "#/components/schemas/FindingQualitySafeReport",
   });
 });
+
+test("#1264 人工处置请求体把 evidence_refs 写成正式 schema", () => {
+  const document = buildOpenApiDocument() as unknown as {
+    paths: Record<string, { patch?: { requestBody?: { content: { "application/json": { schema: {
+      additionalProperties?: boolean;
+      properties: Record<string, { type?: string; maxItems?: number; items?: { type?: string; format?: string } }>;
+    } } } } } }>;
+  };
+  const body = document.paths["/findings/{id}/disposition"]!.patch!.requestBody!
+    .content["application/json"].schema;
+  assert.equal(body.additionalProperties, false);
+  const evidence = body.properties.evidence_refs!;
+  assert.equal(evidence.type, "array");
+  assert.equal(evidence.maxItems, 10);
+  assert.deepEqual(evidence.items, { type: "string", format: "uuid" });
+});

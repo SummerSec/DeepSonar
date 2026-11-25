@@ -265,10 +265,18 @@ test("Finding detail keeps one candidate entry and its state across conditional 
   let needsHuman = false;
   let confirmed = false;
   let showResearch = false;
+  let humanConfirmed = false;
   function detail(id: string): FindingDetail {
     return {
       verification_control: { verify_status: needsHuman ? "needs_human" : "pending", subject_revision: null, latest_round_id: null },
       finding: { ...finding(id), verify_status: confirmed ? "confirmed" : needsHuman ? "needs_human" : "pending",
+        ...(humanConfirmed ? {
+          disposition: "confirmed_vuln",
+          disposition_by: "reviewer-a",
+          disposition_at: "2026-02-02T00:00:00.000Z",
+          disposition_note: "平台外人工复现成功",
+          evidence_refs_json: ["evidence-1", "evidence-2"],
+        } : {}),
         raw_json: {}, source_job_type: "analyze", source_job_status: "succeeded" },
       verification_jobs: [], verification_rounds: [], source_events: [],
       cluster_members: showResearch ? [{ finding_id: id, is_canonical: true,
@@ -313,6 +321,16 @@ test("Finding detail keeps one candidate entry and its state across conditional 
     assert.match(confirmedButton().title, /人工确认与平台技术验证分开记录/u);
     entries();
     assert.equal(candidateRequests.length, 0, "candidate reads stay opt-in");
+    // #1264：人工确认记录可查，且技术验证不被改写。
+    humanConfirmed = true;
+    await click("待处置");
+    const humanText = env.container.textContent ?? "";
+    assert.match(humanText, /人工确认：reviewer-a/u);
+    assert.match(humanText, /关联证据 2 条/u);
+    assert.match(humanText, /平台外人工复现成功/u);
+    assert.match(humanText, /待验证/u, "技术验证仍按 Verify 自己的结果展示");
+    humanConfirmed = false;
+    await click("待处置");
     await click("查看已计算候选");
     const expandedEntry = env.container.querySelector('[aria-label="已计算的词法候选"]');
     for (let index = 0; index < 6; index++) {
