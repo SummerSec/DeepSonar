@@ -9,6 +9,7 @@ import { taskKnowledgeLogicalKey } from "./task-knowledge-ingest.js";
 import { freezeProjectKnowledgeCatalog } from "./catalog-snapshot.js";
 import { createProjectKnowledgeApplication } from "./application.js";
 import { readNextKnowledgeWake } from "../../knowledge-wake.js";
+import { collectProjectKnowledgeSources } from "./collector.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./test-support.js";
 
 const H = "f".repeat(64);
@@ -178,10 +179,23 @@ test("restricted closeout versions stay hidden in the same project and queued wo
     const found = await app.invoke({ jobId: reader.jobId, projectId: writer.projectId, canvasId: reader.canvasId,
       operationId: "search_project_knowledge", input: { query: "受控" }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
     assert.deepEqual(found.items, [], "受限来源不能出现在同项目的检索结果里");
-    // 切换前已排队的采集工作仍然被唤醒调度，历史不会被丢掉。
-    // 先把上面那条 running 的私有 work 收尾：同一项目只允许一条 running，
-    // 否则唤醒查询会因为「有 running」而排除所有 pending。
+    // 切换前登记的来源：走真实 collector 入口处理一次，证明旧路径仍能把积压收尾。
+    // 先把上面那条 running 的私有 work 收尾：同一项目只允许一条 running。
     await sql`UPDATE project_knowledge_work SET state='completed' WHERE id=${work!.id}`;
+    await sql`UPDATE jobs SET status='succeeded',
+      agent_snapshot_json=${db.json({ platform_tools: ["request_project_knowledge"] } as never)} WHERE id=${writer.jobId}`;
+    await sql`UPDATE job_attempts SET status='succeeded', phase='terminal' WHERE job_id=${writer.jobId}`;
+    await sql`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
+      VALUES('system','scheduler','project_knowledge.source_registered',${writer.projectId},'job',${writer.jobId},'ok',now()-interval '30 days')`;
+    const created = await collectProjectKnowledgeSources(db as never, H);
+    assert.equal(typeof created, "number", "collector 入口返回处理数");
+    const [collected] = await sql`SELECT id FROM audit_logs WHERE project_id=${writer.projectId}
+      AND resource_id=${writer.jobId} AND action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`;
+    assert.ok(collected, "切换前登记的来源必须被 collector 收尾（纳入整理或明确跳过）");
+    const [stillRegistered] = await sql`SELECT id FROM audit_logs WHERE project_id=${writer.projectId}
+      AND resource_id=${writer.jobId} AND action='project_knowledge.source_registered'`;
+    assert.ok(stillRegistered, "历史登记审计必须保持可查");
+    // 切换后排队的工作仍有唤醒时间。
     await sql`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state,next_attempt_at)
       VALUES(${writer.projectId},${"knowledge:collect:fixture-2"},${H},'pending',now())`;
     const wake = await readNextKnowledgeWake(db as never);
