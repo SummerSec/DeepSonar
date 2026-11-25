@@ -55,12 +55,6 @@ function requestDiagnostic(error, stage, signal) {
     const name = diagnosticField(value, 'name');
     const code = diagnosticField(value, 'code');
     if (diagnosticNames.has(name)) result.name = name;
-    // #1228: 只有「什么都认不出来」时才追加安全形状（仅键名、不含取值）：既避免给
-    // 已知错误加噪声，也能看出那种既无 name 又无 code 的对象到底长什么样。
-    const unidentified = result.name === undefined && result.code === undefined
-      && result.status === undefined && result.bodyHint === undefined;
-    const keys = unidentified ? Object.keys(value).filter(key => /^[a-z_]{1,24}$/i.test(key)).slice(0, 6) : [];
-    if (keys.length > 0) result.keys = keys;
     // #1262: 结算 404 需要知道「打到了哪个 origin」，否则无法判断是自己人还是中间层。
     // 只保留 origin（scheme+host+port），不含路径、查询、凭据或用户名。
     const origin = diagnosticField(value, 'endpoint');
@@ -77,6 +71,14 @@ function requestDiagnostic(error, stage, signal) {
     // ever recording URL, header or body text.
     const bodyHint = diagnosticField(value, 'bodyHint');
     if (bodyHint === 'not_found' || bodyHint === 'other' || bodyHint === 'empty') result.bodyHint = bodyHint;
+    // #1228: 只有「什么都认不出来」时才追加安全形状（仅键名、不含取值）。判断放在
+    // status / bodyHint 投影之后，否则带 status 的错误会被误判成认不出来。
+    const unidentified = result.name === undefined && result.code === undefined
+      && result.status === undefined && result.bodyHint === undefined;
+    if (unidentified) {
+      const keys = Object.keys(value).filter(key => /^[a-z_]{1,24}$/i.test(key)).slice(0, 6);
+      if (keys.length > 0) result.keys = keys;
+    }
     const cause = project(diagnosticField(value, 'cause'), depth + 1);
     if (cause && Object.keys(cause).length) result.cause = cause;
     return result;
