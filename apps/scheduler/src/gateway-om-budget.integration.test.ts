@@ -348,12 +348,18 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
       WHERE id = ${credentialId}`;
 
-    await t.test("#1260 400KB 合成快照下并发咨询的 P95 不受快照体积拖累", async () => {
+    await t.test("#1260 真实 400KB 体积快照下并发咨询的并发冒烟（不是体积成本证明）", async () => {
       const job = await createJob();
       const token = await issue(job.jobId, "main");
-      // 合成 400KB 填充：现场 ~440KB 的冻结快照就是这个量级。
+      // 现场 ~440KB 的冻结快照是这个量级；填充必须低压缩率，否则 PostgreSQL 压缩后
+      // 实际读取体积远小于 400KB，用例会全绿却不覆盖大快照的读取成本（#1260 评审）。
+      const padding = incompressiblePadding(400_000, 0x9e3779b9);
       await sql`UPDATE jobs SET agent_snapshot_json = agent_snapshot_json
-        || jsonb_build_object('synthetic_padding', repeat('x', 400000)) WHERE id=${job.jobId}`;
+        || jsonb_build_object('synthetic_padding', ${padding}::text) WHERE id=${job.jobId}`;
+      const [stored] = await sql`SELECT pg_column_size(agent_snapshot_json) AS bytes, length(agent_snapshot_json->>'synthetic_padding')::int AS chars
+        FROM jobs WHERE id=${job.jobId}`;
+      assert.equal(Number(stored.chars), 400_000, "填充字符数应为 400k");
+      assert.ok(Number(stored.bytes) >= 400_000, `快照存储体积必须真的达到量级，实际 ${stored.bytes} 字节`);
       const durations: number[] = [];
       const failures: string[] = [];
       const rounds = 5;
@@ -371,6 +377,8 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       const p95 = durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)]!;
       const max = durations[durations.length - 1]!;
       assert.deepEqual(failures.slice(0, 3), [], `并发咨询出现非 200：${failures.length} 条`);
+      // 只证明并发下入口不报错、退化为个位数毫秒级排队；app.inject 没有真实客户端的
+      // 15 秒超时，也没有旧路径同条件对照，因此不作为「体积成本已消除」的证据。
       assert.ok(p95 < 3_000, `${workers} 并发 × ${rounds} 轮的 allowance P95=${p95}ms，max=${max}ms`);
     });
 
@@ -1547,3 +1555,17 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     backgroundRelease = undefined;
   }
 });
+
+/** 固定种子的低压缩率填充：base62 随机串，用于让快照存储体积真的达到量级。 */
+function incompressiblePadding(length: number, seed: number): string {
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  let state = seed >>> 0 || 1;
+  const chunks: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    state ^= state << 13; state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5; state >>>= 0;
+    chunks.push(alphabet[state % 62]!);
+  }
+  return chunks.join("");
+}
