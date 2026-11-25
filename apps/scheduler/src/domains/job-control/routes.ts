@@ -928,7 +928,9 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
   // 按当前 RoleConfig/Credential/项目策略完整重冻，再以同 Job、新 Attempt 执行。
   app.post("/jobs/:id/rerun-current", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const result = await requeueJob(id, "rerun-current");
+    // #1223：断点不可用时允许显式放弃现场（沿用既有重跑审计与准入，不新增路由）。
+    const abandonCheckpoint = (req.body as { abandon_checkpoint?: unknown } | null)?.abandon_checkpoint === true;
+    const result = await requeueJob(id, "rerun-current", undefined, { abandonCheckpoint });
     if (result.kind !== "ok") return sendRequeueError(reply, result, "rerun-current");
     await audit(req, {
       action: "job.rerun_current",
@@ -940,12 +942,14 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         status: "pending",
         execution: "current_snapshot",
         snapshot_refreshed: true,
+        ...(result.abandoned_checkpoint ? { abandoned_checkpoint: true } : {}),
       },
     });
     return {
       ...result.job,
       execution: "current_snapshot",
       snapshot_refreshed: true,
+      abandoned_checkpoint: result.abandoned_checkpoint,
       provenance: result.provenance,
       message: "已按当前配置重冻快照并重新入队；画布与历史 Attempt/effect 保持不变",
     };

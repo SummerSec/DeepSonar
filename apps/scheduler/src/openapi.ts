@@ -1724,7 +1724,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}/rerun-current",
     summary: "按当前配置重新执行（同 Job、新 Attempt、保留画布）",
     description:
-      "仅 failed/timeout/orphan/waiting_human。导入 cancelled（活动归档）返回 409 JOB_IMPORTED_READONLY。可恢复的导入 Job 按当前治理完整重冻后再入队，不恢复历史 token/沙箱/密钥。持有 Dispatcher admission lock，并按 Canvas→Job 加锁。payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect 保持不变。响应含 provenance。",
+      "仅 failed/timeout/orphan/waiting_human。导入 cancelled（活动归档）返回 409 JOB_IMPORTED_READONLY。可恢复的导入 Job 按当前治理完整重冻后再入队，不恢复历史 token/沙箱/密钥。持有 Dispatcher admission lock，并按 Canvas→Job 加锁。payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect 保持不变。响应含 provenance。waiting_human 且断点不可用（断点封存失败或已过期）时，可用 body {abandon_checkpoint:true} 显式放弃旧现场：关闭当前人工请求并记录 close_reason=abandoned_checkpoint，同 Job 以新 Attempt、按当前配置执行；现场仍为 ready 或没有可放弃请求时返回 409 CHECKPOINT_ABANDON_NOT_APPLICABLE，不放宽凭据保护、不恢复原生会话。",
     scope: "jobs:control",
     tags: ["Jobs"],
   },

@@ -14,6 +14,8 @@
 #1223 的[断点凭据来源](HUMAN_CONTINUATION.md#断点凭据候选的来源1223)按现有输出额度字段的精确路径与类型识别普通配置，文件和原生历史共用短凭据保护。合成回归接既有 Actions，历史现场的具体命中来源仍未确认。
 #1236 的[重试确认前检查](architecture/09-interface-specs.md#清空重试的确认前检查1236)让任务列表和详情在清空确认前读取具体保留原因，实际 POST 的 409 同样消费结构化分类和下一步。设备、知识治理及续做预算记录分别展示，保留原任务后可通过任务工作台的「下达任务」按原目标新建任务。最终候选 Actions 另验。
 #1236 在保持顶层错误码 `TASK_DELETE_KNOWLEDGE_RETAINED` 兼容的前提下，用 `retained_kinds` / `retained_reason` 区分「设备历史引用旧 Job」与「知识/治理记录」，并把续做预算留痕单列一类；设备历史情形下拒绝后旧 Job 与 released 租约都保持不动。
+#1223 的[断点不可用显式出口](HUMAN_CONTINUATION.md#断点不可用时的显式出口1223-期望-2)给 `POST /jobs/:id/rerun-current` 增加 `{abandon_checkpoint:true}`：仅在断点确不可用时关闭当前人工请求并按当前配置重跑，现场仍 `ready` 时返回 409 `CHECKPOINT_ABANDON_NOT_APPLICABLE`，不放宽凭据保护。
+
 任务声明的前置条件反馈（#1245）在 [接口规格](architecture/09-interface-specs.md#任务声明的前置条件反馈12452026-11-23) 中按快照分档。正常省略返回 `task_result_contract_missing`，现有无效契约返回 `task_result_contract_invalid`，均为当前 Agent 无法修正的永久前置条件。正常创建到实际 Control HTTP 与事件入账回归接既有 Actions，最终候选另验。
 #1230 的 [`GET /gateway/_settlement/:id`](architecture/09-interface-specs.md#model-gateway) 按同 Job、原 token、请求 ID、workload 与 `gateway_model_request` effect 的唯一持久身份读取，原 Attempt 已终态或出现后续活动 Attempt 时仍可读。多条匹配回答 `unknown`，真缺失仍为 404，失效 token 和终态 Job 仍拒绝。历史 `settled` 只表示账本已经结算，模型结果和恢复准入分别判定。PostgreSQL 回归接 `ci:integration:platform-api`，最终 SHA Actions 待验，现场 8 次失败的逐条归因与真实模型效果未验证。
 
