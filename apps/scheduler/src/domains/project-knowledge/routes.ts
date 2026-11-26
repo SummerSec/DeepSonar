@@ -16,6 +16,7 @@ import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
 import { registerTaskKnowledgeCloseoutRoutes } from "./closeout-routes.js";
 import { registerKnowledgeActivityRoutes } from "./activity-routes.js";
 import { KnowledgeCandidate } from "@deepsonar/shared-types";
+import { KnowledgeOperationError } from "./types.js";
 import { archiveHumanKnowledgeItem, createHumanKnowledgeItem, restoreHumanKnowledgeItem, reviseHumanKnowledgeItem, type KnowledgeAuthor } from "./human-knowledge.js";
 
 const Id = z.string().uuid();
@@ -513,6 +514,15 @@ export function registerProjectKnowledgeRoutes(
     name: req.actor?.name ?? "unknown",
   });
 
+  // 知识域的稳定错误码：不存在 404，其余冲突/越权一律 409，且附带可执行 next_action。
+  const humanReply = (reply: FastifyReply, error: unknown): FastifyReply => {
+    if (error instanceof KnowledgeOperationError) {
+      const statusCode = error.error_code === "KNOWLEDGE_ITEM_NOT_FOUND" ? 404 : 409;
+      return reply.code(statusCode).send({ error_code: error.error_code, error: error.message, next_action: error.next_action });
+    }
+    return errorReply(reply, error);
+  };
+
   app.post("/projects/:id/knowledge", async (req, reply) => {
     const projectId = Id.parse((req.params as { id: string }).id);
     if (!access(req, reply, projectId, true)) return reply;
@@ -523,7 +533,7 @@ export function registerProjectKnowledgeRoutes(
       await recordAudit(req, { action: "project_knowledge.create", projectId, resourceType: "project_knowledge_item",
         resourceId: result.item_ref, after: { version: result.version, kind: body.kind, logical_key: body.logical_key } });
       return reply.code(201).send(result);
-    } catch (error) { console.error("[dbg1256] create", error instanceof Error ? error.message : String(error)); return errorReply(reply, error); }
+    } catch (error) { return humanReply(reply, error); }
   });
 
   app.post("/projects/:id/knowledge/:itemId/versions", async (req, reply) => {
@@ -543,7 +553,7 @@ export function registerProjectKnowledgeRoutes(
       await recordAudit(req, { action: "project_knowledge.revise", projectId, resourceType: "project_knowledge_item",
         resourceId: parsedItem, after: { version: result.version, expected_version: body.expected_version } });
       return reply.code(201).send(result);
-    } catch (error) { return errorReply(reply, error); }
+    } catch (error) { return humanReply(reply, error); }
   });
 
   app.post("/projects/:id/knowledge/:itemId/archive", async (req, reply) => {
@@ -555,7 +565,7 @@ export function registerProjectKnowledgeRoutes(
       const result = await archiveHumanKnowledgeItem(db, authorOf(req, projectId), itemId);
       await recordAudit(req, { action: "project_knowledge.archive", projectId, resourceType: "project_knowledge_item", resourceId: parsedItem, after: { status: result.status } });
       return result;
-    } catch (error) { return errorReply(reply, error); }
+    } catch (error) { return humanReply(reply, error); }
   });
 
   app.post("/projects/:id/knowledge/:itemId/restore", async (req, reply) => {
@@ -567,6 +577,6 @@ export function registerProjectKnowledgeRoutes(
       const result = await restoreHumanKnowledgeItem(db, authorOf(req, projectId), itemId);
       await recordAudit(req, { action: "project_knowledge.restore", projectId, resourceType: "project_knowledge_item", resourceId: parsedItem, after: { status: result.status } });
       return result;
-    } catch (error) { return errorReply(reply, error); }
+    } catch (error) { return humanReply(reply, error); }
   });
 }
