@@ -202,3 +202,58 @@ test("restricted closeout versions stay hidden in the same project and queued wo
     assert.ok(wake instanceof Date && Number.isFinite(wake.getTime()), "在途/排队的知识工作仍应有唤醒时间");
   });
 });
+
+test("published versions resolve source authorization from the original governance manifest", async () => {
+  await withKnowledgeDatabase(async db => {
+    const sql = db as unknown as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>;
+    const app = createProjectKnowledgeApplication({ db: db as never, governanceHash: H });
+    const owner = await seedKnowledgeJob(db, undefined, [operation]);
+    // 真实的 artifact_evidence 形状：artifacts(job) + artifact_evidence(row)，引用就是这个 row 的 id。
+    const governance = await seedKnowledgeJob(db, owner.projectId, [operation]);
+    const [artifact] = await sql`INSERT INTO artifacts (id, project_id, job_id, artifact_key, kind, source_operation)
+      VALUES (gen_random_uuid(), ${owner.projectId}, ${governance.jobId}, 'governed-evidence', 'fact', 'emit_fact') RETURNING id`;
+    const [evidence] = await sql`INSERT INTO artifact_evidence (id, artifact_id, statement, kind)
+      VALUES (gen_random_uuid(), ${String(artifact?.id)}, '治理资料里的观测', 'observation') RETURNING id`;
+    const evidenceId = String(evidence?.id), sourceHash = "a".repeat(64);
+    await sql`INSERT INTO shared_asset_blobs (content_sha256, bytes, content_type, blob_uri)
+      VALUES (${"c".repeat(64)}, 64, 'application/json', ${"test://cc"})`;
+    const [item] = await sql`INSERT INTO project_knowledge_items (id, project_id, kind, logical_key, title)
+      VALUES (gen_random_uuid(), ${owner.projectId}, 'memory', 'governed-source', '治理来源知识') RETURNING id`;
+    const [version] = await sql`INSERT INTO project_knowledge_versions (id, project_id, item_id, version, content_sha256,
+      creator_job_id, creator_attempt_id, sources_json, governance_hash)
+      VALUES (gen_random_uuid(), ${owner.projectId}, ${String(item?.id)}, 1, ${"c".repeat(64)}, ${governance.jobId},
+        ${governance.attemptId}, ${db.json([{ kind: "evidence", ref: evidenceId, content_hash: sourceHash }] as never)},
+        ${"c".repeat(64)}) RETURNING id`;
+    await sql`UPDATE project_knowledge_items SET active_version_id=${String(version?.id)}, status='active'
+      WHERE id=${String(item?.id)}`;
+    const [work] = await sql`INSERT INTO project_knowledge_work (project_id, trigger_key, state, stage, governance_hash)
+      VALUES (${owner.projectId}, ${"knowledge:collect:" + governance.jobId}, 'completed', 'settle', ${"d".repeat(64)})
+      RETURNING id`;
+    await sql`INSERT INTO project_knowledge_job_assignments (job_id, project_id, work_id, stage)
+      VALUES (${governance.jobId}, ${owner.projectId}, ${String(work?.id)}, 'maker')`;
+    const catalog = await freezeProjectKnowledgeCatalog(db as never, owner.projectId);
+    const search = async (job: { jobId: string; canvasId: string }) => {
+      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({
+        platform_tools: ["search_project_knowledge"], project_knowledge_catalog: catalog } as never)} WHERE id=${job.jobId}`;
+      return app.invoke({ jobId: job.jobId, projectId: owner.projectId, canvasId: job.canvasId,
+        operationId: "search_project_knowledge", input: { query: "治理" }, eventId: randomUUID(),
+        tokenId: randomUUID(), idempotencyKey: null });
+    };
+    const ordinary = await seedKnowledgeJob(db, owner.projectId, ["search_project_knowledge"]);
+    assert.deepEqual(((await search(ordinary)).items as unknown[]).length, 0, "无权的同项目任务看不到治理来源条目");
+    const assign = async (stage: string, manifest: unknown[]) => {
+      const reader = await seedKnowledgeJob(db, owner.projectId, ["search_project_knowledge"]);
+      const [readerWork] = await sql`INSERT INTO project_knowledge_work (project_id, trigger_key, state, stage, governance_hash)
+        VALUES (${owner.projectId}, ${"knowledge:collect:" + reader.jobId}, 'completed', 'settle', ${"e".repeat(64)}) RETURNING id`;
+      await sql`INSERT INTO project_knowledge_job_assignments (job_id, project_id, work_id, stage, input_manifest_json)
+        VALUES (${reader.jobId}, ${owner.projectId}, ${String(readerWork?.id)}, ${stage}, ${db.json(manifest as never)})`;
+      return search(reader);
+    };
+    const audienceOk = await assign("maker", [{ input_ref: evidenceId, content_hash: sourceHash, audience: ["maker"] }]);
+    assert.equal((audienceOk.items as unknown[]).length, 1, "冻结清单逐字命中且阶段在受众内时必须可见");
+    const wrongStage = await assign("reviewer", [{ input_ref: evidenceId, content_hash: sourceHash, audience: ["maker"] }]);
+    assert.equal((wrongStage.items as unknown[]).length, 0, "同一批次但不在受众里的任务不放行");
+    const wrongHash = await assign("maker", [{ input_ref: evidenceId, content_hash: "f".repeat(64), audience: ["maker"] }]);
+    assert.equal((wrongHash.items as unknown[]).length, 0, "哈希不一致不能当成同一来源");
+  });
+});
