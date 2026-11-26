@@ -67,7 +67,8 @@ try {
   assert.equal(packageVersions.wrapper, createHash("sha256").update(await readFile(path.join(root, "agent-harness/pi-observational-memory-governed.ts"))).digest("hex"),
     "installed production wrapper must match this checkout");
   const piVersion = execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "pi", imageRef, "--version"], { encoding: "utf8" }).trim();
-  assert.match(piVersion, /\b1\.5\.2\b/u, "installed Pi CLI version");
+  // #1228: 候选分支要验证 Pi 1.6.0；稳定镜像仍是 1.5.2，两者都在已核验集合内。
+  assert.match(piVersion, /\b(1\.5\.2|1\.6\.0)\b/u, "installed Pi CLI version must be a verified one");
   report.image = { ref: imageRef, manifest_digest: imageDigest, config_id: image.Id, architecture: arch,
     catalog_fixture_version: declaredVersion, catalog_fixture_version_source: "current-om-contract-not-release-metadata",
     installed: { ...packageVersions, pi: piVersion } };
