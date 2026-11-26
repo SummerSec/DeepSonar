@@ -170,3 +170,51 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
     }
   });
 });
+
+test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也读不到正文", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const governance = await seedKnowledgeJob(db, owner.projectId);
+    const [artifact] = await db`INSERT INTO artifacts(id,project_id,job_id,artifact_key,kind,source_operation)
+      VALUES(gen_random_uuid(),${owner.projectId},${governance.jobId},'governed','fact','emit_fact') RETURNING id`;
+    const [evidence] = await db`INSERT INTO artifact_evidence(id,artifact_id,statement,kind)
+      VALUES(gen_random_uuid(),${String(artifact?.id)},'治理观测','observation') RETURNING id`;
+    const [work] = await db`INSERT INTO project_knowledge_work(project_id,trigger_key,state,stage,governance_hash)
+      VALUES(${owner.projectId},${"knowledge:collect:" + governance.jobId},'completed','settle',${"a".repeat(64)}) RETURNING id`;
+    await db`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage)
+      VALUES(${governance.jobId},${owner.projectId},${String(work?.id)},'maker')`;
+    const itemId = randomUUID(), versionId = randomUUID(), hash = "b".repeat(64);
+    await db`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri)
+      VALUES(${hash},8,'application/json',${"test://" + hash})`;
+    await db`INSERT INTO project_knowledge_items(id,project_id,kind,logical_key,title)
+      VALUES(${itemId},${owner.projectId},'memory','restricted','受限来源知识')`;
+    await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,
+      creator_job_id,creator_attempt_id,sources_json,governance_hash)
+      VALUES(${versionId},${owner.projectId},${itemId},1,${hash},${owner.jobId},${owner.attemptId},
+        ${db.json([{ kind: "evidence", ref: String(evidence?.id), content_hash: "c".repeat(64) }] as never)},${hash})`;
+    await db`UPDATE project_knowledge_items SET active_version_id=${versionId},status='active' WHERE id=${itemId}`;
+
+    const app = Fastify();
+    let actor: Actor = { type: "api_token", id: randomUUID(), name: "reader", projectId: owner.projectId,
+      scopes: ["projects:read"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge/${itemId}`;
+    const detail = await app.inject({ method: "GET", url: base });
+    assert.equal(detail.statusCode, 200);
+    const detailVersion = detail.json().versions[0] as Record<string, unknown>;
+    assert.equal(detailVersion.sources_json, undefined, "条目详情不能回传受限来源");
+    assert.equal(detailVersion.creator_job_id, undefined, "条目详情不能回传作者任务");
+    assert.equal(detailVersion.creator_attempt_id, undefined, "条目详情不能回传作者尝试");
+    const list = await app.inject({ method: "GET", url: `${base}/versions` });
+    assert.equal(list.json().items[0].sources_json, undefined, "版本列表不能回传受限来源");
+    const exact = await app.inject({ method: "GET", url: `${base}/versions/${versionId}` });
+    assert.equal(exact.statusCode, 404, "精确读取按来源授权拒绝");
+
+    actor = { ...actor, scopes: ["projects:read", "tasks:read"] };
+    const allowed = await app.inject({ method: "GET", url: `${base}/versions/${versionId}` });
+    assert.equal(allowed.statusCode, 200, "能读原始资料的读者按既有 scope 放行");
+    const allowedDetail = await app.inject({ method: "GET", url: base });
+    assert.ok(Array.isArray((allowedDetail.json().versions[0] as Record<string, unknown>).sources_json));
+  });
+});

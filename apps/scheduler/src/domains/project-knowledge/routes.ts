@@ -89,13 +89,14 @@ async function versionFor(db: Db, projectId: string, itemId: string, versionId: 
   return version as Row | undefined;
 }
 
-async function itemDetail(db: Db, projectId: string, itemId: string) {
+async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Actor) {
   const item = await itemFor(db, projectId, itemId);
   if (!item) return null;
   const versions = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
       governance_hash,revoked_at,revoked_reason,created_at
     FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
     ORDER BY version DESC LIMIT 51`;
+  const visibleVersions = redactVersionSources(versions as Row[], actor);
   const proposals = await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
       p.candidate_version_id,p.maker_job_id,p.base_refs_json,p.evaluation_plan_json,p.reason,p.created_at
     FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
@@ -113,7 +114,7 @@ async function itemDetail(db: Db, projectId: string, itemId: string) {
     FROM project_knowledge_usages WHERE project_id=${projectId} AND owner_project_id=${projectId}
       AND version_id IN (SELECT id FROM project_knowledge_versions WHERE project_id=${projectId} AND item_id=${itemId})
     ORDER BY created_at DESC LIMIT 100`;
-  return { ...item, versions: versions.slice(0, 50), versions_next_offset: versions.length > 50 ? 50 : null,
+  return { ...item, versions: visibleVersions.slice(0, 50), versions_next_offset: versions.length > 50 ? 50 : null,
     proposals, evaluations, usages };
 }
 
@@ -286,7 +287,7 @@ export function registerProjectKnowledgeRoutes(
       const { id, itemId } = req.params as { id: string; itemId: string };
       const projectId = Id.parse(id);
       if (!access(req, reply, projectId)) return;
-      return await itemDetail(db, projectId, Id.parse(itemId))
+      return await itemDetail(db, projectId, Id.parse(itemId), req.actor)
         ?? reply.code(404).send({ error_code: "KNOWLEDGE_ITEM_NOT_FOUND" });
     } catch (error) { return errorReply(reply, error); }
   });
@@ -322,7 +323,8 @@ export function registerProjectKnowledgeRoutes(
       if (!item || !version) return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
       // Only the owning project can inspect historical content. Source refs remain opaque.
       const candidate = await readKnowledgeBlob(db, String(version.content_sha256));
-      return { ...version, item: { id: item.id, kind: item.kind, title: item.title, logical_key: item.logical_key }, candidate };
+      const [visible] = redactVersionSources([version as Row], req.actor);
+      return { ...visible, item: { id: item.id, kind: item.kind, title: item.title, logical_key: item.logical_key }, candidate };
     } catch (error) { return errorReply(reply, error); }
   });
 
