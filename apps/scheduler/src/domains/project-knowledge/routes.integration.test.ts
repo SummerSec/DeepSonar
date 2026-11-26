@@ -373,6 +373,15 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
 test("human maintenance creates, revises, archives and restores knowledge with an author", async () => {
   await withKnowledgeDatabase(async (db) => {
     const owner = await seedKnowledgeJob(db);
+    // 人类写入也要经 CAS：给这条用例装一个内存 blob store，否则写入阶段拿不到共享资产存储。
+    const humanBlobs = new Map<string, Buffer>();
+    const humanStore: BlobStore = {
+      kind: "fs", put: async (key, value) => { humanBlobs.set(key, value); },
+      get: async (key) => { const value = humanBlobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => humanBlobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(humanStore);
     const app = Fastify();
     const actor: Actor = { type: "api_token", id: "author-1", name: "maintainer-a", projectId: owner.projectId,
       scopes: ["projects:read", "projects:write"] };
