@@ -143,15 +143,14 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 新条目与新 Job 的关系：Job 创建时冻结知识目录，所以沉淀只对**之后创建**的 Job 出现在检索结果里；而已冻结目录的在途 Job 不受影响，这也符合「不改写冻结快照」的既有约束。
 
 
-### 唤醒查询的缓存（#1287，2026-11-26）
+### 集合策略查询的索引（#1287，2026-11-26）
 
-集合策略查询要扫 `audit_logs`，44k 行时实测 6–11s；Dispatcher 每次刷新都会调用一次 `readNextKnowledgeWake`，于是同一个重查询被近乎连续地重跑，把事件循环和其它端点一起拖慢（端点排队 20–44s，超过客户端 15s 超时）。现在 `readNextKnowledgeWake` 带短 TTL 缓存：
+`readNextKnowledgeWake` 的集合策略查询要扫 `audit_logs`，44k 行时实测 6–11s；Dispatcher 每次刷新都会调用它，于是同一个重查询被近乎连续地重跑，事件循环与其它端点一起被拖慢（端点排队 20–44s，超过客户端 15s 超时，把 #1260 的服务端修复抵消掉）。本轮补两条审计索引，让「已登记未收尾」的来源查找与收尾反查走索引而不是全表扫描：
 
-- 默认 30s，`DEEPSONAR_KNOWLEDGE_WAKE_TTL_MS` 可调（0–300000，0 表示每次回库）；
-- 知识工作写入后用 `invalidateKnowledgeWake()` 立即失效，不必等 TTL；
-- 缓存只影响「到点唤醒」的读取频率，不改唤醒语义，也不改任何权限判定。
+- `audit_logs_knowledge_source_idx`：`(project_id, resource_id, at)` 部分索引，条件限定为 `project_knowledge.source_registered` + `system/scheduler` + `result='ok'` + `resource_type='job'`；
+- `audit_logs_knowledge_handled_idx`：`(project_id, resource_type, resource_id, action)`，用于 `NOT EXISTS` 的已收集/已跳过反查。
 
-查询本身仍然重：把 `sources` CTE 的 `audit_logs` 扫描（含 `NOT EXISTS` 反查）改成索引友好的形态属于后续项，本次只解决重查询被连续重跑的问题。
+没有改唤语文义，也没有加缓存层：早期试过 TTL 缓存，`knowledge-wake.integration.test.ts` 的「写入后立刻可见」语义直接被打破（halted 不再停在原地、期望的 wake 值不再出现），所以放弃。查询形态本身（`sources` CTE 的 `DISTINCT ON` 与 `NOT EXISTS`）仍是后续项；实测收益需要在有该数据量的实例上观测，本地无 Postgres。
 
 ## 验证与运维
 
