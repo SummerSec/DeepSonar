@@ -307,13 +307,13 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
     await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
       idempotency_key,request_digest,input_digest,reason,base_refs_json)
       VALUES(gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'retire','candidate',1,${owner.jobId},
-        ${randomUUID()},${"e".repeat(64)},${"f".repeat(64)},'基线退役提案',${db.json([{ item_ref: mixedItem }] as never)})`;
+        ${randomUUID()},${"e".repeat(64)},${"f".repeat(64)},'基线退役提案',${db.json([{ item_ref: mixedItem, version_ref: mixedVisible }] as never)})`;
     // 候选可见但基线受限：低权限读者不能拿到这条关联信息。
     await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
       idempotency_key,request_digest,input_digest,reason,candidate_version_id,base_refs_json)
       VALUES(gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'revise','candidate',1,${owner.jobId},
         ${randomUUID()},${"1".repeat(64)},${"2".repeat(64)},'候选可见但基线受限',${plainVersion},
-        ${db.json([{ item_ref: itemId }] as never)})`;
+        ${db.json([{ item_ref: itemId, version_ref: versionId }] as never)})`;
     const plainSourced = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${plainItem}` });
     assert.deepEqual((plainSourced.json().proposals as unknown[]).length, 0,
       "候选可见但基线受限时，低权限读者拿不到任何关联信息");
@@ -322,7 +322,7 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
       idempotency_key,request_digest,input_digest,reason,candidate_version_id,base_refs_json,created_at)
       SELECT gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'revise','candidate',1,${owner.jobId},
         gen_random_uuid(),${"7".repeat(64)},${"8".repeat(64)},'较新不可见基线',${plainVersion},
-        ${db.json([{ item_ref: itemId }] as never)},now()
+        ${db.json([{ item_ref: itemId, version_ref: versionId }] as never)},now()
       FROM generate_series(1,50)`;
     await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
       idempotency_key,request_digest,input_digest,reason,candidate_version_id,base_refs_json,created_at)
@@ -334,6 +334,17 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
     assert.ok(visibleReasons.includes("较早可见提案"),
       `较旧的可读提案不能被较新的不可见提案挤掉（实际 ${visibleReasons.length} 条）`);
     assert.ok(!visibleReasons.includes("较新不可见基线"), "不可见基线的提案仍要过滤");
+
+    // 同一条目另一个版本可见时，基线仍要按提案引用的那一版判定。
+    await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
+      idempotency_key,request_digest,input_digest,reason,candidate_version_id,base_refs_json)
+      VALUES(gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'revise','candidate',1,${owner.jobId},
+        ${randomUUID()},${"3".repeat(64)},${"4".repeat(64)},'基线按引用版本判定',${plainVersion},
+        ${db.json([{ item_ref: mixedItem, version_ref: mixedRestricted }] as never)})`;
+    const siblingView = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${plainItem}` });
+    const siblingReasons = (siblingView.json().proposals as Array<{ reason: string }>).map((row) => row.reason);
+    assert.ok(!siblingReasons.includes("基线按引用版本判定"),
+      "同一知识其他版本可见，不代表提案引用的受限版本可见");
 
     const mixedDetail = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${mixedItem}` });
     assert.equal(mixedDetail.statusCode, 200, mixedDetail.body);

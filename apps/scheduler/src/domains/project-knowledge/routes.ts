@@ -128,6 +128,8 @@ async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Act
           AND NOT EXISTS (
             SELECT 1 FROM project_knowledge_versions v
             WHERE v.project_id = p.project_id AND v.item_id = (b->>'item_ref')::uuid
+              AND v.id = CASE WHEN (b->>'version_ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                THEN (b->>'version_ref')::uuid END
               AND ${readableVersionSources(db, keysText)}
           )
       )
