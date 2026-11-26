@@ -21,7 +21,6 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let claimContentionTimer: ReturnType<typeof setTimeout> | null = null;
 let credentialCapacityTimer: ReturnType<typeof setTimeout> | null = null;
 let armedUntilMs: number | null = null;
-let refreshInFlight: Promise<void> | null = null;
 let refreshRequestsDueKick = false;
 let kick: (() => void) | null = null;
 
@@ -107,6 +106,68 @@ function scanTaskDeadlines(rows: { target_json?: unknown }[], now: number): { ne
   return { nearest, hasDue };
 }
 
+/** 只合并「更早」的候选：等待期间路由可能已经装了更早的普通任务时间。 */
+export function earlierDeadline(current: number | null, candidate: number | null): number | null {
+  if (candidate == null) return current;
+  if (current == null) return candidate;
+  return Math.min(current, candidate);
+}
+
+/** #1287：普通扫描与知识探测各自单飞，互不等待——A 的定时器触发后必须能立刻重扫并为 B 挂表。 */
+let taskRefreshInFlight: Promise<void> | null = null;
+let knowledgeProbeInFlight: Promise<void> | null = null;
+
+async function refreshTaskDeadlines(): Promise<void> {
+  if (taskRefreshInFlight) return taskRefreshInFlight;
+  taskRefreshInFlight = (async () => {
+    try {
+      const rows = await sql`
+        SELECT c.target_json
+        FROM jobs j
+        INNER JOIN canvases c ON c.id = j.canvas_id
+        WHERE j.status = 'pending'
+          AND c.status = 'active'
+          AND c.target_json->'schedule'->>'start_at' IS NOT NULL
+        LIMIT 500`;
+      const now = Date.now();
+      const tasks = scanTaskDeadlines(rows as { target_json?: unknown }[], now);
+      // 已经过去的 armedUntilMs 视为没有定时器，避免挡住新装的时间。
+      const armed = armedUntilMs != null && armedUntilMs > now ? armedUntilMs : null;
+      const merged = earlierDeadline(armed, tasks.nearest);
+      if (merged != null && merged !== armed) armTimer(merged);
+      if (tasks.hasDue && refreshRequestsDueKick) fireKick();
+    } catch (error) {
+      console.error("[schedule-wake] task scan failed:", error);
+    } finally {
+      taskRefreshInFlight = null;
+    }
+  })();
+  return taskRefreshInFlight;
+}
+
+async function refreshKnowledgeDeadline(): Promise<void> {
+  if (knowledgeProbeInFlight) return knowledgeProbeInFlight;
+  const generation = refreshGeneration;
+  knowledgeProbeInFlight = (async () => {
+    let stale = false;
+    try {
+      const now = Date.now();
+      const knowledge = await probeKnowledgeDeadline(now, generation);
+      stale = knowledge.stale;
+      const armed = armedUntilMs != null && armedUntilMs > now ? armedUntilMs : null;
+      const merged = earlierDeadline(armed, knowledge.nearest);
+      if (merged != null && merged !== armed) armTimer(merged);
+      if (knowledge.due) fireKick();
+    } catch (error) {
+      console.error("[schedule-wake] knowledge probe failed:", error);
+    } finally {
+      knowledgeProbeInFlight = null;
+      if (stale || refreshGeneration !== generation) void refreshKnowledgeDeadline();
+    }
+  })();
+  return knowledgeProbeInFlight;
+}
+
 /** 知识侧只决定「是否需要回库、到期没到期」；调用前普通任务的定时器已经装好。 */
 async function probeKnowledgeDeadline(now: number, generation: number):
   Promise<{ nearest: number | null; due: boolean; stale: boolean }> {
@@ -128,48 +189,14 @@ async function probeKnowledgeDeadline(now: number, generation: number):
 /** Scan pending task and knowledge schedules and arm their nearest durable deadline. */
 export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boolean }): Promise<void> {
   if (options?.kickDueTasks !== false) refreshRequestsDueKick = true;
-  if (refreshInFlight) { refreshGeneration += 1; return refreshInFlight; }
-  const generation = refreshGeneration;
-  refreshInFlight = (async () => {
-    let stale = false;
-    try {
-      const rows = await sql`
-        SELECT c.target_json
-        FROM jobs j
-        INNER JOIN canvases c ON c.id = j.canvas_id
-        WHERE j.status = 'pending'
-          AND c.status = 'active'
-          AND c.target_json->'schedule'->>'start_at' IS NOT NULL
-        LIMIT 500`;
-      const now = Date.now();
-      const tasks = scanTaskDeadlines(rows as { target_json?: unknown }[], now);
-      // #1287：普通任务的到期先装上，知识查询再慢也不影响普通任务按时启动。
-      if (tasks.nearest != null) armTimer(tasks.nearest);
-      else clearArmedTimer();
-      if (tasks.hasDue && refreshRequestsDueKick) fireKick();
-      const knowledge = await probeKnowledgeDeadline(now, generation);
-      stale = knowledge.stale;
-      // 等待期间可能有路由用 noteScheduleWakeAt() 装了更早的普通定时器，
-      // 这里只允许把定时器提前，不能再用等待前的 tasks.nearest 推迟或清除它。
-      const merged = earlierDeadline(armedUntilMs, knowledge.nearest);
-      if (merged != null && merged !== armedUntilMs) armTimer(merged);
-      if (knowledge.due) fireKick();
-    } catch (error) {
-      console.error("[schedule-wake] refresh failed:", error);
-    } finally {
-      refreshInFlight = null;
-      refreshRequestsDueKick = false;
-      if (stale || refreshGeneration !== generation) void refreshScheduleWakeFromDb({ kickDueTasks: false });
-    }
-  })();
-  return refreshInFlight;
-}
-
-/** 合并定时器时只允许提前：等待期间路由可能已经装了更早的普通任务时间。 */
-export function earlierDeadline(current: number | null, candidate: number | null): number | null {
-  if (candidate == null) return current;
-  if (current == null) return candidate;
-  return Math.min(current, candidate);
+  // 普通扫描先跑并且可以独立完成：知识探测再慢也不会挡住下一次普通挂表。
+  await refreshTaskDeadlines();
+  if (options?.kickDueTasks !== false) {
+    // 定时器触发的路径需要尽快返回；知识探测在后台单飞，结果只用于把定时器提前。
+    void refreshKnowledgeDeadline();
+    return;
+  }
+  await refreshKnowledgeDeadline();
 }
 
 function armTimer(targetMs: number): void {
