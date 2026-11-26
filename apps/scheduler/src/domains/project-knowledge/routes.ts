@@ -268,7 +268,11 @@ export function registerProjectKnowledgeRoutes(
         feedback: row.active_version_id ? feedback.get(String(row.active_version_id)) ?? EMPTY_FEEDBACK : EMPTY_FEEDBACK,
       }));
       return { items, next_offset: rows.length > input.limit ? input.offset + input.limit : null };
-    } catch (error) { return errorReply(reply, error); }
+    } catch (error) {
+      if (error instanceof z.ZodError) console.error("[dbg] list zod", JSON.stringify(error.issues).slice(0, 400));
+      else console.error("[dbg] list error", String((error as { message?: string }).message).slice(0, 300));
+      return errorReply(reply, error);
+    }
   });
 
   app.get("/projects/:id/knowledge/receipts", async (req, reply) => {
