@@ -30,6 +30,7 @@
 #1219 第二步把「用后必评」写进工具契约：读与搜的描述说明「查到不等于用了」，反馈只认真实 `usage_ref` 与 `evidence_refs`；`outcome` 只能是 `success/failure/inapplicable`（没有 `unknown` 可提交，缺评就是平台记的未知），效果未明保留未知、不得用任务成败反推；缺评只算无样本，不阻塞任务也不驱动退役。
 
 #1228 把运行时自带的 Undici 跟到已修复版本：Kali 镜像的 Node 24.22.2→24.22.3（自带 Undici 7.30.2，两架构校验和同步更新）、控制面四个 Node 镜像 digest 由 24.21.0 升到 24.22.3、agent 基础镜像换成 24.22.3-alpine/bookworm-slim 摘要、工作区 `undici` 直接依赖收到 `^7.30.2`、DSH 运行时用 `overrides` 固定 8.12.4，并在两处 Dockerfile 打印 `process.version` / `process.versions.undici` 作为候选产物证据。顺带修掉 kali 清单里指向 `v22.23.2` 的 Node 下载地址。Pi 1.6.0 另行单独验证，不在本次范围；版本取证以 Actions 镜像构建日志为准，未运行真实模型。
+#1228 把 Pi 从 1.5.2 升到 1.6.0：三份 harness lockfile、`runtime-images.json` 与 kali 清单的版本/摘要、Kali `PI_CODING_AGENT_VERSION`/`PI_CODING_AGENT_INTEGRITY`、预算补丁与镜像守卫的 SDK 身份校验、adapter 版本、运行时手册目录与 RPC 夹具断言一起更新。静态核对的兼容点：`--mode rpc` 等被 adapter 使用的参数仍在、`PromptDisposition` 集合（`started`/`queued`/`handled`）未变、会话格式仍为 v3、`@earendil-works/pi-ai/compat` 子路径仍在、`message_start` 发射点与 1.5.2 相同，且 Pi 依赖的 Undici 已是 8.12.4。真实 RPC、会话恢复、预算统计与 Provider 路由由 `ci:smoke:pi-rpc`、`pi-om-acceptance` 与 `runtime-images` 原生双架构在 Actions 上验证，本机未运行（Node 26 的 `stripTypeScriptTypes` 只接受 `strip`，相关 SDK 回归在本机无法加载）。
 
 #1211 的[设备绑定诊断](architecture/09-interface-specs.md#设备绑定诊断1211)在 `GET /jobs/:id` 增加只读 `device_binding`：区分「未声明设备需求」「已声明但无租约（含画布声明未冻结、角色不命中）」「有租约但无连接结果」，只投影平台已记录的事实，不把沙箱内探测失败当成设备不可用，也不申请或释放租约。回归见 `ci:unit:device-lease`，最终 SHA Actions 待验。
 

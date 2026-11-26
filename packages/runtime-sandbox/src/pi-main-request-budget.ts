@@ -3,6 +3,9 @@ import { PRIVATE_CREDENTIAL_READER_SOURCE } from "./private-credential-reader.js
 /** Embedded in both generated Pi and DSH policies; never serializes error prose. */
 const PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE = String.raw`
 const hostFailures = new WeakMap();
+// #1228: 已核验的 pi-ai 版本集合必须定义在模板内部；引用模板外的常量会在生成的
+// 运行时模块里变成 ReferenceError（1.6.0 的 clamp 路径就是这样炸的）。
+const SDK_VERSIONS = Object.freeze(['1.6.1', '1.6.0', '1.5.2']);
 function fail(code) {
   const error = new Error(code);
   hostFailures.set(error, code);
@@ -38,7 +41,7 @@ function permanentRequestDiagnostic(detail, signal) {
   }
   return false;
 }
-function requestDiagnostic(error, stage, signal) {
+function requestDiagnostic(error, stage, signal, phase) {
   const seen = new Set();
   let incomplete = false;
   function project(value, depth) {
@@ -48,7 +51,9 @@ function requestDiagnostic(error, stage, signal) {
     const result = {};
     const name = diagnosticField(value, 'name');
     const code = diagnosticField(value, 'code');
-    if (diagnosticNames.has(name)) result.name = name;
+    // #1228: 错误类型名本身是标识符，不是正文；按形状白名单投影，能看见 ZodError 之类
+    // 我们没预置的类型名，同时不放松对 message/stack 的丢弃。
+    if (typeof name === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,31}$/u.test(name)) result.name = name;
     // #1262: 结算 404 需要知道「打到了哪个 origin」，否则无法判断是自己人还是中间层。
     // 只保留 origin（scheme+host+port），不含路径、查询、凭据或用户名。
     const origin = diagnosticField(value, 'endpoint');
@@ -84,13 +89,15 @@ function requestDiagnostic(error, stage, signal) {
       'RateLimitError','InternalServerError'].includes(current.name)
       || transientStatuses.has(current.status)) transient = true;
   }
+  const prepared = ['identity','om-auth','prepare','clamp-load','clamp-call','thinking','headers','delegate'];
+  const detailWithPhase = stage === 'prepare' && prepared.includes(phase) ? { ...detail, phase } : detail;
   return { version:1, stage, category:!incomplete && !permanentRequestDiagnostic(detail, signal) && transient
-    ? 'transient_retryable' : 'permanent_failure', ...detail };
+    ? 'transient_retryable' : 'permanent_failure', ...detailWithPhase };
 }
-function requestFailureMessage(error, stage, signal) {
+function requestFailureMessage(error, stage, signal, phase) {
   if (error === completionAlreadyAccepted) return 'COMPLETION_ALREADY_ACCEPTED';
   const hostCode = error && typeof error === 'object' ? hostFailures.get(error) : undefined;
-  return hostCode ?? 'PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=' + JSON.stringify(requestDiagnostic(error, stage, signal));
+  return hostCode ?? 'PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=' + JSON.stringify(requestDiagnostic(error, stage, signal, phase));
 }
 function failRequest(error, stage, signal) {
   // Host identities and already projected diagnostics survive shared-reader catches.
@@ -134,7 +141,13 @@ export function assertPiAnthropicThinkingBudget(model, options, effectiveMaxToke
 }
 `;
 
-/** Pi 1.5.2's public provider streamSimple extension runs before SDK HTTP generation. */
+/**
+ * 同一份预算扩展会挂在两个运行时上：Pi 1.6.0 自带平铺的 pi-ai 1.6.0，
+ * DSH 的锁版本 vendor bundle 仍是 pi-ai 1.5.2。只接受这两个已核对的版本。
+ */
+export const PI_MAIN_BUDGET_SDK_VERSIONS = Object.freeze(['1.6.1', '1.6.0', '1.5.2']);
+
+/** Pi 1.6.0's public provider streamSimple extension runs before SDK HTTP generation. */
 export const PI_MAIN_REQUEST_BUDGET_SOURCE = String.raw`
 import { createAssistantMessageEventStream, streamSimple as sdkStreamSimple } from '@earendil-works/pi-ai/compat';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -149,7 +162,7 @@ ${PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE}
 // Resolve the SDK's declared public export from the fixed, lockfile-installed runtime.
 // createRequire.resolve cannot resolve this package's import-only export conditions.
 // base 镜像把依赖平铺进 npm 全局根；kali-minimal 只全局安装 CLI，pi-ai 嵌在其包目录下。
-// 先从运行中的 pi bundle 反推嵌套根，再回退平铺根；两者都要过 1.5.2 身份校验。
+// 先从运行中的 pi bundle 反推嵌套根，再回退平铺根；两者都要过 PI_MAIN_BUDGET_SDK_VERSIONS 身份校验。
 import { existsSync, realpathSync } from 'node:fs';
 export function piAiCandidateRoots(cliEntry = process.argv[1] ?? '') {
   const roots = [];
@@ -164,15 +177,22 @@ export function piAiCandidateRoots(cliEntry = process.argv[1] ?? '') {
   return roots;
 }
 export async function loadPiContextClamp(root) {
+  // #1228: 每一步映射成稳定宿主错误码，外部对象没有 name/code 也不会丢诊断。
   const candidates = root ? [root] : piAiCandidateRoots().filter((candidate) => existsSync(candidate + '/package.json'));
   const resolved = candidates[0];
-  if (!resolved) fail('PI_MAIN_BUDGET_SDK_VERSION');
-  root = resolved;
-  const manifest = JSON.parse(await readFile(root + '/package.json', 'utf8'));
-  if (manifest.name !== '@earendil-works/pi-ai' || manifest.version !== '1.5.2') fail('PI_MAIN_BUDGET_SDK_VERSION');
+  if (!resolved) fail('PI_MAIN_BUDGET_CLAMP_NO_CANDIDATE');
+  let raw;
+  try { raw = await readFile(resolved + '/package.json', 'utf8'); }
+  catch { fail('PI_MAIN_BUDGET_CLAMP_MANIFEST_READ_FAILED'); }
+  let manifest;
+  try { manifest = JSON.parse(raw); }
+  catch { fail('PI_MAIN_BUDGET_CLAMP_MANIFEST_PARSE_FAILED'); }
+  if (manifest?.name !== '@earendil-works/pi-ai' || !SDK_VERSIONS.includes(manifest.version)) fail('PI_MAIN_BUDGET_SDK_VERSION');
   const entry = manifest.exports?.['./api/*']?.import;
   if (typeof entry !== 'string' || !entry.startsWith('./') || entry.includes('..')) fail('PI_MAIN_BUDGET_SDK_EXPORT');
-  const sdk = await import(pathToFileURL(root + '/' + entry.replace('*','simple-options')).href);
+  let sdk;
+  try { sdk = await import(pathToFileURL(resolved + '/' + entry.replace('*','simple-options')).href); }
+  catch { fail('PI_MAIN_BUDGET_CLAMP_IMPORT_FAILED'); }
   if (typeof sdk.clampMaxTokensToContext !== 'function') fail('PI_MAIN_BUDGET_SDK_EXPORT');
   return sdk.clampMaxTokensToContext;
 }
@@ -353,10 +373,12 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
         const output = createAssistantMessageEventStream();
         void (async () => {
           let stage = 'prepare';
+          // #1228: prepare 窗口里有多个检查点，用 phase 区分到底是哪一步失败。
+          let phase = 'identity';
           const failureEvent = error => ({ type: 'error', reason: 'error', error: {
             role: 'assistant', content: [], api: requestedModel.api, provider: requestedModel.provider, model: requestedModel.id,
             usage: { input:0, output:0, cacheRead:0, cacheWrite:0, totalTokens:0, cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0} },
-            stopReason:'error', errorMessage:requestFailureMessage(error, stage, options?.signal), timestamp:Date.now(),
+            stopReason:'error', errorMessage:requestFailureMessage(error, stage, options?.signal, phase), timestamp:Date.now(),
           } });
           try {
             if (requestedModel.provider !== identity.provider || requestedModel.id !== identity.id
@@ -367,6 +389,7 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
             // Resolve through the existing registry before projecting any input.
             const omModel = ctx.modelRegistry.getAll().find(entry => entry.provider === OM_PROVIDER);
             if (omModel) {
+              phase = 'om-auth';
               const auth = await ctx.modelRegistry.getApiKeyAndHeaders(omModel);
               if (auth?.ok !== true || typeof auth.apiKey !== 'string' || !auth.apiKey) fail('PI_MAIN_BUDGET_OM_AUTH_INVALID');
               requestSecrets.push(auth.apiKey);
@@ -379,19 +402,39 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
               stage = 'allowance';
               const allowance = await readMainAllowance(gateway, token, options?.signal);
               stage = 'prepare';
+              phase = 'prepare';
               const prepared = preparePiMainSdkRequest(requestedModel, options, allowance);
               if (allowance.policy_required && requestedModel.api === 'anthropic-messages' && requestedModel.reasoning && options?.reasoning
                 && requestedModel.compat?.forceAdaptiveThinking !== true && requestedModel.compat?.supportsMidConvoEffort !== true) {
-                contextClamp ??= loadPiContextClamp();
-                const clamp = await contextClamp;
-                assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamp(prepared.model, safeContext, prepared.options.maxTokens));
+                phase = 'clamp-load';
+                try {
+                  contextClamp ??= loadPiContextClamp();
+                  const clamp = await contextClamp;
+                  phase = 'clamp-call';
+                  const clamped = clamp(prepared.model, safeContext, prepared.options.maxTokens);
+                  phase = 'thinking';
+                  assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamped);
+                } catch (error) {
+                  // #1228: 这一段失败时，既保留分段宿主码（便于稳定识别），
+                  // 也让原始错误名进入诊断（名称是标识符，不含正文）。
+                  if (error && typeof error === 'object' && hostFailures.has(error)) throw error;
+                  // 只在没有既有 reason 时补标：内层宿主码（如 THINKING_MINIMUM）与 SDK 自带 reason
+                  // 都是更精确的失败原因，不能被这里覆盖；只读对象写不进去也不算新失败。
+                  if (error && typeof error === 'object' && error.reason == null) {
+                    try { error.reason = 'PI_MAIN_BUDGET_CLAMP_BLOCK_FAILED'; } catch { /* 只读错误对象保持原样 */ }
+                  }
+                  if (error && typeof error === 'object') throw error;
+                  fail('PI_MAIN_BUDGET_CLAMP_BLOCK_FAILED');
+                }
               }
+              phase = 'headers';
               const requestId = randomUUID();
               const headers = Object.fromEntries(Object.entries(prepared.options?.headers ?? {})
                 .filter(([name]) => !['x-deepsonar-request-id','x-deepsonar-retry-of'].includes(name.toLowerCase())));
               headers['x-deepsonar-request-id'] = requestId;
               if (retryOf) headers['x-deepsonar-retry-of'] = retryOf;
               let failure, pendingStart, thrownDiagnostic, visible = false;
+              phase = 'delegate';
               stage = 'sdk';
               try {
                 options?.signal?.throwIfAborted();

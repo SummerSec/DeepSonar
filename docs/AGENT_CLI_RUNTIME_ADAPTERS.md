@@ -467,9 +467,9 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 - 历史 DSH 夹具 `dsh-0.1.1-rc.2.*` 仅用于旧归档/解码回归，不代表当前 launcher 或 live capture。
 
 夹具覆盖文本/增量、工具调用结果、错误、usage、Session 身份、未知/损坏帧，以及伪造 `mcp__deepsonar-control__*` 工具名。普通输出或伪造 tool call **不会**变成控制语义事件；语义写入只走 Job 级 HTTP API。不承诺识别任意上游私有客户端策略。
-### Pi 1.5.2 的消息起始事件（#1141）
+### Pi 1.6.0 的消息起始事件（#1141）
 
-Pi 1.5.2 对 `assistant` / `user` / `toolResult` 都发顶层 `message_start`（`core/agent-session.js`
+Pi 1.6.0 对 `assistant` / `user` / `toolResult` 都发顶层 `message_start`（`core/agent-session.js`
 按角色分别处理，`modes/json-event.js` 原样透传）。`decodePi` 只用 assistant 起始打开消息输出基线，
 其它角色按已知会话边界返回空；工具结果仍由 `tool_execution_end` 产生宿主事件。
 

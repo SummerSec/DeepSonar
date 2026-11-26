@@ -18,7 +18,7 @@ export async function runHumanNativePiImport() {
   writeFileSync(moduleFile,stripTypeScriptTypes(readFileSync(path.join(sourceDir,"human-session-import.ts"),"utf8"),{mode:"transform"}));
   const {projectNativeHumanSession}=await import(pathToFileURL(moduleFile).href);
   const {executable,metadata}=resolvePiPackage();
-  assert.equal(metadata.version,"1.5.2");
+  assert.equal(metadata.version,"1.6.1");
   const calls=[];
   let acceptedWaits=0, acknowledgedReplies=0;
   let acceptWait;
@@ -78,7 +78,7 @@ export async function runHumanNativePiImport() {
     const originalRows=original.trim().split("\n").map(line=>JSON.parse(line));
     assert.ok(originalRows.some(row=>row.message?.content?.some?.(block=>block.type==='toolCall')));
     assert.ok(!originalRows.some(row=>row.message?.role==='toolResult'),'stop before tool result is written');
-    const projected=projectNativeHumanSession("pi","1.5.2",before.data.sessionId,original);
+    const projected=projectNativeHumanSession("pi","1.6.1",before.data.sessionId,original);
     assert.equal(projected.status,"supported");
     assert.doesNotMatch(projected.content,/old-control-identity/);
     // Pi migrates agent-root JSONL files before resolving --session. Use the

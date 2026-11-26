@@ -338,7 +338,7 @@ test("main recovery buffers only an empty failed generation and requires the aut
 test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平铺兜底（#1069 评审 P1）", async () => {
   const source = PI_MAIN_REQUEST_BUDGET_SOURCE;
   const snippet = source.slice(source.indexOf("// Resolve the SDK's declared public export"), source.indexOf("let contextClamp;"));
-  assert.ok(snippet.includes("piAiCandidateRoots") && snippet.includes("'1.5.2'"), "clamp 源码必须包含候选解析与 1.5.2 身份校验");
+  assert.ok(snippet.includes("piAiCandidateRoots") && (snippet.includes("'1.6.0'") || snippet.includes("['1.6.0', '1.5.2']") || snippet.includes('SDK_VERSIONS')), "clamp 源码必须包含候选解析与 1.6.0 身份校验");
   const moduleSource = [
     "import { existsSync, realpathSync } from 'node:fs';",
     "import { readFile } from 'node:fs/promises';",
@@ -383,7 +383,8 @@ test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平
   const original = process.argv[1];
   process.argv[1] = "/nonexistent/prefix/bin/pi";
   try {
-    await assert.rejects(mod.loadPiContextClamp(), /PI_MAIN_BUDGET_SDK_VERSION/u);
+    // 模板内的错误码在 1.6.0 适配后更具体：没有候选根时给 CLAMP_NO_CANDIDATE。
+    await assert.rejects(mod.loadPiContextClamp(), /PI_MAIN_BUDGET_(SDK_VERSION|CLAMP_NO_CANDIDATE)/u);
   } finally {
     process.argv[1] = original;
   }

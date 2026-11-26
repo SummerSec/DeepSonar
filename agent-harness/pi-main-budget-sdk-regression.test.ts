@@ -16,7 +16,7 @@ const root = path.resolve(process.env.PI_MAIN_BUDGET_SDK_ROOT ?? fileURLToPath(n
 async function loadRealSdkExtension() {
   const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.name, "@earendil-works/pi-ai");
-  assert.equal(manifest.version, "1.5.2", "test the locked production SDK, never an ambient dependency");
+  assert.equal(manifest.version, "1.6.1", "test the locked production SDK, never an ambient dependency");
   const compatUrl = pathToFileURL(path.join(root, manifest.exports["./compat"].import)).href;
   const source = PI_MAIN_REQUEST_BUDGET_SOURCE
     .replace("'@earendil-works/pi-ai/compat'", JSON.stringify(compatUrl))
@@ -75,7 +75,8 @@ test("#1032 locked pi-ai sends a credential-free context while preserving reques
   try {
     const context = { messages: [{ role: "user", content: 'tool error: synthetic-control-token; auth.json {"key":"synthetic-main-token","om":"synthetic-om-token"}; 界🙂', timestamp: 1 }] };
     const before = structuredClone(context);
-    assert.equal((await f.request({}, context)).at(-1).type, "done");
+    const first = await f.request({}, context);
+    assert.equal(first.at(-1).type, "done", `events=${JSON.stringify(first.map((e: any) => ({ type: e.type, error: e.error?.errorMessage })))}`);
     assert.equal(f.bodies.length, 1);
     assert.doesNotMatch(JSON.stringify(f.bodies[0]), /synthetic-(?:main|control|om)-token/u);
     assert.match(JSON.stringify(f.bodies[0]), /\[REDACTED\]/u);
@@ -84,7 +85,7 @@ test("#1032 locked pi-ai sends a credential-free context while preserving reques
   } finally { await f.close(); }
 });
 
-test("real pi-ai 1.5.2 nonadaptive thinking refuses insufficient allowance and context before HTTP", async () => {
+test("real pi-ai 1.6.1 nonadaptive thinking refuses insufficient allowance and context before HTTP", async () => {
   const f = await fixture();
   try {
     for (const cap of [32, 1024, 1025, 2047]) {
@@ -95,7 +96,8 @@ test("real pi-ai 1.5.2 nonadaptive thinking refuses insufficient allowance and c
     }
     for (const cap of [2048, 2049]) {
       f.allowance(cap);
-      assert.equal((await f.request()).at(-1).type, "done");
+      const completed = await f.request();
+      assert.equal(completed.at(-1).type, "done", `cap=${cap} events=${JSON.stringify(completed.map((e: any) => ({ type: e.type, error: e.error?.errorMessage })))}`);
       const body = f.bodies.at(-1);
       assert.equal(body.max_tokens, cap);
       assert.equal(body.thinking.type, "enabled");
@@ -174,7 +176,8 @@ test("real pi-ai adaptive branches retain reasoning across the legacy threshold 
     try {
       for (const cap of [1, 32, 2047, 2048, 2049]) {
         f.allowance(cap);
-        assert.equal((await f.request()).at(-1).type, "done");
+        const completed = await f.request();
+      assert.equal(completed.at(-1).type, "done", `cap=${cap} events=${JSON.stringify(completed.map((e: any) => ({ type: e.type, error: e.error?.errorMessage })))}`);
         const body = f.bodies.at(-1);
         assert.equal(body.max_tokens, cap);
         assert.equal(body.thinking.type, "adaptive");

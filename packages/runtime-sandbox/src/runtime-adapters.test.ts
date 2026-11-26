@@ -582,7 +582,7 @@ test("Pi RPC response failures remain failed through settlement", () => {
   assert.equal(settled[0]?.is_error, true);
 });
 
-test("#1141 Pi 1.5.2 的 user/toolResult message_start 是已知会话边界，不再记成 unrecognized_stream_type", () => {
+test("#1141 Pi 1.6.0 的 user/toolResult message_start 是已知会话边界，不再记成 unrecognized_stream_type", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const state = {};
   for (const role of ["assistant", "user", "toolResult", "custom"]) {
@@ -609,7 +609,7 @@ test("#1141 Pi 1.5.2 的 user/toolResult message_start 是已知会话边界，�
       warnings.push(...mapCliEvent(event, () => {}).warnings);
     }
   }
-  assert.deepEqual(warnings, [], "1.5.2 的会话边界序列不应产生任何 unknown_runtime_event");
+  assert.deepEqual(warnings, [], "1.6.0 的会话边界序列不应产生任何 unknown_runtime_event");
 });
 
 test("适配器只接受带完整身份的压缩事件，缺字段时记录未知", () => {
@@ -847,7 +847,7 @@ function loadJsonlFixture(name: string): Record<string, unknown>[] {
 
 test("Pi terminal-error runtime fixture covers required decode fields and unknown frames", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
-  assert.equal(adapter.version, "1.5.2");
+  assert.equal(adapter.version, "1.6.0");
   const state: Record<string, unknown> = {};
   const decoded = loadJsonlFixture("pi-0.84.4.runtime.jsonl").flatMap((line) => adapter.decodeOutput(line, state));
   assert.equal(state.sessionId, "pi-sess-0844");
