@@ -25,6 +25,13 @@ let refreshRequestsDueKick = false;
 let kick: (() => void) | null = null;
 
 /** #1287：知识唤醒的集合策略查询很重，按最小间隔回库，不再每次刷新都重跑。 */
+/** 测试缝：注入知识探测，避免依赖真实 audit_logs 慢查询。 */
+let knowledgeProbeForTests: (() => Promise<Date | null>) | null = null;
+
+export function setKnowledgeWakeProbeForTests(probe: (() => Promise<Date | null>) | null): void {
+  knowledgeProbeForTests = probe;
+}
+
 let knowledgeProbe: KnowledgeWakeProbeState = { wakeAt: null, probedAt: 0, firedFor: null, refreshRequested: true };
 /** #1287：查询在途期间到来的刷新请求要保留，不能被旧结果覆盖掉。 */
 let refreshGeneration = 0;
@@ -119,11 +126,11 @@ export function earlierDeadline(current: number | null, candidate: number | null
 let taskRefreshInFlight: Promise<void> | null = null;
 let knowledgeProbeInFlight: Promise<void> | null = null;
 
-async function refreshTaskDeadlines(): Promise<void> {
+async function refreshTaskDeadlines(db: typeof sql): Promise<void> {
   if (taskRefreshInFlight) return taskRefreshInFlight;
   taskRefreshInFlight = (async () => {
     try {
-      const rows = await sql`
+      const rows = await db`
         SELECT c.target_json
         FROM jobs j
         INNER JOIN canvases c ON c.id = j.canvas_id
@@ -182,7 +189,7 @@ async function probeKnowledgeDeadline(now: number, generation: number):
     if (ms <= now) return { nearest: null, due: knowledgeProbe.firedFor !== ms, stale: false };
     return { nearest: ms, due: false, stale: false };
   }
-  const wake = await readNextKnowledgeWake(sql);
+  const wake = knowledgeProbeForTests ? await knowledgeProbeForTests() : await readNextKnowledgeWake(sql);
   if (refreshGeneration !== generation) return { nearest: null, due: false, stale: true };
   const ms = wake ? wake.getTime() : null;
   knowledgeProbe = { wakeAt: ms, probedAt: now, refreshRequested: false,
@@ -192,10 +199,11 @@ async function probeKnowledgeDeadline(now: number, generation: number):
 }
 
 /** Scan pending task and knowledge schedules and arm their nearest durable deadline. */
-export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boolean }): Promise<void> {
+export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boolean },
+  db: typeof sql = sql): Promise<void> {
   if (options?.kickDueTasks !== false) refreshRequestsDueKick = true;
   // 普通扫描先跑并且可以独立完成：知识探测再慢也不会挡住下一次普通挂表。
-  await refreshTaskDeadlines();
+  await refreshTaskDeadlines(db);
   if (options?.kickDueTasks !== false) {
     // 定时器触发的路径需要尽快返回；知识探测在后台单飞，结果只用于把定时器提前。
     void refreshKnowledgeDeadline();
