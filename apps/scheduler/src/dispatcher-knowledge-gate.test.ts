@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {claimThenTickKnowledge, tickKnowledgeBeforeDispatch} from './dispatcher-knowledge-gate.js';
+import {claimThenTickKnowledge, requestKnowledgeAdvance, tickKnowledgeBeforeDispatch} from './dispatcher-knowledge-gate.js';
 test('maintenance stopped entry never loads knowledge scheduler',async()=>{
   assert.equal(await tickKnowledgeBeforeDispatch(()=>true,async()=>{throw Error('must not load');}),false);
 });
@@ -51,4 +51,29 @@ test("#1287 停机后不再进入知识推进，但已领取的任务照常返�
     () => undefined,
     async () => { throw new Error("must not load knowledge scheduler after stop"); });
   assert.equal(count, 1);
+});
+
+test("#1287 知识推进在后台单飞，不阻塞随后到达的领取", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let ticks = 0;
+  const first = requestKnowledgeAdvance(() => false, async () => ({
+    tick: async () => { ticks += 1; await gate; return 1; } }));
+  const second = requestKnowledgeAdvance(() => false, async () => ({
+    tick: async () => { ticks += 1; return 1; } }));
+  assert.equal(first, second, "同一时刻只有一个知识 tick（单飞）");
+  // 调用方不必 await：慢查询挂住时 dispatchOnce 已经返回，下一次 kick 仍能先领取。
+  let settled = false;
+  void first.then(() => { settled = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(settled, false, "知识 tick 未返回时不应阻塞调用方");
+  release();
+  await first;
+  assert.equal(ticks, 1);
+  // 停机后不再加载知识调度器。
+  let loaded = false;
+  await requestKnowledgeAdvance(() => true, async () => { loaded = true; return { tick: async () => 0 }; });
+  assert.equal(loaded, false);
+  // 知识侧失败只记日志，不抛出。
+  await requestKnowledgeAdvance(() => false, async () => ({ tick: async () => { throw new Error("collection failed"); } }));
 });

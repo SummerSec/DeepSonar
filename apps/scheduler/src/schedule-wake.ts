@@ -94,6 +94,37 @@ export function clearScheduleWake(): void {
   clearArmedTimer();
 }
 
+function scanTaskDeadlines(rows: { target_json?: unknown }[], now: number): { nearest: number | null; hasDue: boolean } {
+  let nearest: number | null = null;
+  let hasDue = false;
+  for (const row of rows) {
+    const start = readScheduleStartAt(row.target_json);
+    if (!start) continue;
+    const ms = start.getTime();
+    if (ms <= now) { hasDue = true; continue; }
+    if (nearest == null || ms < nearest) nearest = ms;
+  }
+  return { nearest, hasDue };
+}
+
+/** 知识侧只决定「是否需要回库、到期没到期」；调用前普通任务的定时器已经装好。 */
+async function probeKnowledgeDeadline(now: number, generation: number):
+  Promise<{ nearest: number | null; due: boolean; stale: boolean }> {
+  if (!shouldProbeKnowledgeWake(knowledgeProbe, now)) {
+    const ms = knowledgeProbe.wakeAt;
+    if (ms == null) return { nearest: null, due: false, stale: false };
+    if (ms <= now) return { nearest: null, due: knowledgeProbe.firedFor !== ms, stale: false };
+    return { nearest: ms, due: false, stale: false };
+  }
+  const wake = await readNextKnowledgeWake(sql);
+  if (refreshGeneration !== generation) return { nearest: null, due: false, stale: true };
+  const ms = wake ? wake.getTime() : null;
+  knowledgeProbe = { wakeAt: ms, probedAt: now, refreshRequested: false,
+    firedFor: ms != null && ms <= now ? ms : knowledgeProbe.firedFor };
+  if (ms == null) return { nearest: null, due: false, stale: false };
+  return ms <= now ? { nearest: null, due: true, stale: false } : { nearest: ms, due: false, stale: false };
+}
+
 /** Scan pending task and knowledge schedules and arm their nearest durable deadline. */
 export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boolean }): Promise<void> {
   if (options?.kickDueTasks !== false) refreshRequestsDueKick = true;
@@ -110,43 +141,18 @@ export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boole
           AND c.status = 'active'
           AND c.target_json->'schedule'->>'start_at' IS NOT NULL
         LIMIT 500`;
-      let nearest: number | null = null;
-      let hasDue = false;
       const now = Date.now();
-      for (const row of rows) {
-        const start = readScheduleStartAt(row.target_json);
-        if (!start) continue;
-        const ms = start.getTime();
-        if (ms <= now) {
-          hasDue = true;
-          continue;
-        }
-        if (nearest == null || ms < nearest) nearest = ms;
-      }
-      let knowledgeDue = false;
-      if (shouldProbeKnowledgeWake(knowledgeProbe, now)) {
-        const knowledgeWake = await readNextKnowledgeWake(sql);
-        // 查询在途期间有新请求进来：旧结果一律丢弃，稍后重新查。
-        if (refreshGeneration !== generation) {
-          stale = true;
-        } else {
-          const ms = knowledgeWake ? knowledgeWake.getTime() : null;
-          knowledgeProbe = { wakeAt: ms, probedAt: now, refreshRequested: false,
-            firedFor: ms != null && ms <= now ? ms : knowledgeProbe.firedFor };
-          if (ms != null) {
-            if (ms <= now) knowledgeDue = true;
-            else if (nearest == null || ms < nearest) nearest = ms;
-          }
-        }
-      } else if (knowledgeProbe.wakeAt != null) {
-        const ms = knowledgeProbe.wakeAt;
-        // 同一条到期只 kick 一次，不能靠缓存反复触发。
-        if (ms <= now && knowledgeProbe.firedFor !== ms) knowledgeDue = true;
-        else if (ms > now && (nearest == null || ms < nearest)) nearest = ms;
-      }
+      const tasks = scanTaskDeadlines(rows as { target_json?: unknown }[], now);
+      // #1287：普通任务的到期先装上，知识查询再慢也不影响普通任务按时启动。
+      if (tasks.nearest != null) armTimer(tasks.nearest);
+      else clearArmedTimer();
+      const knowledge = await probeKnowledgeDeadline(now, generation);
+      stale = knowledge.stale;
+      const nearest = knowledge.nearest != null && (tasks.nearest == null || knowledge.nearest < tasks.nearest)
+        ? knowledge.nearest : tasks.nearest;
       if (nearest != null) armTimer(nearest);
       else clearArmedTimer();
-      if (knowledgeDue || (hasDue && refreshRequestsDueKick)) fireKick();
+      if (knowledge.due || (tasks.hasDue && refreshRequestsDueKick)) fireKick();
     } catch (error) {
       console.error("[schedule-wake] refresh failed:", error);
     } finally {
