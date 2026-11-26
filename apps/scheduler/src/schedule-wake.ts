@@ -28,6 +28,11 @@ let kick: (() => void) | null = null;
 /** 测试缝：注入知识探测，避免依赖真实 audit_logs 慢查询。 */
 let knowledgeProbeForTests: (() => Promise<Date | null>) | null = null;
 
+/** 仅测试用：读取当前已装的定时器时间。 */
+export function armedUntilForTests(): number | null {
+  return armedUntilMs;
+}
+
 export function setKnowledgeWakeProbeForTests(probe: (() => Promise<Date | null>) | null): void {
   knowledgeProbeForTests = probe;
 }
