@@ -6,7 +6,6 @@ import { persistPreparedJob } from "./job-creation.js";
 import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { freezeProjectKnowledgeCatalog } from "./domains/project-knowledge/catalog-snapshot.js";
 import { onKnowledgeJobTerminal } from "./domains/project-knowledge/recovery.js";
-import { registerKnowledgeSourceAfterTerminal } from "./domains/project-knowledge/automatic.js";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
@@ -1467,7 +1466,6 @@ export async function finalizeJob(
     }
   }
 
-  await registerKnowledgeSourceAfterTerminal(tx as unknown as typeof sql, jobId, status);
   if (job && await onKnowledgeJobTerminal(tx as unknown as typeof sql, job as { id: unknown }, status)) return true;
 
   // Report Job：成功写产物并把 Root 置 succeeded；失败走有界再派或 Root report_failed

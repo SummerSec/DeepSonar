@@ -8,6 +8,8 @@ import { submitTaskKnowledgeSuggestion } from "./closeout-intake.js";
 import { taskKnowledgeLogicalKey } from "./task-knowledge-ingest.js";
 import { freezeProjectKnowledgeCatalog } from "./catalog-snapshot.js";
 import { createProjectKnowledgeApplication } from "./application.js";
+import { readNextKnowledgeWake } from "../../knowledge-wake.js";
+import { collectProjectKnowledgeSources } from "./collector.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./test-support.js";
 
 const H = "f".repeat(64);
@@ -147,5 +149,111 @@ test("task knowledge ingestion is retrievable across tasks, project-scoped and l
     } finally {
       setSharedAssetBlobStoreForTests(null);
     }
+  });
+});
+
+test("restricted closeout versions stay hidden in the same project and queued work still wakes", async () => {
+  await withKnowledgeDatabase(async db => {
+    const blobs = new Map<string, Buffer>();
+    setSharedAssetBlobStoreForTests({ kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async key => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async key => blobs.has(key), materializeLocal: async () => { throw new Error("unused"); } });
+    const app = createProjectKnowledgeApplication({ db: db as never, governanceHash: H });
+    const sql = db as unknown as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>;
+    const writer = await seedKnowledgeJob(db, undefined, [operation]);
+    const fact = await seedFact(db as never, writer, 1);
+    const receipt = await submit(db as never, writer, { title: "受控来源样例", content: "只应给有权者看", factRef: fact });
+    assert.equal(receipt.accepted, true);
+    const [item] = await sql`SELECT id, active_version_id FROM project_knowledge_items WHERE project_id=${writer.projectId}`;
+    // 把这条已入库的版本标成「任务沉淀送评的私有版本」。
+    const [work] = await sql`INSERT INTO project_knowledge_work(project_id,origin_job_id,trigger_key,governance_hash,state)
+      VALUES(${writer.projectId},${writer.jobId},${"knowledge:closeout-evaluation:fixture-1"},${H},'running') RETURNING id`;
+    await sql`INSERT INTO project_knowledge_proposals(project_id,work_id,action,state,revision,candidate_version_id,
+      maker_job_id,idempotency_key,request_digest,input_digest,reason)
+      VALUES(${writer.projectId},${work!.id},'create','candidate',1,${item!.active_version_id},${writer.jobId},
+      ${randomUUID()},${H},${H},'fixture')`;
+    const reader = await seedKnowledgeJob(db, writer.projectId, ["search_project_knowledge", "read_project_knowledge"]);
+    const catalog = await freezeProjectKnowledgeCatalog(db as never, writer.projectId);
+    await sql`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge", "read_project_knowledge"],
+      project_knowledge_catalog: catalog } as never)} WHERE id=${reader.jobId}`;
+    const found = await app.invoke({ jobId: reader.jobId, projectId: writer.projectId, canvasId: reader.canvasId,
+      operationId: "search_project_knowledge", input: { query: "受控" }, eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
+    assert.deepEqual(found.items, [], "受限来源不能出现在同项目的检索结果里");
+    // 切换前登记的来源：走真实 collector 入口处理一次，证明旧路径仍能把积压收尾。
+    // 先把上面那条 running 的私有 work 收尾：同一项目只允许一条 running。
+    await sql`UPDATE project_knowledge_work SET state='completed' WHERE id=${work!.id}`;
+    await sql`UPDATE jobs SET status='succeeded',
+      agent_snapshot_json=${db.json({ platform_tools: ["request_project_knowledge"] } as never)} WHERE id=${writer.jobId}`;
+    await sql`UPDATE job_attempts SET status='succeeded', phase='terminal' WHERE job_id=${writer.jobId}`;
+    await sql`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
+      VALUES('system','scheduler','project_knowledge.source_registered',${writer.projectId},'job',${writer.jobId},'ok',now()-interval '30 days')`;
+    const created = await collectProjectKnowledgeSources(db as never, H);
+    assert.equal(typeof created, "number", "collector 入口返回处理数");
+    const [collected] = await sql`SELECT id FROM audit_logs WHERE project_id=${writer.projectId}
+      AND resource_id=${writer.jobId} AND action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`;
+    assert.ok(collected, "切换前登记的来源必须被 collector 收尾（纳入整理或明确跳过）");
+    const [stillRegistered] = await sql`SELECT id FROM audit_logs WHERE project_id=${writer.projectId}
+      AND resource_id=${writer.jobId} AND action='project_knowledge.source_registered'`;
+    assert.ok(stillRegistered, "历史登记审计必须保持可查");
+    // 切换后排队的工作仍有唤醒时间。
+    await sql`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state,next_attempt_at)
+      VALUES(${writer.projectId},${"knowledge:collect:fixture-2"},${H},'pending',now())`;
+    const wake = await readNextKnowledgeWake(db as never);
+    assert.ok(wake instanceof Date && Number.isFinite(wake.getTime()), "在途/排队的知识工作仍应有唤醒时间");
+  });
+});
+
+test("published versions resolve source authorization from the original governance manifest", async () => {
+  await withKnowledgeDatabase(async db => {
+    const sql = db as unknown as (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>;
+    const app = createProjectKnowledgeApplication({ db: db as never, governanceHash: H });
+    const owner = await seedKnowledgeJob(db, undefined, [operation]);
+    // 真实的 artifact_evidence 形状：artifacts(job) + artifact_evidence(row)，引用就是这个 row 的 id。
+    const governance = await seedKnowledgeJob(db, owner.projectId, [operation]);
+    const [artifact] = await sql`INSERT INTO artifacts (id, project_id, job_id, artifact_key, kind, source_operation)
+      VALUES (gen_random_uuid(), ${owner.projectId}, ${governance.jobId}, 'governed-evidence', 'fact', 'emit_fact') RETURNING id`;
+    const [evidence] = await sql`INSERT INTO artifact_evidence (id, artifact_id, statement, kind)
+      VALUES (gen_random_uuid(), ${String(artifact?.id)}, '治理资料里的观测', 'observation') RETURNING id`;
+    const evidenceId = String(evidence?.id), sourceHash = "a".repeat(64);
+    await sql`INSERT INTO shared_asset_blobs (content_sha256, bytes, content_type, blob_uri)
+      VALUES (${"c".repeat(64)}, 64, 'application/json', ${"test://cc"})`;
+    const [item] = await sql`INSERT INTO project_knowledge_items (id, project_id, kind, logical_key, title)
+      VALUES (gen_random_uuid(), ${owner.projectId}, 'memory', 'governed-source', '治理来源知识') RETURNING id`;
+    const [version] = await sql`INSERT INTO project_knowledge_versions (id, project_id, item_id, version, content_sha256,
+      creator_job_id, creator_attempt_id, sources_json, governance_hash)
+      VALUES (gen_random_uuid(), ${owner.projectId}, ${String(item?.id)}, 1, ${"c".repeat(64)}, ${governance.jobId},
+        ${governance.attemptId}, ${db.json([{ kind: "evidence", ref: evidenceId, content_hash: sourceHash }] as never)},
+        ${"c".repeat(64)}) RETURNING id`;
+    await sql`UPDATE project_knowledge_items SET active_version_id=${String(version?.id)}, status='active'
+      WHERE id=${String(item?.id)}`;
+    const [work] = await sql`INSERT INTO project_knowledge_work (project_id, trigger_key, state, stage, governance_hash)
+      VALUES (${owner.projectId}, ${"knowledge:collect:" + governance.jobId}, 'completed', 'settle', ${"d".repeat(64)})
+      RETURNING id`;
+    await sql`INSERT INTO project_knowledge_job_assignments (job_id, project_id, work_id, stage)
+      VALUES (${governance.jobId}, ${owner.projectId}, ${String(work?.id)}, 'maker')`;
+    const catalog = await freezeProjectKnowledgeCatalog(db as never, owner.projectId);
+    const search = async (job: { jobId: string; canvasId: string }) => {
+      await sql`UPDATE jobs SET agent_snapshot_json=${db.json({
+        platform_tools: ["search_project_knowledge"], project_knowledge_catalog: catalog } as never)} WHERE id=${job.jobId}`;
+      return app.invoke({ jobId: job.jobId, projectId: owner.projectId, canvasId: job.canvasId,
+        operationId: "search_project_knowledge", input: { query: "治理" }, eventId: randomUUID(),
+        tokenId: randomUUID(), idempotencyKey: null });
+    };
+    const ordinary = await seedKnowledgeJob(db, owner.projectId, ["search_project_knowledge"]);
+    assert.deepEqual(((await search(ordinary)).items as unknown[]).length, 0, "无权的同项目任务看不到治理来源条目");
+    const assign = async (stage: string, manifest: unknown[]) => {
+      const reader = await seedKnowledgeJob(db, owner.projectId, ["search_project_knowledge"]);
+      const [readerWork] = await sql`INSERT INTO project_knowledge_work (project_id, trigger_key, state, stage, governance_hash)
+        VALUES (${owner.projectId}, ${"knowledge:collect:" + reader.jobId}, 'completed', 'settle', ${"e".repeat(64)}) RETURNING id`;
+      await sql`INSERT INTO project_knowledge_job_assignments (job_id, project_id, work_id, stage, input_manifest_json)
+        VALUES (${reader.jobId}, ${owner.projectId}, ${String(readerWork?.id)}, ${stage}, ${db.json(manifest as never)})`;
+      return search(reader);
+    };
+    const audienceOk = await assign("maker", [{ input_ref: `evidence:${evidenceId}`, content_hash: sourceHash, audience: ["maker"] }]);
+    assert.equal((audienceOk.items as unknown[]).length, 1, "冻结清单逐字命中且阶段在受众内时必须可见");
+    const wrongStage = await assign("reviewer", [{ input_ref: `evidence:${evidenceId}`, content_hash: sourceHash, audience: ["maker"] }]);
+    assert.equal((wrongStage.items as unknown[]).length, 0, "同一批次但不在受众里的任务不放行");
+    const wrongHash = await assign("maker", [{ input_ref: evidenceId, content_hash: "f".repeat(64), audience: ["maker"] }]);
+    assert.equal((wrongHash.items as unknown[]).length, 0, "哈希不一致不能当成同一来源");
   });
 });

@@ -18,6 +18,14 @@ Job 创建时冻结两类目录：
 
 读取时与当前有效权限取交集，先过滤再搜索、计数和分页。源/项目禁用 epoch、版本 revoke 和授权 revoke 只收紧。重新启用源或新建授权不会复活旧 Job。普通 retire 保留历史冻结版本可读，安全 revoke 则拒绝读取该版本。CAS 完整性失败必须显式拒绝。
 
+### 来源授权（#1286，2026-11-26）
+
+版本 `sources_json` 里的来源只用于**定位**（`evidence`→`artifacts.job_id`、`fact`→`canvas_nodes.canvas_id`、`task`→`jobs`），能否读该版本沿用**来源原有的授权**，不新定权限粒度：来源属于治理资料时，读者 Job 的冻结清单必须逐字包含该来源的 `input_ref` 与 `content_hash`，且读者当前阶段要在该来源的 `audience` 内——同一批次但不在受众里的任务不放行。
+
+- 普通已发布知识（来源是普通业务 Job）不受影响，管理 API 不为共享知识加额外审批；
+- 来源无法定位（引用已删除或解析失败）按原语义隐藏，不当作「没有受限来源」；
+- 归档不是撤权：只有原权限明确失效、来源不可用或真正撤销才隐藏。
+
 ## Agent 操作
 
 既有 `list_available_skills` / `search_skills` / `pull_skill` 返回当前 Job 可读 Skill；拉取返回稳定 `usage_ref`，不安装代码或扩大权限。项目 selector 为 `project:<item UUID>@<version>`。
@@ -156,6 +164,21 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 刻意没做：不给 `audit_logs` 加部分索引、不升 `SCHEMA_VERSION`——索引能否消除 `DISTINCT ON` 排序、重试来源的「取最新记录」路径都需要 `EXPLAIN (ANALYZE, BUFFERS)` 实测，缺证据就要求已有非空库受控重建不划算；索引与查询形态重写留作后续项。
 
+## 自动来源登记的退役（#1219 第四阶段第二步，2026-11-25）
+
+业务 Job 走到终态时不再自动写 `project_knowledge.source_registered` 审计，也不再发 `knowledge_source` 通知。原因：新路径已经可用——任务收尾提交的 Memory 会由 `submit_task_knowledge_suggestion` 直接入库并可被后续任务检索，用后必评写进了工具契约，知识卡片与版本反馈明细也已上线。
+
+保留的入口：
+
+- **任务会话收尾提交**（`submit_task_knowledge_suggestion`）：Memory 入库，Skill 仍走显式送评；
+- **显式 Skill 提交与治理评审**：候选、评估、复核、录用链路不变；
+- **任务沉淀送评**（`POST /projects/:id/knowledge/closeout/:rootId/evaluate`）与详情读取。
+
+**哪些来源不再自动收集**（需要明确列举）：未显式投稿的任务，即使它有 Fact、Evidence 或已接受的用后反馈，也不再自动进入旧采集链；只有显式 Memory 投稿（`submit_task_knowledge_suggestion`）会入库，Skill 仍走显式送评。切换前已登记的来源与在途 `project_knowledge_work` 继续按原样收尾（唤醒与采集代码保留），历史审计、证据与已发布版本保持可查。
+
+因此现在没有新的来源会进入旧采集链：`project_knowledge_work` 的自动准备行不再产生，采集与唤醒代码暂时保留（等在列表与审计里确认无消费方后，再按 #1219 第四阶段第三步删除，届时会移除 `GET /projects/:id/knowledge/backfill`，属破坏性变更）。
+
+历史 `source_registered` / `source_collected` 审计与既有 `project_knowledge_work` 记录保持只读，不改写。
 ## 验证与运维
 
 2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。
@@ -193,6 +216,8 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 当前 Job 可在显式授权后使用 `suggest_project_skills` 查看本项目精确 Skill 的条件匹配，再用 `record_skill_choice` 记录 select/reject/none。宿主重算和撤权复查；选择回执不生成 usage 或触发 work，实际拉取/反馈仍走原链路。作者条件、调用者目标和独立效果分开，token 余额与质量未知时不伪造证据。协议、非模型验收和后续边界见[Skill 建议专题](SKILL_SUGGESTIONS.md)。
 
 ## 来源登记与项目批量整理
+
+> #1219 第四阶段第二步起，业务 Job 终态不再自动登记来源；本节描述的批量整理链只继续收尾**切换前已登记**的来源与在途 work，第三步才会把 collector、collector-sources、collection-policy 与 `GET /projects/:id/knowledge/backfill` 整链移除。
 
 本轮用户明确授权自动项目整理，[ADR 0023](architecture/adr/0023-project-knowledge-collection.md) 取代 [0021](architecture/adr/0021-knowledge-source-preview.md) 中项目批处理暂缓的限制；0021 的历史决定保留。成功业务 Job 的登记仍仅在原终态事务/savepoint 中向 append-only `audit_logs` 写 `project_knowledge.source_registered`（`system/scheduler`、`result=ok`），记录 Job/Attempt/Canvas 与 Fact/Evidence 或已接受反馈的存在标记；不在终态事务中复制正文或创建模型 Job。登记失败隔离并告警，不回滚业务成功。登记不保证来源正文保留，不是候选或产物。
 

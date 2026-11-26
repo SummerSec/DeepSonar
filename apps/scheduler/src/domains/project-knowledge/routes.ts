@@ -2,13 +2,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "@deepsonar/shared-types";
 import { audit } from "../../audit.js";
-import { actorHasScope } from "../../auth.js";
+import { actorHasScope, type Actor } from "../../auth.js";
+import { readableVersionKeysJson, readableVersionSources } from "./version-visibility.js";
 import { sql } from "../../db.js";
 import { validationHttpError } from "../../http-validation-error.js";
 import { projectScopeAllows } from "../../project-scope.js";
 import { readKnowledgeBlob } from "./blobs.js";
 import type { KnowledgeDb } from "./types.js";
 import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
+import { actorMayReadGovernanceSources, resolveSourceOwners } from "./source-scope.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
 import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
 import { registerTaskKnowledgeCloseoutRoutes } from "./closeout-routes.js";
@@ -57,6 +59,16 @@ function access(req: FastifyRequest, reply: FastifyReply, projectId: string, wri
 
 // Evaluation-only drafts use the existing version store, but stay private to the
 // source-checked closeout detail. A revision must not hide the existing active item.
+/** 无权读原始资料的人看不到受限版本的来源字段（#1286）。 */
+function redactVersionSources(rows: Row[], actor: Actor | undefined): Row[] {
+  if (actor && actorHasScope(actor, "tasks:read")) return rows;
+  return rows.map((row) => {
+    const { sources_json: _sources, creator_job_id: _job, creator_attempt_id: _attempt, ...rest } = row;
+    // SAFETY: 只是删掉三个已知键，剩余键仍来自同一行查询结果（Row），结构不变。
+    return rest as Row;
+  });
+}
+
 function publicKnowledgeVersion(db: Db) {
   return db`NOT EXISTS (SELECT 1 FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
     WHERE p.project_id=v.project_id AND p.candidate_version_id=v.id AND w.trigger_key LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"})`;
@@ -72,25 +84,55 @@ async function itemFor(db: Db, projectId: string, itemId: string): Promise<Row |
   return item as Row | undefined;
 }
 
-async function versionFor(db: Db, projectId: string, itemId: string, versionId: string): Promise<Row | undefined> {
+async function versionFor(db: Db, projectId: string, itemId: string, versionId: string,
+  actor?: Actor): Promise<Row | undefined> {
+  const keysText = await readableVersionKeysJson(db, actor, projectId);
   const [version] = await db`SELECT v.* FROM project_knowledge_versions v
-    WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND v.id=${versionId} AND ${publicKnowledgeVersion(db)}`;
+    WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND v.id=${versionId} AND ${publicKnowledgeVersion(db)}
+      AND ${readableVersionSources(db, keysText)}`;
   return version as Row | undefined;
 }
 
-async function itemDetail(db: Db, projectId: string, itemId: string) {
+async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Actor) {
   const item = await itemFor(db, projectId, itemId);
   if (!item) return null;
+  const keysText = await readableVersionKeysJson(db, actor, projectId);
+  // 活跃版本整版受限时，整个条目连带标题都不再暴露（不是只藏来源字段）。
+  if (item.active_version_id) {
+    const [visible] = await db`SELECT ${readableVersionSources(db, keysText)} AS ok
+      FROM project_knowledge_versions v WHERE v.id=${String(item.active_version_id)}`;
+    if (!visible?.ok) return null;
+  }
   const versions = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
       governance_hash,revoked_at,revoked_reason,created_at
     FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
+      AND ${readableVersionSources(db, keysText)}
     ORDER BY version DESC LIMIT 51`;
+  const visibleVersions = redactVersionSources(versions as Row[], actor);
+  // #1286：关联信息同样以「通过授权的版本」为边界，不能从全部历史版本取数。
+  const visibleIds = (versions as Row[]).map((row) => String(row.id)).join("\u0001");
+  // 条目关联、候选与基线都在 SQL 里先过滤，再排序取页：较新的不可见提案不会挤掉较旧的可读提案。
   const proposals = await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
       p.candidate_version_id,p.maker_job_id,p.base_refs_json,p.evaluation_plan_json,p.reason,p.created_at
     FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
-    WHERE p.project_id=${projectId} AND w.trigger_key NOT LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"} AND
-      (p.candidate_version_id IN (SELECT id FROM project_knowledge_versions WHERE project_id=${projectId} AND item_id=${itemId})
-       OR p.base_refs_json @> ${db.json([{ item_ref: itemId }])})
+    WHERE p.project_id=${projectId} AND w.trigger_key NOT LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"}
+      AND (
+        p.candidate_version_id = ANY(
+          CASE WHEN ${visibleIds} = '' THEN ARRAY[]::uuid[] ELSE string_to_array(${visibleIds}, chr(1))::uuid[] END)
+        OR p.base_refs_json @> jsonb_build_array(jsonb_build_object('item_ref', ${itemId}::text))
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(
+          CASE WHEN jsonb_typeof(p.base_refs_json)='array' THEN p.base_refs_json ELSE '[]'::jsonb END) b
+        WHERE (b->>'item_ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          AND NOT EXISTS (
+            SELECT 1 FROM project_knowledge_versions v
+            WHERE v.project_id = p.project_id AND v.item_id = (b->>'item_ref')::uuid
+              AND v.id = CASE WHEN (b->>'version_ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                THEN (b->>'version_ref')::uuid END
+              AND ${readableVersionSources(db, keysText)}
+          )
+      )
     ORDER BY p.created_at DESC LIMIT 50`;
   const proposalIds = proposals.map((row) => row.id as string);
   const evaluations = proposalIds.length
@@ -98,11 +140,13 @@ async function itemDetail(db: Db, projectId: string, itemId: string) {
         FROM project_knowledge_evaluations WHERE project_id=${projectId} AND proposal_id IN ${db(proposalIds)}
         ORDER BY created_at DESC LIMIT 100`
     : [];
-  const usages = await db`SELECT id,job_id,attempt_id,selector,content_sha256,version_id,feedback_json,created_at
-    FROM project_knowledge_usages WHERE project_id=${projectId} AND owner_project_id=${projectId}
-      AND version_id IN (SELECT id FROM project_knowledge_versions WHERE project_id=${projectId} AND item_id=${itemId})
-    ORDER BY created_at DESC LIMIT 100`;
-  return { ...item, versions: versions.slice(0, 50), versions_next_offset: versions.length > 50 ? 50 : null,
+  const usages = visibleIds
+    ? await db`SELECT id,job_id,attempt_id,selector,content_sha256,version_id,feedback_json,created_at
+      FROM project_knowledge_usages WHERE project_id=${projectId} AND owner_project_id=${projectId}
+        AND version_id = ANY(string_to_array(${visibleIds}, chr(1))::uuid[])
+      ORDER BY created_at DESC LIMIT 100`
+    : [];
+  return { ...item, versions: visibleVersions.slice(0, 50), versions_next_offset: versions.length > 50 ? 50 : null,
     proposals, evaluations, usages };
 }
 
@@ -196,6 +240,16 @@ async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promi
 }
 
 /** Routes are locally scoped too; auth.ts must additionally register their route scopes. */
+async function versionSourcesReadable(db: KnowledgeDb, req: FastifyRequest, projectId: string,
+  version: Record<string, unknown>): Promise<boolean> {
+  const resolved = await resolveSourceOwners(db, version.sources_json);
+  if (resolved.unresolved > 0) return false;
+  if (resolved.owners.some((owner) => owner.project_id !== projectId)) return false;
+  // 沿用来源原有权限：能读原始资料（tasks:read/admin）的人不必再持有治理 Job 清单；角色名不参与判定。
+  const humanAuthority = Boolean(req.actor && actorHasScope(req.actor, "tasks:read"));
+  return actorMayReadGovernanceSources(db, { jobId: req.actor?.id ?? null, projectId, humanAuthority }, resolved.owners);
+}
+
 export function registerProjectKnowledgeRoutes(
   app: FastifyInstance,
   deps: { db?: Db; recordAudit?: typeof audit } = {},
@@ -211,6 +265,7 @@ export function registerProjectKnowledgeRoutes(
       if (!access(req, reply, projectId)) return;
       const input = List.parse(req.query);
       const pattern = input.query ? `%${input.query.replace(/[\\%_]/g, "\\$&")}%` : null;
+      const keysText = await readableVersionKeysJson(db, req.actor, projectId);
       const rows = await db`SELECT i.id,i.project_id,i.kind,i.logical_key,i.title,i.keywords_json,
           i.status,i.active_version_id,i.generation,i.created_at,i.updated_at,
           v.version,v.content_sha256
@@ -218,6 +273,9 @@ export function registerProjectKnowledgeRoutes(
         LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
           AND ${publicKnowledgeVersion(db)}
         WHERE i.project_id=${projectId} AND ${publicKnowledgeItem(db)}
+          AND (v.id IS NULL OR ${readableVersionSources(db, keysText)})
+          AND (i.active_version_id IS NULL OR EXISTS (SELECT 1 FROM project_knowledge_versions v
+            WHERE v.id=i.active_version_id AND ${readableVersionSources(db, keysText)}))
           AND (${input.kind ?? null}::text IS NULL OR i.kind=${input.kind ?? null})
           AND (${input.status ?? null}::text IS NULL OR i.status=${input.status ?? null})
           AND (${pattern}::text IS NULL OR i.title ILIKE ${pattern} ESCAPE '\\' OR i.logical_key ILIKE ${pattern} ESCAPE '\\')
@@ -265,7 +323,7 @@ export function registerProjectKnowledgeRoutes(
       const { id, itemId } = req.params as { id: string; itemId: string };
       const projectId = Id.parse(id);
       if (!access(req, reply, projectId)) return;
-      return await itemDetail(db, projectId, Id.parse(itemId))
+      return await itemDetail(db, projectId, Id.parse(itemId), req.actor)
         ?? reply.code(404).send({ error_code: "KNOWLEDGE_ITEM_NOT_FOUND" });
     } catch (error) { return errorReply(reply, error); }
   });
@@ -278,11 +336,14 @@ export function registerProjectKnowledgeRoutes(
       const item = await itemFor(db, projectId, Id.parse(itemId));
       if (!item) return reply.code(404).send({ error_code: "KNOWLEDGE_ITEM_NOT_FOUND" });
       const page = Page.parse(req.query);
+      const keysText = await readableVersionKeysJson(db, req.actor, projectId);
       const rows = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
           governance_hash,revoked_at,revoked_reason,created_at
         FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
+          AND ${readableVersionSources(db, keysText)}
         ORDER BY version DESC LIMIT ${page.limit + 1} OFFSET ${page.offset}`;
-      return { items: rows.slice(0, page.limit), next_offset: rows.length > page.limit ? page.offset + page.limit : null };
+      return { items: redactVersionSources(rows.slice(0, page.limit) as Row[], req.actor),
+        next_offset: rows.length > page.limit ? page.offset + page.limit : null };
     } catch (error) { return errorReply(reply, error); }
   });
 
@@ -292,11 +353,18 @@ export function registerProjectKnowledgeRoutes(
       const projectId = Id.parse(id);
       if (!access(req, reply, projectId)) return;
       const item = await itemFor(db, projectId, Id.parse(itemId));
-      const version = await versionFor(db, projectId, Id.parse(itemId), Id.parse(versionId));
+      const version = await versionFor(db, projectId, Id.parse(itemId), Id.parse(versionId), req.actor);
+      // #1286：管理 API 的按版本读取沿用来源原有授权，作者/受众之外的人看不到。
+      if (version && !(await versionSourcesReadable(db, req, projectId, version))) {
+        return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
+      }
       if (!item || !version) return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
       // Only the owning project can inspect historical content. Source refs remain opaque.
       const candidate = await readKnowledgeBlob(db, String(version.content_sha256));
-      return { ...version, item: { id: item.id, kind: item.kind, title: item.title, logical_key: item.logical_key }, candidate };
+      const [visible] = redactVersionSources([version as Row], req.actor);
+      // 读取历史版本时用该版本自己的标题；当前条目标题会被新版本改写，不能带出去。
+      const versionTitle = recordField(candidate, "title") ?? item.title;
+      return { ...visible, item: { id: item.id, kind: item.kind, title: versionTitle, logical_key: item.logical_key }, candidate };
     } catch (error) { return errorReply(reply, error); }
   });
 
