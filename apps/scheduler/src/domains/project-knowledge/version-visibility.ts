@@ -34,25 +34,40 @@ export async function readableVersionKeysJson(db: KnowledgeDb, actor: Actor | un
   return keys.join("\u0001");
 }
 
-/** 该版本对当前读者是否可见；`v` 是查询里的版本别名。 */
+/** 该版本对当前读者是否可见；`v` 是查询里的版本别名。
+ * 普通业务来源直接可见；治理来源要求清单与受众匹配；来源解析不到（引用被删）按原语义隐藏。 */
 export function readableVersionSources(db: KnowledgeDb, keysText: string) {
   return db`(${keysText} = '*'
     OR NOT EXISTS (
-    SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v.sources_json)='array' THEN v.sources_json ELSE '[]'::jsonb END) s
-    WHERE s->>'kind' IN ('fact','evidence','task') AND (
-      NOT ((s->>'kind') || ':' || COALESCE(s->>'ref', s->>'job_id') || '|' || COALESCE(s->>'content_hash','')
-        = ANY(string_to_array(${keysText}, chr(1)))))
-      OR NOT EXISTS (SELECT 1 FROM project_knowledge_job_assignments a
-        WHERE a.project_id=v.project_id AND a.job_id = CASE s->>'kind'
-          WHEN 'evidence' THEN (SELECT ar.job_id FROM artifact_evidence ev JOIN artifacts ar ON ar.id=ev.artifact_id
-            WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-              THEN ev.id=(s->>'ref')::uuid END)
-          WHEN 'fact' THEN (SELECT cn.job_id FROM canvas_nodes cn
-            WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-              THEN cn.id=(s->>'ref')::uuid END)
-          ELSE (SELECT j.id FROM jobs j
-            WHERE CASE WHEN (s->>'job_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-              THEN j.id=(s->>'job_id')::uuid END)
-        END)
-    )))`;
+      SELECT 1
+      FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v.sources_json) = 'array' THEN v.sources_json ELSE '[]'::jsonb END) AS s
+      LEFT JOIN LATERAL (
+        SELECT CASE s->>'kind'
+          WHEN 'evidence' THEN (
+            SELECT ar.job_id FROM artifact_evidence ev JOIN artifacts ar ON ar.id = ev.artifact_id
+            WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN ev.id = (s->>'ref')::uuid END
+          )
+          WHEN 'fact' THEN (
+            SELECT cn.job_id FROM canvas_nodes cn
+            WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN cn.id = (s->>'ref')::uuid END
+          )
+          ELSE (
+            SELECT j.id FROM jobs j
+            WHERE CASE WHEN (s->>'job_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN j.id = (s->>'job_id')::uuid END
+          )
+        END AS owner_job
+      ) r ON true
+      WHERE s->>'kind' IN ('fact','evidence','task')
+        AND (
+          r.owner_job IS NULL
+          OR (
+            EXISTS (SELECT 1 FROM project_knowledge_job_assignments a
+              WHERE a.project_id = v.project_id AND a.job_id = r.owner_job)
+            AND NOT (
+              (s->>'kind') || ':' || COALESCE(s->>'ref', s->>'job_id') || '|' || COALESCE(s->>'content_hash','')
+              = ANY(string_to_array(${keysText}, chr(1)))
+            )
+          )
+        )
+    ))`;
 }
