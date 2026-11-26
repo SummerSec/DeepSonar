@@ -186,8 +186,8 @@ test("#1287 知识探测挂住时不挡普通挂表，且 kick 请求按批次�
 });
 
 test("#1287 两个未来普通任务在知识探测挂住时各自按时触发领取", async () => {
-  const { bindScheduleWake, clearScheduleWake, refreshScheduleWakeFromDb, setKnowledgeWakeProbeForTests } =
-    await import("./schedule-wake.js");
+  const { armedUntilForTests, bindScheduleWake, clearScheduleWake, refreshScheduleWakeFromDb,
+    setKnowledgeWakeProbeForTests } = await import("./schedule-wake.js");
   await withKnowledgeDatabase(async (db) => {
     const owner = await seedKnowledgeJob(db);
     const scheduled = async (startAt: string) => {
