@@ -143,6 +143,16 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 新条目与新 Job 的关系：Job 创建时冻结知识目录，所以沉淀只对**之后创建**的 Job 出现在检索结果里；而已冻结目录的在途 Job 不受影响，这也符合「不改写冻结快照」的既有约束。
 
 
+### 唤醒查询的缓存（#1287，2026-11-26）
+
+集合策略查询要扫 `audit_logs`，44k 行时实测 6–11s；Dispatcher 每次刷新都会调用一次 `readNextKnowledgeWake`，于是同一个重查询被近乎连续地重跑，把事件循环和其它端点一起拖慢（端点排队 20–44s，超过客户端 15s 超时）。现在 `readNextKnowledgeWake` 带短 TTL 缓存：
+
+- 默认 30s，`DEEPSONAR_KNOWLEDGE_WAKE_TTL_MS` 可调（0–300000，0 表示每次回库）；
+- 知识工作写入后用 `invalidateKnowledgeWake()` 立即失效，不必等 TTL；
+- 缓存只影响「到点唤醒」的读取频率，不改唤醒语义，也不改任何权限判定。
+
+查询本身仍然重：把 `sources` CTE 的 `audit_logs` 扫描（含 `NOT EXISTS` 反查）改成索引友好的形态属于后续项，本次只解决重查询被连续重跑的问题。
+
 ## 验证与运维
 
 2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。
