@@ -116,8 +116,11 @@ async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Act
       p.candidate_version_id,p.maker_job_id,p.base_refs_json,p.evaluation_plan_json,p.reason,p.created_at
     FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
     WHERE p.project_id=${projectId} AND w.trigger_key NOT LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"}
-      AND (p.candidate_version_id IS NULL OR p.candidate_version_id = ANY(
-        CASE WHEN ${visibleIds} = '' THEN ARRAY[]::uuid[] ELSE string_to_array(${visibleIds}, chr(1))::uuid[] END))
+      AND (
+        p.candidate_version_id = ANY(
+          CASE WHEN ${visibleIds} = '' THEN ARRAY[]::uuid[] ELSE string_to_array(${visibleIds}, chr(1))::uuid[] END)
+        OR p.base_refs_json @> jsonb_build_array(jsonb_build_object('item_ref', ${itemId}))
+      )
     ORDER BY p.created_at DESC LIMIT 50` as Row[];
   const baseItemIds = new Set<string>();
   for (const row of candidates) {
