@@ -490,3 +490,51 @@ test("an unreadable base version blocks the edit instead of clearing the keyword
     assert.equal(versions[0]!.total, 1, "读取失败不得写入新版本");
   });
 });
+
+test("a late edit cannot re-activate a knowledge item that was archived while its body was being stored", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const gate: { release?: () => void } = {};
+    let started: (() => void) | null = null;
+    let paused = false;
+    const store: BlobStore = {
+      kind: "fs",
+      put: async (key, value) => {
+        if (paused) { started?.(); await new Promise<void>((resolve) => { gate.release = resolve; }); }
+        blobs.set(key, value);
+      },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-4", name: "maintainer-d", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "slow-body", title: "存储很慢的知识", content: "第一版正文" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const versionRef = (created.json() as { version_ref: string }).version_ref;
+    // 让编辑卡在正文存储阶段（此时它不持有条目锁），期间把条目下架。
+    paused = true;
+    const storing = new Promise<void>((resolve) => { started = resolve; });
+    const editing = app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "存储很慢的知识", content: "迟到的第二版正文" } });
+    await storing;
+    const archived = await app.inject({ method: "POST", url: `${base}/${itemRef}/archive`, payload: {} });
+    assert.equal(archived.statusCode, 200, archived.body);
+    gate.release?.();
+    const late = await editing;
+    assert.equal(late.statusCode, 409, late.body);
+    const [row] = await db`SELECT status, active_version_id, keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.equal(row!.status, "retired", "迟到的编辑不得让条目重新生效");
+    assert.equal(String(row!.active_version_id), versionRef, "生效版本必须仍是下架前那一版");
+    const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${itemRef}`;
+    assert.equal(versions[0]!.total, 1, "迟到的编辑不得写入新版本");
+  });
+});
