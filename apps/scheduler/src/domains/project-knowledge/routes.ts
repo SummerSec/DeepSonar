@@ -119,7 +119,7 @@ async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Act
       AND (
         p.candidate_version_id = ANY(
           CASE WHEN ${visibleIds} = '' THEN ARRAY[]::uuid[] ELSE string_to_array(${visibleIds}, chr(1))::uuid[] END)
-        OR p.base_refs_json @> jsonb_build_array(jsonb_build_object('item_ref', ${itemId}))
+        OR p.base_refs_json @> jsonb_build_array(jsonb_build_object('item_ref', ${itemId}::text))
       )
     ORDER BY p.created_at DESC LIMIT 50` as Row[];
   const baseItemIds = new Set<string>();
