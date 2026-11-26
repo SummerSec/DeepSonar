@@ -5,7 +5,7 @@ import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanO
 import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
 import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
-import {tickKnowledgeBeforeDispatch} from "./dispatcher-knowledge-gate.js";
+import {requestKnowledgeAdvance} from "./dispatcher-knowledge-gate.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { materializeReportInput } from "./report-input.js";
 import { assertCurrentRuntimeImageKey } from "@deepsonar/shared-types";
@@ -827,13 +827,16 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
 export async function dispatchOnce(): Promise<number> {
   const generation = dispatcherGeneration;
   const stopped = () => dispatcherStopped || dispatcherGeneration !== generation;
-  if (!await tickKnowledgeBeforeDispatch(stopped, async () => (await import("./project-knowledge-scheduler.js")).projectKnowledgeScheduler)) return 0;
   const claimedJobs = await claimPendingJobs();
-
   for (const job of claimedJobs) {
     const p = runJob(job.id, job.probe).catch((e) => console.error(`[dispatcher] job ${job.id} 异常:`, e));
     inFlight.add(p);
     void p.finally(() => inFlight.delete(p));
+  }
+  // #1287：知识推进不阻塞领取循环——慢查询挂在后台单飞，下一次 kick 仍能先领取普通任务。
+  if (!stopped()) {
+    void requestKnowledgeAdvance(stopped,
+      async () => (await import("./project-knowledge-scheduler.js")).projectKnowledgeScheduler);
   }
   return claimedJobs.length;
 }

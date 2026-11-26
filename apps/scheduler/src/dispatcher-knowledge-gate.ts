@@ -10,3 +10,48 @@ export async function tickKnowledgeBeforeDispatch(
   await scheduler.tick(stopped);
   return !stopped();
 }
+
+/** #1287：普通任务领取与知识推进解耦——先领取并启动，再跑知识推进。
+ * 知识推进失败或停机只影响知识侧，不能挡住已经领取的普通任务。 */
+export async function claimThenTickKnowledge<J>(
+  stopped: () => boolean,
+  claim: () => Promise<J[]>,
+  start: (jobs: J[]) => void,
+  load: () => Promise<{tick: (stopped: () => boolean) => Promise<number>}>,
+): Promise<number> {
+  const jobs = await claim();
+  start(jobs);
+  if (stopped()) return jobs.length;
+  try {
+    const scheduler = await load();
+    if (!stopped()) await scheduler.tick(stopped);
+  } catch (error) {
+    console.error("[dispatcher] 知识推进失败，不影响已领取的任务:", error);
+  }
+  return jobs.length;
+}
+
+/** #1287：知识推进必须能脱离领取循环单独跑完——否则慢查询会卡住随后到达的 kick。
+ * 单飞：同时只有一个知识 tick；停机后不再加载/进入；错误只记日志。 */
+let knowledgeAdvanceInFlight: Promise<void> | null = null;
+
+export function requestKnowledgeAdvance(
+  stopped: () => boolean,
+  load: () => Promise<{tick: (stopped: () => boolean) => Promise<number>}>,
+): Promise<void> {
+  // 停机判定必须在占槽位之前：否则同步早退会先清空槽位、再被外层赋值填回已完成的 Promise。
+  if (stopped()) return Promise.resolve();
+  if (knowledgeAdvanceInFlight) return knowledgeAdvanceInFlight;
+  const run = (async () => {
+    try {
+      const scheduler = await load();
+      if (!stopped()) await scheduler.tick(stopped);
+    } catch (error) {
+      console.error("[dispatcher] 知识推进失败，不影响普通任务领取:", error);
+    }
+  })();
+  knowledgeAdvanceInFlight = run;
+  // 按身份清理，避免把后来者的槽位清掉。
+  void run.finally(() => { if (knowledgeAdvanceInFlight === run) knowledgeAdvanceInFlight = null; });
+  return run;
+}

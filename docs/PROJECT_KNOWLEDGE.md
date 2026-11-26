@@ -143,6 +143,19 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 新条目与新 Job 的关系：Job 创建时冻结知识目录，所以沉淀只对**之后创建**的 Job 出现在检索结果里；而已冻结目录的在途 Job 不受影响，这也符合「不改写冻结快照」的既有约束。
 
 
+### 唤醒查询与领取解耦（#1287，2026-11-26）
+
+现象（来自报告，因果仍待实测）：`readNextKnowledgeWake` 的集合策略查询在 44k 行 `audit_logs` 上耗时 6–11s，而 Dispatcher 每次调度刷新都会调用它；报告观察到端点排队 20–44s 与客户端 15s 超时。**这些耗时与因果尚未在本仓库 CI 或实例上复现，属待验证假设**，不得当作已证实结论引用。
+
+本轮做的是把普通任务领取从这条重查询上解耦，不改 schema、不改唤醒语义：
+
+- `dispatchOnce` 先 `claimPendingJobs()` 领取并启动普通任务，再跑知识推进（`claimThenTickKnowledge`）；知识推进抛错只记日志，不再让 `return 0` 挡住领取，停机后不进入知识推进；
+- `schedule-wake` 用 `shouldProbeKnowledgeWake` 决定这次刷新是否回库：未来唤醒不查、到期后查一次并记住 `firedFor`、之后最多每 `DEEPSONAR_KNOWLEDGE_PROBE_INTERVAL_MS`（默认 30s）复查；同一条到期靠缓存也不再重复 kick；
+- 查询在途期间到来的刷新请求用递增代次保留：旧结果一律丢弃并在结束后补跑一次，不会把「查询发出后才提交的工作」漏掉；
+- `project-knowledge-scheduler.tick` 只在 `progressed > 0` 时请求回库，没有进展时不借刷新自激重跑。
+
+刻意没做：不给 `audit_logs` 加部分索引、不升 `SCHEMA_VERSION`——索引能否消除 `DISTINCT ON` 排序、重试来源的「取最新记录」路径都需要 `EXPLAIN (ANALYZE, BUFFERS)` 实测，缺证据就要求已有非空库受控重建不划算；索引与查询形态重写留作后续项。
+
 ## 验证与运维
 
 2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。

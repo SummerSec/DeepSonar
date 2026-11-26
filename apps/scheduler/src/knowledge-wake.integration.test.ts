@@ -124,3 +124,65 @@ test("source wake uses the latest persisted retry deadline and retains the pendi
     assert.equal((await readNextKnowledgeWake(db))!.getTime(), Date.parse(soon), "a new process can recover the durable deadline");
   });
 });
+
+test("#1287 知识探测挂住时不挡普通挂表，且 kick 请求按批次消费", async () => {
+  const { armedUntilForTests, bindScheduleWake, clearScheduleWake, noteKnowledgeWakeChange,
+    refreshScheduleWakeFromDb, resetKnowledgeWakeForTests, setKnowledgeWakeProbeForTests } =
+    await import("./schedule-wake.js");
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const scheduled = async (startAt: string) => {
+      const canvasId = randomUUID();
+      await db`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${owner.projectId},'sched',
+        ${db.json({ schedule: { start_at: startAt } } as never)})`;
+      await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,payload_json,agent_snapshot_json)
+        VALUES(${randomUUID()},${owner.projectId},${canvasId},'explore','pending','{}'::jsonb,'{}'::jsonb)`;
+    };
+    await scheduled(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+
+    let kicks = 0;
+    bindScheduleWake(() => { kicks += 1; });
+    clearScheduleWake();
+
+    let probes = 0;
+    let releaseProbe: (() => void) | null = null;
+    setKnowledgeWakeProbeForTests(() => {
+      probes += 1;
+      return new Promise<Date | null>((resolve) => { releaseProbe = () => resolve(null); });
+    });
+    try {
+      const startedAt = Date.now();
+      // 定时器触发的路径（kickDueTasks: true）只把知识探测放到后台，不等它返回。
+      await refreshScheduleWakeFromDb({ kickDueTasks: true }, db as never);
+      assert.ok(Date.now() - startedAt < 1000, "普通扫描不能等知识探测返回");
+      await refreshScheduleWakeFromDb({ kickDueTasks: true }, db as never);
+      assert.equal(probes, 1, "知识探测单飞：在途时不会发起第二次");
+      // 正向情形：挂住探测 → 写入新的知识工作并显式失效 → 放行旧空结果后必须补查并挂上新期限。
+      const dueAt = new Date(Date.now() + 30_000);
+      await db`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state,next_attempt_at)
+        VALUES(${owner.projectId},${randomUUID()},${"a".repeat(64)},'pending',${dueAt.toISOString()})`;
+      setKnowledgeWakeProbeForTests(() => { probes += 1; return Promise.resolve(dueAt); });
+      noteKnowledgeWakeChange();
+      releaseProbe!();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(probes, 2, "代次推进后必须补查一次（旧结果被丢弃）");
+      assert.equal(armedUntilForTests(), dueAt.getTime(), "新写入的知识工作必须挂上自己的期限");
+      // 到期任务：同批次消费 kick 请求，随后的静默刷新不再触发领取。
+      const canvasId = randomUUID();
+      await db`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${owner.projectId},'due',
+        ${db.json({ schedule: { start_at: new Date(Date.now() - 1000).toISOString() } } as never)})`;
+      await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,payload_json,agent_snapshot_json)
+        VALUES(${randomUUID()},${owner.projectId},${canvasId},'explore','pending','{}'::jsonb,'{}'::jsonb)`;
+      const before = kicks;
+      await refreshScheduleWakeFromDb({ kickDueTasks: true }, db as never);
+      assert.equal(kicks, before + 1, "到期普通任务必须触发一次领取");
+      await refreshScheduleWakeFromDb({ kickDueTasks: false }, db as never);
+      assert.equal(kicks, before + 1, "静默刷新不能借旧请求再触发领取");
+    } finally {
+      setKnowledgeWakeProbeForTests(null);
+      clearScheduleWake();
+      bindScheduleWake(() => undefined);
+      resetKnowledgeWakeForTests();
+    }
+  });
+});

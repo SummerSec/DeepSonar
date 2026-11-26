@@ -1,7 +1,7 @@
 import { sql } from "./db.js";
 import { createJobInTransaction, ensureCanvasForTaskInTransaction } from "./core.js";
 import { createKnowledgeWorkScheduler } from "./domains/project-knowledge/work.js";
-import { refreshScheduleWakeFromDb } from "./schedule-wake.js";
+import { noteKnowledgeWakeChange, refreshScheduleWakeFromDb } from "./schedule-wake.js";
 import { PROJECT_KNOWLEDGE_GOVERNANCE_HASH } from "./domains/project-knowledge/platform-skills.js";
 import { collectProjectKnowledgeSources } from "./domains/project-knowledge/collector.js";
 
@@ -16,6 +16,8 @@ export const projectKnowledgeScheduler = {
     if (stopped()) return 0;
     const collected = await collectProjectKnowledgeSources(sql, PROJECT_KNOWLEDGE_GOVERNANCE_HASH, stopped);
     const progressed = collected + await workScheduler.tick(stopped);
+    // #1287：只有真的推进了才强制回库；没有进展时不能借刷新自激重跑采集查询。
+    if (progressed > 0) noteKnowledgeWakeChange();
     if (!stopped()) await refreshScheduleWakeFromDb({ kickDueTasks: false });
     return progressed;
   },
