@@ -91,7 +91,7 @@ async function hiddenVersionIds(db: Db, actor: Actor | undefined, projectId: str
   const keys = JSON.stringify(allowedKeys.length ? allowedKeys : [""]);
   const rows = await db`SELECT v.id FROM project_knowledge_versions v
     WHERE v.project_id=${projectId} AND EXISTS (
-      SELECT 1 FROM jsonb_array_elements(COALESCE(v.sources_json,'[]'::jsonb)) s
+      SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v.sources_json)='array' THEN v.sources_json ELSE '[]'::jsonb END) s
       WHERE s->>'kind' IN ('fact','evidence','task') AND (
         NOT ((s->>'kind') || ':' || COALESCE(s->>'ref', s->>'job_id') || '|' || COALESCE(s->>'content_hash','')
           IN (SELECT jsonb_array_elements_text(${keys}::jsonb)))
