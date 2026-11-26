@@ -211,8 +211,7 @@ test("#1287 两个未来普通任务在知识探测挂住时各自按时触发�
     try {
       await refreshScheduleWakeFromDb({ kickDueTasks: true }, db as never);
       const deadline = Date.now() + 6_000;
-      while (kicks < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
-      await new Promise((resolve) => setTimeout(resolve, 1_400));
+      while (kicks < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
       const armed = armedUntilForTests();
       assert.ok(kicks >= 1, `第一个未来任务必须在探测放行前触发（实际 kicks=${kicks}）`);
       assert.ok(armed != null && Math.abs(armed - secondDue) <= 1_500,
