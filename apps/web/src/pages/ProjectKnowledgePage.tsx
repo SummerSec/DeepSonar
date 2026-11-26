@@ -149,7 +149,7 @@ export function ProjectKnowledgePage() {
     createOpen, setCreateOpen, draftTitle, setDraftTitle, draftContent, setDraftContent, draftKey,
     createBusy, createNotice, createError, submitCreate,
     editDraft, setEditDraft, editActive, editBusy, editNotice, editError, submitEdit, openEdit,
-    archivedHere, undoneHere, undoBusy, archiveItem, undoArchive,
+    canUndoArchive, undoBusy, archiveItem, undoArchive,
   } = maintenance;
 
   const granteeOptions = useMemo(() => projects.filter((p) => p.id !== projectId)
@@ -214,9 +214,9 @@ export function ProjectKnowledgePage() {
             <button type="button" className={button} disabled={createBusy || !draftTitle.trim()} onClick={submitCreate}>
               {createBusy ? "提交中…" : "提交新建"}
             </button>
-            {createNotice && <p role="status" className="text-xs text-emerald-300/80">{createNotice}</p>}
             {createError && <p role="alert" className="text-xs text-rose-300/80">{createError}</p>}
           </div>}
+          {createNotice && <p role="status" className="text-xs text-emerald-300/80">{createNotice}</p>}
         </div>
         {listError && <ErrorBox message={listError} onRetry={() => setRefresh((value) => value + 1)} />}
         {listLoading && <p className={card + " text-sm text-zinc-500"}>正在加载知识目录…</p>}
@@ -261,9 +261,9 @@ export function ProjectKnowledgePage() {
                 title: version.item.title, content: version.candidate.content ?? "",
               })}>编辑正文（基于 v{version.version}）</button>}
             {canWrite && editActive && <button type="button" className={button} onClick={() => setEditDraft(null)}>取消编辑</button>}
-            {canWrite && detail.status !== "revoked" && !archivedHere.includes(detail.id) &&
+            {canWrite && detail.status !== "revoked" && !canUndoArchive(detail.id) &&
               <button type="button" className={button} disabled={undoBusy} onClick={() => archiveItem(detail.id)}>下架知识</button>}
-            {canWrite && archivedHere.includes(detail.id) && !undoneHere.includes(detail.id) &&
+            {canWrite && canUndoArchive(detail.id) &&
               <button type="button" className={button} disabled={undoBusy} onClick={() => undoArchive(detail.id)}>撤销下架</button>}
           </div>
           {editNotice && <p role="status" className="mt-3 text-xs text-emerald-300/80">{editNotice}</p>}

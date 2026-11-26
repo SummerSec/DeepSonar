@@ -9,10 +9,14 @@ export interface EditDraft {
   content: string;
 }
 
-/** 逻辑键由系统生成：用户只填标题，避免手写标识与后端格式/唯一性冲突。 */
-export function generatedLogicalKey(title: string): string {
-  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 100);
-  return `human-${slug || "note"}`;
+/**
+ * 逻辑键由系统生成：纯中文标题折叠后为空，同名英文也会撞，所以再带一个
+ * 本份草稿固定的短后缀——同一份草稿重试时不变，不同草稿（含连续新建两条
+ * 中文标题）不会互相占用同一个标识。
+ */
+export function generatedLogicalKey(title: string, draftSuffix: string): string {
+  const slug = title.trim().toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 80);
+  return `human-${slug || "note"}-${draftSuffix}`;
 }
 
 export interface MaintenanceInput {
@@ -26,6 +30,7 @@ export interface MaintenanceInput {
 
 export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const { projectId, selectedId, versionId, refreshKey, onSelectItem, onRefresh } = input;
+  const [draftSuffix, setDraftSuffix] = useState(() => Math.random().toString(36).slice(2, 8));
   const [createOpen, setCreateOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftContent, setDraftContent] = useState("");
@@ -36,8 +41,8 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const [editBusy, setEditBusy] = useState(false);
   const [editNotice, setEditNotice] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
-  const [archivedHere, setArchivedHere] = useState<string[]>([]);
-  const [undoneHere, setUndoneHere] = useState<string[]>([]);
+  // 一次下架对应一张可消费回执：撤销后回执消失，允许再次下架与再次撤销。
+  const [archiveReceipts, setArchiveReceipts] = useState<Record<string, { receiptId: string }>>({});
   const [undoBusy, setUndoBusy] = useState(false);
 
   const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -47,18 +52,21 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   }, [selectedId, versionId, refreshKey, projectId]);
 
   const editActive = Boolean(editDraft && editDraft.itemId === selectedId && editDraft.versionId === versionId);
+  const draftKey = useMemo(() => generatedLogicalKey(draftTitle, draftSuffix), [draftTitle, draftSuffix]);
+  const canUndoArchive = useCallback((itemId: string) => Boolean(archiveReceipts[itemId]), [archiveReceipts]);
 
   const submitCreate = useCallback(() => {
     setCreateBusy(true); setCreateNotice(null); setCreateError(null);
     projectKnowledgeApi.create(projectId, {
-      kind: "memory", logical_key: generatedLogicalKey(draftTitle), title: draftTitle.trim(), content: draftContent,
+      kind: "memory", logical_key: draftKey, title: draftTitle.trim(), content: draftContent,
     }).then((result) => {
       setCreateOpen(false); setDraftTitle(""); setDraftContent("");
+      setDraftSuffix(Math.random().toString(36).slice(2, 8));
       setCreateNotice("新建知识成功，已打开该条目");
       onSelectItem(result.item_ref);
       onRefresh();
     }).catch((error) => setCreateError(message(error))).finally(() => setCreateBusy(false));
-  }, [projectId, draftTitle, draftContent, onSelectItem, onRefresh]);
+  }, [projectId, draftTitle, draftContent, draftKey, onSelectItem, onRefresh]);
 
   const submitEdit = useCallback(() => {
     if (!editDraft) return;
@@ -73,7 +81,7 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const archiveItem = useCallback((itemId: string) => {
     setUndoBusy(true); setCreateError(null);
     projectKnowledgeApi.archive(projectId, itemId)
-      .then(() => { setArchivedHere((list) => [...new Set([...list, itemId])]); onRefresh(); })
+      .then(() => { setArchiveReceipts((map) => ({ ...map, [itemId]: { receiptId: `${itemId}:${Date.now()}` } })); onRefresh(); })
       .catch((error) => setCreateError(message(error)))
       .finally(() => setUndoBusy(false));
   }, [projectId, onRefresh]);
@@ -81,7 +89,7 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const undoArchive = useCallback((itemId: string) => {
     setUndoBusy(true); setCreateError(null);
     projectKnowledgeApi.restore(projectId, itemId)
-      .then(() => { setUndoneHere((list) => [...new Set([...list, itemId])]); onRefresh(); })
+      .then(() => { setArchiveReceipts((map) => { const next = { ...map }; delete next[itemId]; return next; }); onRefresh(); })
       .catch((error) => setCreateError(message(error)))
       .finally(() => setUndoBusy(false));
   }, [projectId, onRefresh]);
@@ -90,12 +98,11 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
     setEditDraft(draft); setEditNotice(null); setEditError(null);
   }, []);
 
-  const draftKey = useMemo(() => generatedLogicalKey(draftTitle), [draftTitle]);
 
   return {
     createOpen, setCreateOpen, draftTitle, setDraftTitle, draftContent, setDraftContent, draftKey,
     createBusy, createNotice, createError, submitCreate,
     editDraft, setEditDraft, editActive, editBusy, editNotice, editError, submitEdit, openEdit,
-    archivedHere, undoneHere, undoBusy, archiveItem, undoArchive,
+    archiveReceipts, canUndoArchive, undoBusy, archiveItem, undoArchive,
   };
 }
