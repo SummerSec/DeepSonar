@@ -418,3 +418,38 @@ test("human maintenance creates, revises, archives and restores knowledge with a
     assert.equal(restoredRow!.status, "active");
   });
 });
+
+test("editing only the body keeps the base version keywords unless an explicit empty list clears them", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>([[sharedAssetBlobUri("0".repeat(64)), Buffer.from("{}")]]);
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-2", name: "maintainer-b", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "keep-keywords", title: "带关键词的知识",
+      keywords: ["巡检", "日志"], content: "第一版正文" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "带关键词的知识", content: "只改正文的第二版" } });
+    assert.equal(revised.statusCode, 201, revised.body);
+    const [kept] = await db`SELECT keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.deepEqual(kept!.keywords_json, ["巡检", "日志"], "只改正文不得清空原有关键词");
+    const cleared = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 2, title: "带关键词的知识", keywords: [], content: "显式清空关键词" } });
+    assert.equal(cleared.statusCode, 201, cleared.body);
+    const [emptied] = await db`SELECT keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.deepEqual(emptied!.keywords_json, [], "显式空数组才清空关键词");
+  });
+});

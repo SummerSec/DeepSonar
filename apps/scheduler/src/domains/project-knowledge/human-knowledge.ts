@@ -1,5 +1,5 @@
-import type { KnowledgeCandidate } from "@deepsonar/shared-types";
-import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
+import { KnowledgeCandidate } from "@deepsonar/shared-types";
+import { readKnowledgeVersionContent, registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, KnowledgeOperationError, sha256, type KnowledgeDb } from "./types.js";
 
 /** 人类（Web 操作员）在项目内维护知识时的身份；没有 Job/Attempt，因此单独记录作者。 */
@@ -46,10 +46,17 @@ export async function createHumanKnowledgeItem(db: KnowledgeDb, author: Knowledg
   });
 }
 
+export interface KnowledgeRevisionInput {
+  title: string;
+  content?: string;
+  files?: unknown;
+  /** 未传表示沿用基准版本的关键词；显式 [] 才表示清空。 */
+  keywords?: string[];
+}
+
 export async function reviseHumanKnowledgeItem(
-  db: KnowledgeDb, author: KnowledgeAuthor, itemId: string, expectedVersion: number, candidate: KnowledgeCandidate,
+  db: KnowledgeDb, author: KnowledgeAuthor, itemId: string, expectedVersion: number, input: KnowledgeRevisionInput,
 ): Promise<KnowledgeWriteResult> {
-  const blob = await writeKnowledgeBlob(db, candidate);
   return db.begin(async (tx) => {
     const [item] = await tx`SELECT id,kind,logical_key,status,active_version_id FROM project_knowledge_items
       WHERE project_id=${author.projectId} AND id=${itemId} FOR UPDATE`;
@@ -61,10 +68,19 @@ export async function reviseHumanKnowledgeItem(
     if (!current || Number(current.version) !== expectedVersion) {
       throw new KnowledgeOperationError("KNOWLEDGE_VERSION_CONFLICT", "知识已被其他修改更新，请重新读取最新版本后再提交", "model_correctable", "重新读取条目最新版本，确认差异后用新的 expected_version 重新提交。");
     }
-    if (item!.kind !== candidate.kind || item!.logical_key !== candidate.logical_key) {
-      throw new KnowledgeOperationError("KNOWLEDGE_BASE_CONFLICT", "编辑不能改变知识的类型与标识", "model_correctable", "保持 kind 与 logical_key 不变；需要换标识请新建条目。");
-    }
+    // 关键词在基准版本里继承：只改正文/标题不应把原有检索词清空，显式 [] 才表示清空。
+    // SAFETY: postgres.js 的事务句柄与连接句柄共用同一 SQL 接口；这里只读同一事务内的版本字节。
+    const keywordDb = tx as unknown as KnowledgeDb;
+    const inherited = input.keywords ?? await readVersionKeywords(keywordDb, String(item!.active_version_id ?? ""));
+    const candidate = KnowledgeCandidate.parse({
+      kind: item!.kind, logical_key: item!.logical_key, title: input.title, keywords: inherited,
+      ...(input.content === undefined ? {} : { content: input.content }),
+      ...(input.files === undefined ? {} : { files: input.files }),
+    });
     const version = expectedVersion + 1;
+    // SAFETY: 同上，CAS 写入与版本元数据必须落在同一事务里。
+    const casDb = tx as unknown as KnowledgeDb;
+    const blob = await writeKnowledgeBlob(casDb, candidate);
     // SAFETY: postgres.js 的事务句柄与连接句柄共用同一 SQL 接口；这里只借用它写同一事务内的 blob 元数据。
     const blobDb = tx as unknown as KnowledgeDb;
     await registerKnowledgeBlob(blobDb, blob.hash, blob.bytes);
@@ -99,4 +115,12 @@ export async function restoreHumanKnowledgeItem(db: KnowledgeDb, author: Knowled
     await tx`UPDATE project_knowledge_items SET status='active',retired_reason=NULL,generation=generation+1,updated_at=now() WHERE id=${itemId}`;
     return { item_ref: itemId, status: "active" as const };
   });
+}
+
+/** 读取版本内容里的关键词；读取失败时按空集合处理，避免因为摘要缺失阻塞编辑。 */
+async function readVersionKeywords(db: KnowledgeDb, versionId: string): Promise<string[]> {
+  try {
+    const candidate = await readKnowledgeVersionContent(db, versionId);
+    return Array.isArray(candidate.keywords) ? candidate.keywords : [];
+  } catch { return []; }
 }

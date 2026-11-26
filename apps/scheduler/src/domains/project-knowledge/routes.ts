@@ -15,9 +15,7 @@ import { approvedKnowledgeVersion } from "./grant-policy.js";
 import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
 import { registerTaskKnowledgeCloseoutRoutes } from "./closeout-routes.js";
 import { registerKnowledgeActivityRoutes } from "./activity-routes.js";
-import { KnowledgeCandidate } from "@deepsonar/shared-types";
-import { KnowledgeOperationError } from "./types.js";
-import { archiveHumanKnowledgeItem, createHumanKnowledgeItem, restoreHumanKnowledgeItem, reviseHumanKnowledgeItem, type KnowledgeAuthor } from "./human-knowledge.js";
+import { registerHumanKnowledgeRoutes } from "./human-routes.js";
 
 const Id = z.string().uuid();
 const Page = z.object({
@@ -492,91 +490,5 @@ export function registerProjectKnowledgeRoutes(
     } catch (error) { return errorReply(reply, error); }
   });
 
-  // #1256「维护」入口：人类在项目内新建、编辑、下架与恢复知识；写入的版本记录作者来源，不走治理链。
-  const HumanCandidateBody = z.object({
-    kind: z.enum(["memory", "skill"]),
-    logical_key: z.string().trim().min(1).max(160).regex(/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/),
-    title: z.string().trim().min(1).max(200),
-    keywords: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
-    content: z.string().optional(),
-    files: z.unknown().optional(),
-  }).strict();
-  const HumanReviseBody = z.object({
-    expected_version: z.coerce.number().int().min(1),
-    title: z.string().trim().min(1).max(200),
-    keywords: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
-    content: z.string().optional(),
-    files: z.unknown().optional(),
-  }).strict();
-  const authorOf = (req: FastifyRequest, projectId: string): KnowledgeAuthor => ({
-    projectId,
-    id: req.actor?.id ?? req.actor?.name ?? "unknown",
-    name: req.actor?.name ?? "unknown",
-  });
-
-  // 知识域的稳定错误码：不存在 404，其余冲突/越权一律 409，且附带可执行 next_action。
-  const humanReply = (reply: FastifyReply, error: unknown): FastifyReply => {
-    if (error instanceof KnowledgeOperationError) {
-      const statusCode = error.error_code === "KNOWLEDGE_ITEM_NOT_FOUND" ? 404 : 409;
-      return reply.code(statusCode).send({ error_code: error.error_code, error: error.message, next_action: error.next_action });
-    }
-    return errorReply(reply, error);
-  };
-
-  app.post("/projects/:id/knowledge", async (req, reply) => {
-    const projectId = Id.parse((req.params as { id: string }).id);
-    if (!access(req, reply, projectId, true)) return reply;
-    try {
-      const body = HumanCandidateBody.parse(req.body ?? {});
-      const candidate = KnowledgeCandidate.parse({ ...body, keywords: body.keywords ?? [] });
-      const result = await createHumanKnowledgeItem(db, authorOf(req, projectId), candidate);
-      await recordAudit(req, { action: "project_knowledge.create", projectId, resourceType: "project_knowledge_item",
-        resourceId: result.item_ref, after: { version: result.version, kind: body.kind, logical_key: body.logical_key } });
-      return reply.code(201).send(result);
-    } catch (error) { return humanReply(reply, error); }
-  });
-
-  app.post("/projects/:id/knowledge/:itemId/versions", async (req, reply) => {
-    const { id, itemId } = req.params as { id: string; itemId: string };
-    const projectId = Id.parse(id);
-    const parsedItem = Id.parse(itemId);
-    if (!access(req, reply, projectId, true)) return reply;
-    try {
-      const body = HumanReviseBody.parse(req.body ?? {});
-      const [item] = await db`SELECT kind,logical_key FROM project_knowledge_items WHERE project_id=${projectId} AND id=${parsedItem}`;
-      if (!item) return reply.code(404).send({ error_code: "KNOWLEDGE_ITEM_NOT_FOUND" });
-      const candidate = KnowledgeCandidate.parse({
-        kind: item.kind, logical_key: item.logical_key, title: body.title,
-        keywords: body.keywords ?? [], content: body.content, files: body.files,
-      });
-      const result = await reviseHumanKnowledgeItem(db, authorOf(req, projectId), parsedItem, body.expected_version, candidate);
-      await recordAudit(req, { action: "project_knowledge.revise", projectId, resourceType: "project_knowledge_item",
-        resourceId: parsedItem, after: { version: result.version, expected_version: body.expected_version } });
-      return reply.code(201).send(result);
-    } catch (error) { return humanReply(reply, error); }
-  });
-
-  app.post("/projects/:id/knowledge/:itemId/archive", async (req, reply) => {
-    const { id, itemId } = req.params as { id: string; itemId: string };
-    const projectId = Id.parse(id);
-    const parsedItem = Id.parse(itemId);
-    if (!access(req, reply, projectId, true)) return reply;
-    try {
-      const result = await archiveHumanKnowledgeItem(db, authorOf(req, projectId), itemId);
-      await recordAudit(req, { action: "project_knowledge.archive", projectId, resourceType: "project_knowledge_item", resourceId: parsedItem, after: { status: result.status } });
-      return result;
-    } catch (error) { return humanReply(reply, error); }
-  });
-
-  app.post("/projects/:id/knowledge/:itemId/restore", async (req, reply) => {
-    const { id, itemId } = req.params as { id: string; itemId: string };
-    const projectId = Id.parse(id);
-    const parsedItem = Id.parse(itemId);
-    if (!access(req, reply, projectId, true)) return reply;
-    try {
-      const result = await restoreHumanKnowledgeItem(db, authorOf(req, projectId), itemId);
-      await recordAudit(req, { action: "project_knowledge.restore", projectId, resourceType: "project_knowledge_item", resourceId: parsedItem, after: { status: result.status } });
-      return result;
-    } catch (error) { return humanReply(reply, error); }
-  });
+  registerHumanKnowledgeRoutes(app, { db, recordAudit });
 }
