@@ -317,6 +317,24 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
     const plainSourced = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${plainItem}` });
     assert.deepEqual((plainSourced.json().proposals as unknown[]).length, 0,
       "候选可见但基线受限时，低权限读者拿不到任何关联信息");
+    // 历史漏读回归：50 条较新的不可见提案不能挤掉 1 条较旧的可读提案。
+    await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
+      idempotency_key,request_digest,input_digest,reason,candidate_version_id,base_refs_json,created_at)
+      SELECT gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'revise','candidate',1,${owner.jobId},
+        gen_random_uuid(),${"7".repeat(64)},${"8".repeat(64)},'较新不可见基线',${plainVersion},
+        ${db.json([{ item_ref: itemId }] as never)},now()
+      FROM generate_series(1,50)`;
+    await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
+      idempotency_key,request_digest,input_digest,reason,candidate_version_id,base_refs_json,created_at)
+      VALUES(gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'create','candidate',1,${owner.jobId},
+        ${randomUUID()},${"9".repeat(64)},${"a".repeat(64)},'较早可见提案',${plainVersion},'[]'::jsonb,
+        now()-interval '1 hour')`;
+    const olderVisible = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${plainItem}` });
+    const visibleReasons = (olderVisible.json().proposals as Array<{ reason: string }>).map((row) => row.reason);
+    assert.ok(visibleReasons.includes("较早可见提案"),
+      `较旧的可读提案不能被较新的不可见提案挤掉（实际 ${visibleReasons.length} 条）`);
+    assert.ok(!visibleReasons.includes("较新不可见基线"), "不可见基线的提案仍要过滤");
+
     const mixedDetail = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${mixedItem}` });
     assert.equal(mixedDetail.statusCode, 200, mixedDetail.body);
     assert.deepEqual((mixedDetail.json().versions as Array<{ id: string }>).map((row) => row.id), [mixedVisible],
