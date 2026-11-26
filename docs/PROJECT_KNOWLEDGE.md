@@ -209,6 +209,8 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 ## 来源登记与项目批量整理
 
+> #1219 第四阶段第二步起，业务 Job 终态不再自动登记来源；本节描述的批量整理链只继续收尾**切换前已登记**的来源与在途 work，第三步才会把 collector、collector-sources、collection-policy 与 `GET /projects/:id/knowledge/backfill` 整链移除。
+
 本轮用户明确授权自动项目整理，[ADR 0023](architecture/adr/0023-project-knowledge-collection.md) 取代 [0021](architecture/adr/0021-knowledge-source-preview.md) 中项目批处理暂缓的限制；0021 的历史决定保留。成功业务 Job 的登记仍仅在原终态事务/savepoint 中向 append-only `audit_logs` 写 `project_knowledge.source_registered`（`system/scheduler`、`result=ok`），记录 Job/Attempt/Canvas 与 Fact/Evidence 或已接受反馈的存在标记；不在终态事务中复制正文或创建模型 Job。登记失败隔离并告警，不回滚业务成功。登记不保证来源正文保留，不是候选或产物。
 
 [collector.ts](../apps/scheduler/src/domains/project-knowledge/collector.ts) 由既有 Dispatcher tick 调用，[knowledge-wake.ts](../apps/scheduler/src/knowledge-wake.ts) 计算同一调度器的持久唤醒，不新增轮询执行器。数值阈值是本轮实现取舍，不追认为用户逐字指定参数。本轮 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量及自动准入规则：项目至少积累 **4 个未处理来源，或最老待处理来源等待满 24 小时**，并且距上次自动批次创建满 **24 小时**，才可准入。来源数按源 Job 去重，已 collected/skipped 的来源不再计入；retry 未到期的来源仍待处理，但不得提前准备。低于四个可准备来源时，同一来源必须同时满足满 24 小时和 retry 到期，不能由尚在退避的旧来源为新来源提前开启批次。项目已有非旧自动 `pending/running` work 时等待，不再建立并行项目批次；这不是给全部 Agent 显式请求新增数据库唯一约束。
