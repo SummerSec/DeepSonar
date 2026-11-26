@@ -523,7 +523,7 @@ export function registerProjectKnowledgeRoutes(
       await recordAudit(req, { action: "project_knowledge.create", projectId, resourceType: "project_knowledge_item",
         resourceId: result.item_ref, after: { version: result.version, kind: body.kind, logical_key: body.logical_key } });
       return reply.code(201).send(result);
-    } catch (error) { return errorReply(reply, error); }
+    } catch (error) { console.error("[dbg1256] create", error instanceof Error ? error.message : String(error)); return errorReply(reply, error); }
   });
 
   app.post("/projects/:id/knowledge/:itemId/versions", async (req, reply) => {
