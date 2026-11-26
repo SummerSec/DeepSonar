@@ -1,0 +1,70 @@
+name: control-plane-image-versions
+
+# #1228：控制面（Scheduler / Web）镜像的 Node 内置与已安装 Undici 版本必须在真实构建里取证，
+# 单改 Dockerfile 或 Core 矩阵全绿都不算这两项验收。
+on:
+  pull_request:
+    paths:
+      - 'deploy/Dockerfile.scheduler'
+      - 'deploy/Dockerfile.web'
+      - 'deploy/Dockerfile.agent'
+      - 'deploy/Dockerfile.agent-kali-minimal'
+      - 'agent-harness/runtime-images.json'
+      - 'agent-harness/kali-minimal-runtime.json'
+      - 'packages/**'
+      - 'apps/**'
+      - 'pnpm-lock.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scheduler candidate image versions
+        run: |
+          set -o pipefail
+          docker build -f deploy/Dockerfile.scheduler -t deepsonar-scheduler:ci \
+            . 2>&1 | tee scheduler-build.log
+          line=$(rg -o '\{"node":"[^}]*\}' scheduler-build.log | tail -1)
+          echo "scheduler: $line"
+          echo "$line" | rg -q '"undici_workspace"'
+          echo "$line" | rg -q '"undici_opensandbox"'
+          echo "$line" | rg -q '"undici_bundled"'
+          {
+            echo "### Scheduler candidate image versions"
+            echo
+            echo '```json'
+            echo "$line"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Web candidate image versions
+        run: |
+          set -o pipefail
+          docker build -f deploy/Dockerfile.web -t deepsonar-web:ci \
+            . 2>&1 | tee web-build.log
+          line=$(rg -o '\{"node":"[^}]*\}' web-build.log | tail -1)
+          echo "web: $line"
+          echo "$line" | rg -q '"undici_bundled"'
+          {
+            echo "### Web candidate image versions"
+            echo
+            echo '```json'
+            echo "$line"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: control-plane-image-versions
+          path: |
+            scheduler-build.log
+            web-build.log
+          retention-days: 7
