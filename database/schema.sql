@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 79);
+INSERT INTO schema_meta (id, version) VALUES ('global', 80);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2911,6 +2911,8 @@ CREATE TABLE project_knowledge_items (
   title text NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
   keywords_json jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(keywords_json) = 'array'),
   status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','stale','retired','revoked')),
+  -- #1256：区分「用户下架」与治理链的 retired；只有用户下架允许 restore 回 active。
+  retired_reason text CHECK (retired_reason IS NULL OR length(retired_reason) BETWEEN 1 AND 200),
   active_version_id uuid,
   generation bigint NOT NULL DEFAULT 0 CHECK (generation >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -2924,14 +2926,20 @@ CREATE TABLE project_knowledge_versions (
   item_id uuid NOT NULL,
   version int NOT NULL CHECK (version > 0),
   content_sha256 text NOT NULL REFERENCES shared_asset_blobs(content_sha256),
-  creator_job_id uuid NOT NULL REFERENCES jobs(id),
-  creator_attempt_id uuid NOT NULL REFERENCES job_attempts(id),
+  -- #1256：人类在 Web 上新建/编辑的版本没有 Job/Attempt，来源由 created_by_type/created_by 记录。
+  creator_job_id uuid REFERENCES jobs(id),
+  creator_attempt_id uuid REFERENCES job_attempts(id),
+  created_by_type text NOT NULL DEFAULT 'job' CHECK (created_by_type IN ('job','human')),
+  created_by text,
   sources_json jsonb NOT NULL CHECK (jsonb_typeof(sources_json) = 'array'),
   governance_hash text NOT NULL CHECK (governance_hash ~ '^[a-f0-9]{64}$'),
   revoked_at timestamptz,
   revoked_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (project_id,id), UNIQUE (project_id,item_id,id), UNIQUE (item_id,version),
+  CHECK ((created_by_type = 'job') = (creator_job_id IS NOT NULL)),
+  CHECK ((created_by_type = 'job') = (creator_attempt_id IS NOT NULL)),
+  CHECK ((created_by_type = 'human') = (created_by IS NOT NULL)),
   FOREIGN KEY (project_id,item_id) REFERENCES project_knowledge_items(project_id,id)
 );
 ALTER TABLE project_knowledge_items ADD CONSTRAINT project_knowledge_active_version_fk

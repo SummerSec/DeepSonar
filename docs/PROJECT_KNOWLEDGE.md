@@ -179,6 +179,17 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 因此现在没有新的来源会进入旧采集链：`project_knowledge_work` 的自动准备行不再产生，采集与唤醒代码暂时保留（等在列表与审计里确认无消费方后，再按 #1219 第四阶段第三步删除，届时会移除 `GET /projects/:id/knowledge/backfill`，属破坏性变更）。
 
 历史 `source_registered` / `source_collected` 审计与既有 `project_knowledge_work` 记录保持只读，不改写。
+### 人类维护入口（#1256，2026-11-26）
+
+项目操作员（非 viewer、持 `projects:write`）可以在项目知识里直接新建、编辑、下架与恢复条目，不必先开治理 Job：
+
+- 新建：`{kind, logical_key, title, keywords?, content|files}`，记忆正文 ≤12288 字节或 Skill 文件包（二者互斥），写入即生效；同项目同标识重复新建返回 `KNOWLEDGE_BASE_CONFLICT`。
+- 编辑：必须带 `expected_version`，生成新版本并保留历史；版本已被别人推进时返回 `KNOWLEDGE_VERSION_CONFLICT`，需要重新读取最新版本。
+- 下架：状态置 `retired` 且 `retired_reason=archived_by_user`，历史版本与来源不动。
+- 恢复：只对用户下架的条目生效；评测淘汰（`stale`/评测 `retired`）与安全撤回（`revoked`）不可通过恢复绕过，返回 `KNOWLEDGE_RESTORE_DENIED`。
+- 作者来源：人类写入的版本用 `created_by_type='human'` 与 `created_by` 记录作者，不再伪造 Job/Attempt；Job 写入的版本仍是 `created_by_type='job'` 并保留 `creator_job_id/creator_attempt_id`（schema 80）。
+- 权限与可见性沿用既有规则：来源授权、受限版本剔除、分页前过滤都不因人类写入而放宽；Web 页面渲染是人类维护的后续切片。
+
 ## 验证与运维
 
 2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。

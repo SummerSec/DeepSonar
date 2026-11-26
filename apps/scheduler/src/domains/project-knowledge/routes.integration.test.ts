@@ -369,3 +369,43 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
     assert.ok(Array.isArray((allowedDetail.json().versions[0] as Record<string, unknown>).sources_json));
   });
 });
+
+test("human maintenance creates, revises, archives and restores knowledge with an author", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-1", name: "maintainer-a", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "human-hosted", title: "人类维护的知识", content: "第一条人工沉淀内容" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const duplicate = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "human-hosted", title: "人类维护的知识", content: "重复标识" } });
+    assert.equal(duplicate.statusCode, 409, duplicate.body);
+    assert.equal(duplicate.json().error_code, "KNOWLEDGE_BASE_CONFLICT");
+    const stale = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 9, title: "人类维护的知识", content: "基于过期版本编辑" } });
+    assert.equal(stale.statusCode, 409, stale.body);
+    assert.equal(stale.json().error_code, "KNOWLEDGE_VERSION_CONFLICT");
+    const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "人类维护的知识（修订）", content: "第二条人工沉淀内容（修订后）" } });
+    assert.equal(revised.statusCode, 201, revised.body);
+    assert.equal((revised.json() as { version: number }).version, 2);
+    const authors = await db`SELECT created_by_type, created_by FROM project_knowledge_versions
+      WHERE item_id=${itemRef} ORDER BY version`;
+    assert.deepEqual(authors.map((row) => [row.created_by_type, row.created_by]), [["human", "author-1"], ["human", "author-1"]]);
+    const archived = await app.inject({ method: "POST", url: `${base}/${itemRef}/archive`, payload: {} });
+    assert.equal(archived.statusCode, 200, archived.body);
+    const [archivedRow] = await db`SELECT status, retired_reason FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.equal(archivedRow!.status, "retired");
+    assert.equal(archivedRow!.retired_reason, "archived_by_user");
+    const restored = await app.inject({ method: "POST", url: `${base}/${itemRef}/restore`, payload: {} });
+    assert.equal(restored.statusCode, 200, restored.body);
+    const [restoredRow] = await db`SELECT status FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.equal(restoredRow!.status, "active");
+  });
+});

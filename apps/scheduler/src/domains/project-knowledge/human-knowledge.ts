@@ -1,0 +1,102 @@
+import type { KnowledgeCandidate } from "@deepsonar/shared-types";
+import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
+import { canonical, KnowledgeOperationError, sha256, type KnowledgeDb } from "./types.js";
+
+/** 人类（Web 操作员）在项目内维护知识时的身份；没有 Job/Attempt，因此单独记录作者。 */
+export interface KnowledgeAuthor {
+  projectId: string;
+  id: string;
+  name: string;
+}
+
+export interface KnowledgeWriteResult {
+  item_ref: string;
+  version_ref: string;
+  version: number;
+}
+
+const notFound = (): never => {
+  throw new KnowledgeOperationError("KNOWLEDGE_ITEM_NOT_FOUND", "知识条目不存在或已被撤销", "permanent_failure", "刷新项目知识列表后重试；不要假设该条目仍然存在。");
+};
+
+/** 人类写入没有治理流程，用内容与身份的确定性摘要占位，保持既有的 64 位十六进制约束。 */
+function humanGovernanceHash(input: { projectId: string; itemId: string; version: number; contentHash: string }): string {
+  return sha256(canonical({ kind: "human-authored", ...input }));
+}
+
+export async function createHumanKnowledgeItem(db: KnowledgeDb, author: KnowledgeAuthor, candidate: KnowledgeCandidate): Promise<KnowledgeWriteResult> {
+  const blob = await writeKnowledgeBlob(db, candidate);
+  return db.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${`knowledge-human:${author.projectId}:${candidate.kind}:${candidate.logical_key}`}))`;
+    const [existing] = await tx`SELECT id FROM project_knowledge_items
+      WHERE project_id=${author.projectId} AND kind=${candidate.kind} AND logical_key=${candidate.logical_key}`;
+    if (existing) {
+      throw new KnowledgeOperationError("KNOWLEDGE_BASE_CONFLICT", "同名标识的知识已存在，请改用编辑或换一个标识", "model_correctable", "改用已有条目编辑入口，或换一个 logically unique 的 logical_key 后重试。");
+    }
+    const [item] = await tx`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,keywords_json)
+      VALUES(${author.projectId},${candidate.kind},${candidate.logical_key},${candidate.title},${tx.json(candidate.keywords ?? [])}) RETURNING id`;
+    const itemId = String(item!.id);
+    // SAFETY: postgres.js 的事务句柄与连接句柄共用同一 SQL 接口；这里只借用它写同一事务内的 blob 元数据。
+    const blobDb = tx as unknown as KnowledgeDb;
+    await registerKnowledgeBlob(blobDb, blob.hash, blob.bytes);
+    const [version] = await tx`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,created_by_type,created_by,sources_json,governance_hash)
+      VALUES(${author.projectId},${itemId},1,${blob.hash},'human',${author.id},'[]'::jsonb,${humanGovernanceHash({ projectId: author.projectId, itemId, version: 1, contentHash: blob.hash })}) RETURNING id,version`;
+    await tx`UPDATE project_knowledge_items SET status='active',active_version_id=${String(version!.id)},generation=generation+1,updated_at=now() WHERE id=${itemId}`;
+    return { item_ref: itemId, version_ref: String(version!.id), version: Number(version!.version) };
+  });
+}
+
+export async function reviseHumanKnowledgeItem(
+  db: KnowledgeDb, author: KnowledgeAuthor, itemId: string, expectedVersion: number, candidate: KnowledgeCandidate,
+): Promise<KnowledgeWriteResult> {
+  const blob = await writeKnowledgeBlob(db, candidate);
+  return db.begin(async (tx) => {
+    const [item] = await tx`SELECT id,kind,logical_key,status,active_version_id FROM project_knowledge_items
+      WHERE project_id=${author.projectId} AND id=${itemId} FOR UPDATE`;
+    if (!item) notFound();
+    if (item!.status === "revoked") {
+      throw new KnowledgeOperationError("KNOWLEDGE_REVOKED", "该知识条目已被撤回，不能再编辑", "permanent_failure", "停止编辑这个条目；需要新内容时请新建条目。");
+    }
+    const [current] = await tx`SELECT version FROM project_knowledge_versions WHERE id=${item!.active_version_id ?? null}`;
+    if (!current || Number(current.version) !== expectedVersion) {
+      throw new KnowledgeOperationError("KNOWLEDGE_VERSION_CONFLICT", "知识已被其他修改更新，请重新读取最新版本后再提交", "model_correctable", "重新读取条目最新版本，确认差异后用新的 expected_version 重新提交。");
+    }
+    if (item!.kind !== candidate.kind || item!.logical_key !== candidate.logical_key) {
+      throw new KnowledgeOperationError("KNOWLEDGE_BASE_CONFLICT", "编辑不能改变知识的类型与标识", "model_correctable", "保持 kind 与 logical_key 不变；需要换标识请新建条目。");
+    }
+    const version = expectedVersion + 1;
+    // SAFETY: postgres.js 的事务句柄与连接句柄共用同一 SQL 接口；这里只借用它写同一事务内的 blob 元数据。
+    const blobDb = tx as unknown as KnowledgeDb;
+    await registerKnowledgeBlob(blobDb, blob.hash, blob.bytes);
+    const [created] = await tx`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,created_by_type,created_by,sources_json,governance_hash)
+      VALUES(${author.projectId},${itemId},${version},${blob.hash},'human',${author.id},'[]'::jsonb,${humanGovernanceHash({ projectId: author.projectId, itemId, version, contentHash: blob.hash })}) RETURNING id,version`;
+    await tx`UPDATE project_knowledge_items SET status='active',retired_reason=NULL,active_version_id=${String(created!.id)},title=${candidate.title},keywords_json=${tx.json(candidate.keywords ?? [])},generation=generation+1,updated_at=now() WHERE id=${itemId}`;
+    return { item_ref: itemId, version_ref: String(created!.id), version: Number(created!.version) };
+  });
+}
+
+export async function archiveHumanKnowledgeItem(db: KnowledgeDb, author: KnowledgeAuthor, itemId: string): Promise<{ item_ref: string; status: "retired" }> {
+  return db.begin(async (tx) => {
+    const [item] = await tx`SELECT id,status FROM project_knowledge_items WHERE project_id=${author.projectId} AND id=${itemId} FOR UPDATE`;
+    if (!item) notFound();
+    if (item!.status === "revoked") {
+      throw new KnowledgeOperationError("KNOWLEDGE_REVOKED", "该知识条目已被撤回，不能再下架", "permanent_failure", "停止操作这个条目；撤回由安全流程处理，不能通过下架绕过。");
+    }
+    if (item!.status === "retired") return { item_ref: itemId, status: "retired" as const };
+    await tx`UPDATE project_knowledge_items SET status='retired',retired_reason='archived_by_user',generation=generation+1,updated_at=now() WHERE id=${itemId}`;
+    return { item_ref: itemId, status: "retired" as const };
+  });
+}
+
+export async function restoreHumanKnowledgeItem(db: KnowledgeDb, author: KnowledgeAuthor, itemId: string): Promise<{ item_ref: string; status: "active" }> {
+  return db.begin(async (tx) => {
+    const [item] = await tx`SELECT id,status,retired_reason,active_version_id FROM project_knowledge_items
+      WHERE project_id=${author.projectId} AND id=${itemId} FOR UPDATE`;
+    if (!item) notFound();
+    if (item!.status !== "retired" || item!.retired_reason !== "archived_by_user" || !item!.active_version_id) {
+      throw new KnowledgeOperationError("KNOWLEDGE_RESTORE_DENIED", "只有用户下架的条目可以恢复；评测淘汰或撤回的条目不能直接恢复", "permanent_failure", "不要通过恢复绕过评测淘汰或安全撤回；需要新内容请新建条目。");
+    }
+    await tx`UPDATE project_knowledge_items SET status='active',retired_reason=NULL,generation=generation+1,updated_at=now() WHERE id=${itemId}`;
+    return { item_ref: itemId, status: "active" as const };
+  });
+}

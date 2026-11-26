@@ -44,6 +44,10 @@ GET /projects/:id/knowledge/:itemId/versions/:versionId/feedback
 GET /projects/:id/knowledge/:itemId/versions/:versionId/grants
 POST /projects/:id/knowledge/:itemId/versions/:versionId/grants
 POST /projects/:id/knowledge/closeout/:rootId/evaluate
+POST /projects/:id/knowledge
+POST /projects/:id/knowledge/:itemId/versions
+POST /projects/:id/knowledge/:itemId/archive
+POST /projects/:id/knowledge/:itemId/restore
 POST /projects/:id/knowledge/grants/:grantId/revoke
 POST /projects/:id/knowledge/:itemId/versions/:versionId/revoke
 DELETE /agent-roles/:id
@@ -309,6 +313,10 @@ GET /projects/{id}/knowledge/{itemId}/versions/{versionId}/feedback
 GET /projects/{id}/knowledge/{itemId}/versions/{versionId}/grants
 POST /projects/{id}/knowledge/{itemId}/versions/{versionId}/grants
 POST /projects/{id}/knowledge/closeout/{rootId}/evaluate
+POST /projects/{id}/knowledge
+POST /projects/{id}/knowledge/{itemId}/versions
+POST /projects/{id}/knowledge/{itemId}/archive
+POST /projects/{id}/knowledge/{itemId}/restore
 POST /projects/{id}/knowledge/grants/{grantId}/revoke
 POST /projects/{id}/knowledge/{itemId}/versions/{versionId}/revoke
 DELETE /agent-roles/{id}
