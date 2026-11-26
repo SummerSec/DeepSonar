@@ -151,9 +151,8 @@ export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boole
       stale = knowledge.stale;
       // 等待期间可能有路由用 noteScheduleWakeAt() 装了更早的普通定时器，
       // 这里只允许把定时器提前，不能再用等待前的 tasks.nearest 推迟或清除它。
-      if (knowledge.nearest != null && (armedUntilMs == null || knowledge.nearest < armedUntilMs)) {
-        armTimer(knowledge.nearest);
-      }
+      const merged = earlierDeadline(armedUntilMs, knowledge.nearest);
+      if (merged != null && merged !== armedUntilMs) armTimer(merged);
       if (knowledge.due) fireKick();
     } catch (error) {
       console.error("[schedule-wake] refresh failed:", error);
@@ -164,6 +163,13 @@ export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boole
     }
   })();
   return refreshInFlight;
+}
+
+/** 合并定时器时只允许提前：等待期间路由可能已经装了更早的普通任务时间。 */
+export function earlierDeadline(current: number | null, candidate: number | null): number | null {
+  if (candidate == null) return current;
+  if (current == null) return candidate;
+  return Math.min(current, candidate);
 }
 
 function armTimer(targetMs: number): void {

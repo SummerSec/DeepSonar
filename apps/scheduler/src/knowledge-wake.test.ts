@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { knowledgeProbeIntervalMs, shouldProbeKnowledgeWake } from "./knowledge-wake.js";
+import { earlierDeadline } from "./schedule-wake.js";
 
 const state = (patch: Partial<Parameters<typeof shouldProbeKnowledgeWake>[0]> = {}) =>
   ({ wakeAt: null, probedAt: 0, firedFor: null, refreshRequested: false, ...patch });
@@ -30,4 +31,11 @@ test("#1287 显式失效与无唤醒状态的处理", () => {
   assert.equal(knowledgeProbeIntervalMs({} as NodeJS.ProcessEnv), 30_000);
   assert.equal(knowledgeProbeIntervalMs({ DEEPSONAR_KNOWLEDGE_PROBE_INTERVAL_MS: "5000" } as NodeJS.ProcessEnv), 5_000);
   assert.equal(knowledgeProbeIntervalMs({ DEEPSONAR_KNOWLEDGE_PROBE_INTERVAL_MS: "-1" } as NodeJS.ProcessEnv), 30_000);
+});
+
+test("#1287 合并定时器只允许提前，不会推迟等待期间新装的普通时间", () => {
+  assert.equal(earlierDeadline(null, 5_000), 5_000);
+  assert.equal(earlierDeadline(5_000, null), 5_000, "知识侧没有更早时间时必须保留原有定时器");
+  assert.equal(earlierDeadline(9_000, 5_000), 5_000, "更早的候选要生效");
+  assert.equal(earlierDeadline(5_000, 9_000), 5_000, "更晚的候选不能推迟已装定时器");
 });
