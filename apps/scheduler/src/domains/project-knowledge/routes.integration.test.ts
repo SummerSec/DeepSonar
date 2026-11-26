@@ -51,7 +51,7 @@ test("management routes enforce owner project, exact Skill grants, irreversible 
     try {
       const path = `/projects/${owner.projectId}/knowledge`;
       let res = await app.inject({ method: "GET", url: path });
-      assert.equal(res.statusCode, 200);
+      assert.equal(res.statusCode, 200, res.body);
       assert.equal(res.json().items.length, 2);
       res = await app.inject({ method: "GET", url: `${path}?query=skill&limit=1` });
       assert.equal(res.statusCode, 200);
