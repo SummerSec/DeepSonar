@@ -5,6 +5,7 @@ export type SourceRef = { kind?: unknown; ref?: unknown; content_hash?: unknown 
 
 /** 一条来源的归属与是否属于治理资料。 */
 export type SourceOwner = {
+  kind: string;
   ref: string;
   content_hash: string | null;
   project_id: string | null;
@@ -32,9 +33,10 @@ async function locateEvidence(db: KnowledgeDb, ref: string) {
 }
 
 async function locateFact(db: KnowledgeDb, ref: string) {
-  const [row] = await db`SELECT c.project_id FROM canvas_nodes cn
+  // Fact 也可能挂在某个 Job 上（canvas_nodes.job_id），治理来源要按它判定。
+  const [row] = await db`SELECT c.project_id, cn.job_id FROM canvas_nodes cn
     JOIN canvases c ON c.id=cn.canvas_id WHERE cn.id=${ref}`;
-  return row ? { projectId: String(row.project_id), jobId: null } : null;
+  return row ? { projectId: String(row.project_id), jobId: row.job_id ? String(row.job_id) : null } : null;
 }
 
 async function locateTask(db: KnowledgeDb, ref: string) {
@@ -60,7 +62,7 @@ async function resolveOne(db: KnowledgeDb, source: SourceRef): Promise<{ owner: 
   if (!located) return { owner: null, unresolved: true };
   const contentHash = typeof source.content_hash === "string" ? source.content_hash : null;
   const governance = located.jobId ? await isGovernanceJob(db, located.jobId, located.projectId) : false;
-  return { owner: { ref, content_hash: contentHash, project_id: located.projectId, job_id: located.jobId, governance },
+  return { owner: { kind, ref, content_hash: contentHash, project_id: located.projectId, job_id: located.jobId, governance },
     unresolved: false };
 }
 
@@ -98,5 +100,6 @@ export async function actorMayReadGovernanceSources(db: KnowledgeDb, actor: { jo
       allowed.add(`${value.input_ref}\u0000${value.content_hash}`);
     }
   }
-  return restricted.every((owner) => allowed.has(`${owner.ref}\u0000${owner.content_hash ?? ""}`));
+  // 清单里的 input_ref 是 `kind:UUID`（inputs.ts 写入格式），不另造裸 UUID 比对。
+  return restricted.every((owner) => allowed.has(`${owner.kind}:${owner.ref}\u0000${owner.content_hash ?? ""}`));
 }

@@ -249,9 +249,9 @@ test("published versions resolve source authorization from the original governan
         VALUES (${reader.jobId}, ${owner.projectId}, ${String(readerWork?.id)}, ${stage}, ${db.json(manifest as never)})`;
       return search(reader);
     };
-    const audienceOk = await assign("maker", [{ input_ref: evidenceId, content_hash: sourceHash, audience: ["maker"] }]);
+    const audienceOk = await assign("maker", [{ input_ref: `evidence:${evidenceId}`, content_hash: sourceHash, audience: ["maker"] }]);
     assert.equal((audienceOk.items as unknown[]).length, 1, "冻结清单逐字命中且阶段在受众内时必须可见");
-    const wrongStage = await assign("reviewer", [{ input_ref: evidenceId, content_hash: sourceHash, audience: ["maker"] }]);
+    const wrongStage = await assign("reviewer", [{ input_ref: `evidence:${evidenceId}`, content_hash: sourceHash, audience: ["maker"] }]);
     assert.equal((wrongStage.items as unknown[]).length, 0, "同一批次但不在受众里的任务不放行");
     const wrongHash = await assign("maker", [{ input_ref: evidenceId, content_hash: "f".repeat(64), audience: ["maker"] }]);
     assert.equal((wrongHash.items as unknown[]).length, 0, "哈希不一致不能当成同一来源");
