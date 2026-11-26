@@ -453,3 +453,40 @@ test("editing only the body keeps the base version keywords unless an explicit e
     assert.deepEqual(emptied!.keywords_json, [], "显式空数组才清空关键词");
   });
 });
+
+test("an unreadable base version blocks the edit instead of clearing the keywords", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-3", name: "maintainer-c", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "unreadable-base", title: "基准不可读的知识", keywords: ["巡检"], content: "第一版" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const versionRef = (created.json() as { version_ref: string }).version_ref;
+    // 让基准版本不可读：撤销版本但条目仍处于 active（真实撤销路径也会这样写 items）。
+    await db`UPDATE project_knowledge_versions SET revoked_at=now(), revoked_reason='security' WHERE id=${versionRef}`;
+    const before = await db`SELECT status, keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "基准不可读的知识", content: "不该写进去的第二版" } });
+    assert.equal(revised.statusCode, 409, revised.body);
+    assert.match(revised.json().error_code, /KNOWLEDGE_(REVOKED|SOURCE_MISSING)/u);
+    const after = await db`SELECT status, keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.deepEqual(after[0]!.keywords_json, before[0]!.keywords_json, "读取失败不得清空关键词");
+    assert.equal(after[0]!.status, before[0]!.status, "读取失败不得改动条目状态");
+    const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${itemRef}`;
+    assert.equal(versions[0]!.total, 1, "读取失败不得写入新版本");
+  });
+});

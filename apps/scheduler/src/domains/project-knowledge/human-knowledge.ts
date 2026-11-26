@@ -117,10 +117,11 @@ export async function restoreHumanKnowledgeItem(db: KnowledgeDb, author: Knowled
   });
 }
 
-/** 读取版本内容里的关键词；读取失败时按空集合处理，避免因为摘要缺失阻塞编辑。 */
+/**
+ * 读取基准版本的关键词。读取失败（版本被撤销、字节不可用）必须让整笔编辑失败，
+ * 不能当成「没有关键词」继续写新版本——否则一次读取故障就会静默清空检索词。
+ */
 async function readVersionKeywords(db: KnowledgeDb, versionId: string): Promise<string[]> {
-  try {
-    const candidate = await readKnowledgeVersionContent(db, versionId);
-    return Array.isArray(candidate.keywords) ? candidate.keywords : [];
-  } catch { return []; }
+  const candidate = await readKnowledgeVersionContent(db, versionId);
+  return Array.isArray(candidate.keywords) ? candidate.keywords : [];
 }
