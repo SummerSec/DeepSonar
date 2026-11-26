@@ -31,7 +31,9 @@ let refreshGeneration = 0;
 
 /** 知识工作被写入/推进后调用，下一次刷新立刻回库。 */
 export function noteKnowledgeWakeChange(): void {
+  // 只在知识真正失效时推进代次：在途探测的旧结果会被丢弃并补查一次。
   knowledgeProbe.refreshRequested = true;
+  refreshGeneration += 1;
 }
 
 /** Wire the dispatcher kick once at boot to avoid a module cycle. */
@@ -135,7 +137,10 @@ async function refreshTaskDeadlines(): Promise<void> {
       const armed = armedUntilMs != null && armedUntilMs > now ? armedUntilMs : null;
       const merged = earlierDeadline(armed, tasks.nearest);
       if (merged != null && merged !== armed) armTimer(merged);
-      if (tasks.hasDue && refreshRequestsDueKick) fireKick();
+      // 按本次普通扫描消费掉 kick 请求：知识侧的静默刷新（kickDueTasks: false）不能借它再触发领取。
+      const dueKick = tasks.hasDue && refreshRequestsDueKick;
+      refreshRequestsDueKick = false;
+      if (dueKick) fireKick();
     } catch (error) {
       console.error("[schedule-wake] task scan failed:", error);
     } finally {
