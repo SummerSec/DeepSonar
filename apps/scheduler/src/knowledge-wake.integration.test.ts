@@ -127,7 +127,8 @@ test("source wake uses the latest persisted retry deadline and retains the pendi
 
 test("#1287 知识探测挂住时不挡普通挂表，且 kick 请求按批次消费", async () => {
   const { armedUntilForTests, bindScheduleWake, clearScheduleWake, noteKnowledgeWakeChange,
-    refreshScheduleWakeFromDb, setKnowledgeWakeProbeForTests } = await import("./schedule-wake.js");
+    refreshScheduleWakeFromDb, resetKnowledgeWakeForTests, setKnowledgeWakeProbeForTests } =
+    await import("./schedule-wake.js");
   await withKnowledgeDatabase(async (db) => {
     const owner = await seedKnowledgeJob(db);
     const scheduled = async (startAt: string) => {
@@ -181,13 +182,15 @@ test("#1287 知识探测挂住时不挡普通挂表，且 kick 请求按批次�
       setKnowledgeWakeProbeForTests(null);
       clearScheduleWake();
       bindScheduleWake(() => undefined);
+      resetKnowledgeWakeForTests();
     }
   });
 });
 
 test("#1287 两个未来普通任务在知识探测挂住时各自按时触发领取", async () => {
   const { armedUntilForTests, bindScheduleWake, clearScheduleWake, refreshScheduleWakeFromDb,
-    setKnowledgeWakeProbeForTests } = await import("./schedule-wake.js");
+    resetKnowledgeWakeForTests, setKnowledgeWakeProbeForTests } = await import("./schedule-wake.js");
+  resetKnowledgeWakeForTests();
   await withKnowledgeDatabase(async (db) => {
     const owner = await seedKnowledgeJob(db);
     const scheduled = async (startAt: string) => {
@@ -218,6 +221,7 @@ test("#1287 两个未来普通任务在知识探测挂住时各自按时触发�
       setKnowledgeWakeProbeForTests(null);
       clearScheduleWake();
       bindScheduleWake(() => undefined);
+      resetKnowledgeWakeForTests();
     }
   });
 });

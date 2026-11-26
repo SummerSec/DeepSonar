@@ -28,6 +28,12 @@ let kick: (() => void) | null = null;
 /** 测试缝：注入知识探测，避免依赖真实 audit_logs 慢查询。 */
 let knowledgeProbeForTests: (() => Promise<Date | null>) | null = null;
 
+/** 仅测试用：围栏之间的模块状态必须归零，否则上一个用例的知识期限会漏到下一个用例。 */
+export function resetKnowledgeWakeForTests(): void {
+  knowledgeProbe = { wakeAt: null, probedAt: 0, firedFor: null, refreshRequested: true };
+  refreshRequestsDueKick = false;
+}
+
 /** 仅测试用：读取当前已装的定时器时间。 */
 export function armedUntilForTests(): number | null {
   return armedUntilMs;
