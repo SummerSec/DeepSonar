@@ -51,7 +51,9 @@ async function isGovernanceJob(db: KnowledgeDb, jobId: string, projectId: string
 async function resolveOne(db: KnowledgeDb, source: SourceRef): Promise<{ owner: SourceOwner | null; unresolved: boolean }> {
   const kind = typeof source.kind === "string" ? source.kind : "";
   if (kind !== "fact" && kind !== "evidence" && kind !== "task") return { owner: null, unresolved: false };
-  const ref = typeof source.ref === "string" && UUID.test(source.ref) ? source.ref.toLowerCase() : null;
+  // `task` 这种来源没有 ref 字段，标识就是 job_id（沉淀入库时追加的当前任务出处）。
+  const rawRef = kind === "task" ? (source as Record<string, unknown>).job_id : source.ref;
+  const ref = typeof rawRef === "string" && UUID.test(rawRef) ? rawRef.toLowerCase() : null;
   if (!ref) return { owner: null, unresolved: true };
   const located = kind === "evidence" ? await locateEvidence(db, ref)
     : kind === "fact" ? await locateFact(db, ref) : await locateTask(db, ref);

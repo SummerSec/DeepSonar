@@ -21,7 +21,10 @@ function fakeDb(options: { governanceJobs?: string[]; manifest?: Manifest; stage
       return Promise.resolve([{ project_id: projectId, job_id: governance.has("evidence") ? governanceJob : ordinaryJob }]);
     }
     if (query.includes("FROM canvas_nodes")) return Promise.resolve([]);
-    if (query.includes("FROM jobs WHERE id=")) return Promise.resolve([]);
+    if (query.includes("FROM jobs WHERE id=")) {
+      const id = String(values[0]);
+      return Promise.resolve(id === ordinaryJob ? [{ project_id: projectId, id: ordinaryJob }] : []);
+    }
     if (query.includes("SELECT 1 FROM project_knowledge_job_assignments")) {
       return Promise.resolve(governance.has(String(values[0])) ? [{ "?column?": 1 }] : []);
     }
@@ -68,4 +71,12 @@ test("来源不可用时明确计为 unresolved，未知 kind 不参与判定", 
   const unknown = await resolveSourceOwners(db, [{ kind: "feedback", ref: evidenceId }]);
   assert.equal(unknown.unresolved, 0, "没见过的来源形状不应导致知识被隐藏");
   assert.equal(unknown.owners.length, 0);
+});
+
+test("task 来源用 job_id 定位，不因为没有 ref 字段而被当成不可用", async () => {
+  const db = fakeDb();
+  const resolved = await resolveSourceOwners(db, [{ kind: "task", job_id: ordinaryJob }]);
+  assert.equal(resolved.unresolved, 0);
+  assert.equal(resolved.owners.length, 1);
+  assert.equal(resolved.owners[0]!.job_id, ordinaryJob);
 });
