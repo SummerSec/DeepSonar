@@ -9,13 +9,6 @@
         "install.cjs": "32a7b2429d7447c5aa043e383bcf9a72e0b233dff66336ea4b5b32531da981ad"
       }
     },
-    "@google/genai": {
-      "version": "2.32.0",
-      "scripts": {
-        "preinstall": "echo 'preinstall: no-op'"
-      },
-      "files": {}
-    },
     "protobufjs": {
       "version": "7.6.6",
       "scripts": {

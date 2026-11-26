@@ -86,7 +86,6 @@ test("production lifecycle identities match all install-script entries in the co
   assert.deepEqual(frozen.hooks, {
     "@anthropic-ai/claude-code": { version: "2.1.312", scripts: { postinstall: "node install.cjs" },
       files: { "install.cjs": "32a7b2429d7447c5aa043e383bcf9a72e0b233dff66336ea4b5b32531da981ad" } },
-    "@google/genai": { version: "2.32.0", scripts: { preinstall: "echo 'preinstall: no-op'" }, files: {} },
     protobufjs: { version: "7.6.6", scripts: { postinstall: "node scripts/postinstall" },
       files: { "scripts/postinstall.js": "5af8463b97ee8e309b4a2111f9479bacdf0c180de0ca0155527679b1fc6d9e6c" } },
   });
@@ -191,10 +190,10 @@ test("rejects missing selected native lock and changed locked optionalDependency
 for (const [label, change, code] of [
   ["new lock hook", f => { f.lock.packages["node_modules/plain"].hasInstallScript = true; }, "BASE_CLI_HOOK_MISMATCH"],
   ["removed lock hook", f => { delete f.lock.packages[`node_modules/${wrapperName}`].hasInstallScript; }, "BASE_CLI_HOOK_MISMATCH"],
-  ["changed locked hook version", f => { f.lock.packages["node_modules/@google/genai"].version = "0.0.0"; }, "BASE_CLI_VERSION_MISMATCH"],
+  ["changed locked hook version", f => { f.lock.packages["node_modules/protobufjs"].version = "0.0.0"; }, "BASE_CLI_VERSION_MISMATCH"],
   ["changed hook command", f => f.manifest(wrapperName, m => { m.scripts.postinstall = "node changed.cjs"; }), "BASE_CLI_HOOK_MISMATCH"],
   ["removed hook command", f => f.manifest("protobufjs", m => { delete m.scripts.postinstall; }), "BASE_CLI_HOOK_MISMATCH"],
-  ["extra hook command", f => f.manifest("@google/genai", m => { m.scripts.install = "echo unexpected"; }), "BASE_CLI_HOOK_MISMATCH"],
+  ["extra hook command", f => f.manifest("protobufjs", m => { m.scripts.install = "echo unexpected"; }), "BASE_CLI_HOOK_MISMATCH"],
   ["new installed hook without lock flag", f => f.manifest("plain", m => { m.scripts = { preinstall: "echo unexpected" }; }), "BASE_CLI_HOOK_MISMATCH"],
   ["changed Claude hook bytes", f => writeFileSync(join(f.globalRoot, wrapperName, "install.cjs"), "changed"), "BASE_CLI_SCRIPT_HASH_MISMATCH"],
   ["changed protobuf hook bytes", f => writeFileSync(join(f.globalRoot, "protobufjs/scripts/postinstall.js"), "changed"), "BASE_CLI_SCRIPT_HASH_MISMATCH"],
