@@ -88,6 +88,17 @@ export function ProjectKnowledgePage() {
   const [receipts, setReceipts] = useState<Array<{ id: string; operation: string; result_json: Record<string, unknown>; created_at: string }>>([]);
   const [receiptJobId, setReceiptJobId] = useState("");
   const [receiptError, setReceiptError] = useState<string | null>(null);
+  // #1256 维护：人类维护入口（新建 / 编辑 / 下架 / 恢复）
+  const [createOpen, setCreateOpen] = useState(false);
+  const [draftKind, setDraftKind] = useState<"memory" | "skill">("memory");
+  const [draftKey, setDraftKey] = useState("");
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftContent, setDraftContent] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const [maintainBusy, setMaintainBusy] = useState(false);
+  const [maintainNotice, setMaintainNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId || !canRead) return;
@@ -139,6 +150,23 @@ export function ProjectKnowledgePage() {
     api.projects().then(setProjects).catch(() => setProjects([]));
   }, [canWrite]);
 
+  const runMaintenance = (label: string, action: () => Promise<unknown>, reset: () => void): void => {
+    setMaintainBusy(true);
+    setMaintainNotice(null);
+    setActionError(null);
+    action()
+      .then(() => { reset(); setMaintainNotice(`${label}成功`); setRefresh((value) => value + 1); })
+      .catch((error) => setActionError(error instanceof Error ? error.message : String(error)))
+      .finally(() => setMaintainBusy(false));
+  };
+  const submitCreate = (): void => runMaintenance("新建知识", () => projectKnowledgeApi.create(projectId!, {
+    kind: draftKind, logical_key: draftKey.trim(), title: draftTitle.trim(),
+    ...(draftKind === "memory" ? { content: draftContent } : {}),
+  }), () => { setCreateOpen(false); setDraftKey(""); setDraftTitle(""); setDraftContent(""); });
+  const submitEdit = (): void => runMaintenance("保存新版本", () => projectKnowledgeApi.revise(projectId!, selectedId!, {
+    expected_version: version?.version ?? detail?.version ?? 1, title: editTitle.trim(), content: editContent,
+  }), () => setEditOpen(false));
+
   const granteeOptions = useMemo(() => projects.filter((p) => p.id !== projectId)
     .map((p) => ({ value: p.id, label: p.name, hint: p.id })), [projects, projectId]);
 
@@ -186,7 +214,25 @@ export function ProjectKnowledgePage() {
               placeholder="全部状态" options={["draft", "active", "stale", "retired", "revoked"]
                 .map((value) => ({ value, label: value }))} />
           </div>
-          <button type="button" className={button} onClick={() => setRefresh((value) => value + 1)}>刷新</button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={button} onClick={() => setRefresh((value) => value + 1)}>刷新</button>
+            {canWrite && <button type="button" className={button} aria-expanded={createOpen}
+              onClick={() => setCreateOpen((value) => !value)}>新建知识</button>}
+          </div>
+          {canWrite && createOpen && <div className="space-y-2 border-t border-white/[.06] pt-3">
+            <SearchableSelect ariaLabel="新建知识类型" placeholder="记忆" value={draftKind}
+              onChange={(value) => setDraftKind(value === "skill" ? "skill" : "memory")}
+              options={[{ value: "memory", label: "记忆" }, { value: "skill", label: "Skill" }]} />
+            <input aria-label="逻辑键" value={draftKey} onChange={(event) => setDraftKey(event.target.value)}
+              placeholder="逻辑键（字母数字与 . _ / -）" className={field + " w-full"} />
+            <input aria-label="知识标题" value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)}
+              placeholder="标题" className={field + " w-full"} />
+            {draftKind === "memory" && <textarea aria-label="知识正文" value={draftContent} rows={5}
+              onChange={(event) => setDraftContent(event.target.value)}
+              placeholder="正文（≤12288 字节）" className={field + " w-full font-mono text-xs"} />}
+            <button type="button" className={button} disabled={maintainBusy || !draftKey.trim() || !draftTitle.trim()}
+              onClick={submitCreate}>提交新建</button>
+          </div>}
         </div>
         {listError && <ErrorBox message={listError} onRetry={() => setRefresh((value) => value + 1)} />}
         {listLoading && <p className={card + " text-sm text-zinc-500"}>正在加载知识目录…</p>}
@@ -225,7 +271,27 @@ export function ProjectKnowledgePage() {
               v{entry.version}{entry.revoked_at ? " · 已撤销" : ""}
             </button>)}
             {nextVersionOffset !== null && <button type="button" className={button} onClick={loadMoreVersions}>加载更多版本</button>}
+            {canWrite && version && version.candidate.kind === "memory" && <button type="button" className={button}
+              onClick={() => { setEditOpen((value) => !value); setEditTitle(version.item.title); setEditContent(version.candidate.content ?? ""); }}>
+              {editOpen ? "取消编辑" : "编辑正文"}
+            </button>}
+            {canWrite && detail.status !== "revoked" && <button type="button" className={button} disabled={maintainBusy}
+              onClick={() => runMaintenance(detail.status === "retired" ? "恢复" : "下架",
+                () => detail.status === "retired" ? projectKnowledgeApi.restore(projectId!, detail.id) : projectKnowledgeApi.archive(projectId!, detail.id),
+                () => undefined)}>
+              {detail.status === "retired" ? "恢复知识" : "下架知识"}
+            </button>}
           </div>
+          {maintainNotice && <p role="status" className="mt-3 text-xs text-emerald-300/80">{maintainNotice}</p>}
+          {canWrite && editOpen && version && <div className="mt-3 space-y-2 border-t border-white/[.06] pt-3">
+            <input aria-label="编辑标题" value={editTitle} onChange={(event) => setEditTitle(event.target.value)}
+              className={field + " w-full"} />
+            <textarea aria-label="编辑正文" value={editContent} rows={6} onChange={(event) => setEditContent(event.target.value)}
+              className={field + " w-full font-mono text-xs"} />
+            <button type="button" className={button} disabled={maintainBusy || !editTitle.trim()} onClick={submitEdit}>
+              保存为新版本（v{(version.version ?? 1) + 1}）
+            </button>
+          </div>}
         </div>
           {version && <VersionContent value={version} />}
           <div className="grid gap-4 lg:grid-cols-2">

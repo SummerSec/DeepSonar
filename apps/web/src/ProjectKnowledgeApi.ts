@@ -177,6 +177,14 @@ export const projectKnowledgeApi = {
     request<KnowledgeGrant>(`${base(projectId)}/grants/${encodeURIComponent(grantId)}/revoke`, "POST"),
   revokeVersion: (projectId: string, itemId: string, versionId: string, reason: string) =>
     request<KnowledgeVersion>(`${base(projectId)}/${encodeURIComponent(itemId)}/versions/${encodeURIComponent(versionId)}/revoke`, "POST", { reason }),
+  create: (projectId: string, body: { kind: "memory" | "skill"; logical_key: string; title: string; keywords?: string[]; content?: string }) =>
+    request<{ item_ref: string; version_ref: string; version: number }>(base(projectId), "POST", body),
+  revise: (projectId: string, itemId: string, body: { expected_version: number; title: string; keywords?: string[]; content?: string }) =>
+    request<{ item_ref: string; version_ref: string; version: number }>(`${base(projectId)}/${encodeURIComponent(itemId)}/versions`, "POST", body),
+  archive: (projectId: string, itemId: string) =>
+    request<{ item_ref: string; status: string }>(`${base(projectId)}/${encodeURIComponent(itemId)}/archive`, "POST", {}),
+  restore: (projectId: string, itemId: string) =>
+    request<{ item_ref: string; status: string }>(`${base(projectId)}/${encodeURIComponent(itemId)}/restore`, "POST", {}),
   receipts: (projectId: string, jobId: string) =>
     request<Page<{ id: string; operation: string; result_json: Record<string, unknown>; created_at: string }>>(
       `${base(projectId)}/receipts?job_id=${encodeURIComponent(jobId)}`),
