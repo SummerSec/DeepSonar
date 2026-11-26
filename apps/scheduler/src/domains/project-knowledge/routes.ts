@@ -9,6 +9,7 @@ import { projectScopeAllows } from "../../project-scope.js";
 import { readKnowledgeBlob } from "./blobs.js";
 import type { KnowledgeDb } from "./types.js";
 import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
+import { actorMayReadGovernanceSources, resolveSourceOwners } from "./source-scope.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
 import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
 import { registerTaskKnowledgeCloseoutRoutes } from "./closeout-routes.js";
@@ -196,6 +197,16 @@ async function knowledgeCardFacts(db: Db, projectId: string, rows: Row[]): Promi
 }
 
 /** Routes are locally scoped too; auth.ts must additionally register their route scopes. */
+async function versionSourcesReadable(db: KnowledgeDb, req: FastifyRequest, projectId: string,
+  version: Record<string, unknown>): Promise<boolean> {
+  const resolved = await resolveSourceOwners(db, version.sources_json);
+  if (resolved.unresolved > 0) return false;
+  if (resolved.owners.some((owner) => owner.project_id !== projectId)) return false;
+  const role = req.actor?.role;
+  return actorMayReadGovernanceSources(db, { jobId: req.actor?.id ?? null, projectId,
+    humanAuthority: role === "admin" || role === "operator" }, resolved.owners);
+}
+
 export function registerProjectKnowledgeRoutes(
   app: FastifyInstance,
   deps: { db?: Db; recordAudit?: typeof audit } = {},
@@ -293,6 +304,10 @@ export function registerProjectKnowledgeRoutes(
       if (!access(req, reply, projectId)) return;
       const item = await itemFor(db, projectId, Id.parse(itemId));
       const version = await versionFor(db, projectId, Id.parse(itemId), Id.parse(versionId));
+      // #1286：管理 API 的按版本读取沿用来源原有授权，作者/受众之外的人看不到。
+      if (version && !(await versionSourcesReadable(db, req, projectId, version))) {
+        return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
+      }
       if (!item || !version) return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
       // Only the owning project can inspect historical content. Source refs remain opaque.
       const candidate = await readKnowledgeBlob(db, String(version.content_sha256));

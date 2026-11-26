@@ -81,10 +81,14 @@ export async function resolveSourceOwners(db: KnowledgeDb, sources: unknown): Pr
  * 复用它自己原有的授权规则：来源必须在该读者 Job 的冻结清单里（input_ref 与 content_hash 逐字相等），
  * 且读者当前阶段在该来源的 audience 内。同一批次但不在受众里的任务不放行。
  */
-export async function actorMayReadGovernanceSources(db: KnowledgeDb, actor: { jobId: string; projectId: string },
+export async function actorMayReadGovernanceSources(db: KnowledgeDb,
+  actor: { jobId?: string | null; projectId: string; humanAuthority?: boolean },
   owners: readonly SourceOwner[]): Promise<boolean> {
   const restricted = owners.filter((owner) => owner.governance);
   if (!restricted.length) return true;
+  // 项目管理者/运维在管理 API 上的读操作沿用其既有权限，不再要求治理 Job 的冻结清单。
+  if (actor.humanAuthority) return true;
+  if (!actor.jobId) return false;
   const assignments = await db`SELECT stage, input_manifest_json FROM project_knowledge_job_assignments
     WHERE job_id=${actor.jobId} AND project_id=${actor.projectId}`;
   const allowed = new Set<string>();

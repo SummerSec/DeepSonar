@@ -64,7 +64,7 @@ async function visibleEntry(db: KnowledgeDb, actor: KnowledgeActor, entry: Catal
     // 来源不可用（引用已删除或无法定位）按原语义隐藏，不当作「没有受限来源」。
     if (resolved.unresolved > 0) return false;
     if (resolved.owners.some((owner) => owner.project_id !== null && owner.project_id !== actor.projectId)) return false;
-    return actorMayReadGovernanceSources(db, actor, resolved.owners);
+    return actorMayReadGovernanceSources(db, { jobId: actor.jobId, projectId: actor.projectId }, resolved.owners);
   }
   if (!(await approvedKnowledgeVersion(db, entry.owner_project_id, entry.version_id))) return false;
   if (!entry.grant_id) return false;
