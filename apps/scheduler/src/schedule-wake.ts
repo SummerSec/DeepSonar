@@ -146,13 +146,15 @@ export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boole
       // #1287：普通任务的到期先装上，知识查询再慢也不影响普通任务按时启动。
       if (tasks.nearest != null) armTimer(tasks.nearest);
       else clearArmedTimer();
+      if (tasks.hasDue && refreshRequestsDueKick) fireKick();
       const knowledge = await probeKnowledgeDeadline(now, generation);
       stale = knowledge.stale;
-      const nearest = knowledge.nearest != null && (tasks.nearest == null || knowledge.nearest < tasks.nearest)
-        ? knowledge.nearest : tasks.nearest;
-      if (nearest != null) armTimer(nearest);
-      else clearArmedTimer();
-      if (knowledge.due || (tasks.hasDue && refreshRequestsDueKick)) fireKick();
+      // 等待期间可能有路由用 noteScheduleWakeAt() 装了更早的普通定时器，
+      // 这里只允许把定时器提前，不能再用等待前的 tasks.nearest 推迟或清除它。
+      if (knowledge.nearest != null && (armedUntilMs == null || knowledge.nearest < armedUntilMs)) {
+        armTimer(knowledge.nearest);
+      }
+      if (knowledge.due) fireKick();
     } catch (error) {
       console.error("[schedule-wake] refresh failed:", error);
     } finally {

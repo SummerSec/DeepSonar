@@ -74,6 +74,9 @@ test("#1287 知识推进在后台单飞，不阻塞随后到达的领取", async
   let loaded = false;
   await requestKnowledgeAdvance(() => true, async () => { loaded = true; return { tick: async () => 0 }; });
   assert.equal(loaded, false);
-  // 知识侧失败只记日志，不抛出。
-  await requestKnowledgeAdvance(() => false, async () => ({ tick: async () => { throw new Error("collection failed"); } }));
+  // 停机后的调用不能复用已完成 Promise，也不应占槽位：新一次调用必须真的运行。
+  let ranAfterStop = 0;
+  await requestKnowledgeAdvance(() => false, async () => ({
+    tick: async () => { ranAfterStop += 1; throw new Error("collection failed"); } }));
+  assert.equal(ranAfterStop, 1, "停机判定与已完成 Promise 不能互相掩盖：新调用必须真的跑一次");
 });

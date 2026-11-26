@@ -39,17 +39,19 @@ export function requestKnowledgeAdvance(
   stopped: () => boolean,
   load: () => Promise<{tick: (stopped: () => boolean) => Promise<number>}>,
 ): Promise<void> {
+  // 停机判定必须在占槽位之前：否则同步早退会先清空槽位、再被外层赋值填回已完成的 Promise。
+  if (stopped()) return Promise.resolve();
   if (knowledgeAdvanceInFlight) return knowledgeAdvanceInFlight;
-  knowledgeAdvanceInFlight = (async () => {
+  const run = (async () => {
     try {
-      if (stopped()) return;
       const scheduler = await load();
       if (!stopped()) await scheduler.tick(stopped);
     } catch (error) {
       console.error("[dispatcher] 知识推进失败，不影响普通任务领取:", error);
-    } finally {
-      knowledgeAdvanceInFlight = null;
     }
   })();
-  return knowledgeAdvanceInFlight;
+  knowledgeAdvanceInFlight = run;
+  // 按身份清理，避免把后来者的槽位清掉。
+  void run.finally(() => { if (knowledgeAdvanceInFlight === run) knowledgeAdvanceInFlight = null; });
+  return run;
 }
