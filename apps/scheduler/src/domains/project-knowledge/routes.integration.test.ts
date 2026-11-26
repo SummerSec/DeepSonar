@@ -183,9 +183,19 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
       VALUES(${owner.projectId},${"knowledge:collect:" + governance.jobId},'completed','settle',${"a".repeat(64)}) RETURNING id`;
     await db`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage)
       VALUES(${governance.jobId},${owner.projectId},${String(work?.id)},'maker')`;
-    const itemId = randomUUID(), versionId = randomUUID(), hash = "b".repeat(64);
+    const itemId = randomUUID(), versionId = randomUUID();
+    const candidate = { kind: "memory", logical_key: "restricted", title: "受限来源知识", keywords: [], content: "正文仍可读" };
+    const bytes = Buffer.from(JSON.stringify(candidate), "utf8");
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    const blobs = new Map<string, Buffer>([[sharedAssetBlobUri(hash), bytes]]);
+    setSharedAssetBlobStoreForTests({
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    });
     await db`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri)
-      VALUES(${hash},8,'application/json',${"test://" + hash})`;
+      VALUES(${hash},${bytes.length},'application/json',${sharedAssetBlobUri(hash)})`;
     await db`INSERT INTO project_knowledge_items(id,project_id,kind,logical_key,title)
       VALUES(${itemId},${owner.projectId},'memory','restricted','受限来源知识')`;
     await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,
