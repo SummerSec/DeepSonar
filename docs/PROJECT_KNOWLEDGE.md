@@ -145,15 +145,16 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 ### 唤醒查询与领取解耦（#1287，2026-11-26）
 
-现象（来自报告，因果仍待实测）：`readNextKnowledgeWake` 的集合策略查询在 44k 行 `audit_logs` 上耗时 6–11s，而 Dispatcher 的每次调度刷新都会调用它；报告观察到端点排队 20–44s 并触发客户端 15s 超时。**这些耗时与因果尚未在本仓库的 CI 或实例上复现，属于待验证假设**，不要当作已证实结论引用。
+现象（来自报告，因果仍待实测）：`readNextKnowledgeWake` 的集合策略查询在 44k 行 `audit_logs` 上耗时 6–11s，而 Dispatcher 每次调度刷新都会调用它；报告观察到端点排队 20–44s 与客户端 15s 超时。**这些耗时与因果尚未在本仓库 CI 或实例上复现，属待验证假设**，不得当作已证实结论引用。
 
-本轮只做一件事：把普通任务领取从这条重查询上解耦，不改 schema、不改唤醒语义。
+本轮做的是把普通任务领取从这条重查询上解耦，不改 schema、不改唤醒语义：
 
-- `schedule-wake.ts` 用 `shouldProbeKnowledgeWake` 决定这次刷新要不要回库：唤醒时间还在未来就不查；到期后查一次并记住「已为这条到期回库」；之后最多每 `DEEPSONAR_KNOWLEDGE_PROBE_INTERVAL_MS`（默认 30s，0–300000）复查一次，避免同一条到期被反复重跑。
-- 知识工作推进时（`project-knowledge-scheduler.tick`）调用 `noteKnowledgeWakeChange()` 显式请求回库，保证写入后立刻可见，不依赖间隔。
-- `readNextKnowledgeWake` 本身保持无缓存：直接调用的集成用例（写入后立即读、halted 项目不再唤醒等）语义完全不变。
+- `dispatchOnce` 先 `claimPendingJobs()` 领取并启动普通任务，再跑知识推进（`claimThenTickKnowledge`）；知识推进抛错只记日志，不再让 `return 0` 挡住领取，停机后不进入知识推进；
+- `schedule-wake` 用 `shouldProbeKnowledgeWake` 决定这次刷新是否回库：未来唤醒不查、到期后查一次并记住 `firedFor`、之后最多每 `DEEPSONAR_KNOWLEDGE_PROBE_INTERVAL_MS`（默认 30s）复查；同一条到期靠缓存也不再重复 kick；
+- 查询在途期间到来的刷新请求用递增代次保留：旧结果一律丢弃并在结束后补跑一次，不会把「查询发出后才提交的工作」漏掉；
+- `project-knowledge-scheduler.tick` 只在 `progressed > 0` 时请求回库，没有进展时不借刷新自激重跑。
 
-刻意没做：没有给 `audit_logs` 加部分索引，也没有把 `SCHEMA_VERSION` 从 79 升到 80——索引能否消除 `DISTINCT ON` 的排序、以及重试来源的「取最新记录」路径都需要 `EXPLAIN (ANALYZE, BUFFERS)` 实测数据支撑，缺证据就要求已有非空库受控重建不划算。索引与查询形态重写留作后续项，届时单列升级影响与重建验收。
+刻意没做：不给 `audit_logs` 加部分索引、不升 `SCHEMA_VERSION`——索引能否消除 `DISTINCT ON` 排序、重试来源的「取最新记录」路径都需要 `EXPLAIN (ANALYZE, BUFFERS)` 实测，缺证据就要求已有非空库受控重建不划算；索引与查询形态重写留作后续项。
 
 ## 验证与运维
 

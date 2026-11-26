@@ -16,8 +16,8 @@ export const projectKnowledgeScheduler = {
     if (stopped()) return 0;
     const collected = await collectProjectKnowledgeSources(sql, PROJECT_KNOWLEDGE_GOVERNANCE_HASH, stopped);
     const progressed = collected + await workScheduler.tick(stopped);
-    // #1287：知识工作刚推进过，这次刷新必须回库取新的唤醒时间。
-    noteKnowledgeWakeChange();
+    // #1287：只有真的推进了才强制回库；没有进展时不能借刷新自激重跑采集查询。
+    if (progressed > 0) noteKnowledgeWakeChange();
     if (!stopped()) await refreshScheduleWakeFromDb({ kickDueTasks: false });
     return progressed;
   },

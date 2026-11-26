@@ -27,6 +27,8 @@ let kick: (() => void) | null = null;
 
 /** #1287：知识唤醒的集合策略查询很重，按最小间隔回库，不再每次刷新都重跑。 */
 let knowledgeProbe: KnowledgeWakeProbeState = { wakeAt: null, probedAt: 0, firedFor: null, refreshRequested: true };
+/** #1287：查询在途期间到来的刷新请求要保留，不能被旧结果覆盖掉。 */
+let refreshGeneration = 0;
 
 /** 知识工作被写入/推进后调用，下一次刷新立刻回库。 */
 export function noteKnowledgeWakeChange(): void {
@@ -95,8 +97,10 @@ export function clearScheduleWake(): void {
 /** Scan pending task and knowledge schedules and arm their nearest durable deadline. */
 export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boolean }): Promise<void> {
   if (options?.kickDueTasks !== false) refreshRequestsDueKick = true;
-  if (refreshInFlight) return refreshInFlight;
+  if (refreshInFlight) { refreshGeneration += 1; return refreshInFlight; }
+  const generation = refreshGeneration;
   refreshInFlight = (async () => {
+    let stale = false;
     try {
       const rows = await sql`
         SELECT c.target_json
@@ -122,17 +126,23 @@ export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boole
       let knowledgeDue = false;
       if (shouldProbeKnowledgeWake(knowledgeProbe, now)) {
         const knowledgeWake = await readNextKnowledgeWake(sql);
-        const ms = knowledgeWake ? knowledgeWake.getTime() : null;
-        knowledgeProbe = { wakeAt: ms, probedAt: now, refreshRequested: false,
-          firedFor: ms != null && ms <= now ? ms : knowledgeProbe.firedFor };
-        if (ms != null) {
-          if (ms <= now) knowledgeDue = true;
-          else if (nearest == null || ms < nearest) nearest = ms;
+        // 查询在途期间有新请求进来：旧结果一律丢弃，稍后重新查。
+        if (refreshGeneration !== generation) {
+          stale = true;
+        } else {
+          const ms = knowledgeWake ? knowledgeWake.getTime() : null;
+          knowledgeProbe = { wakeAt: ms, probedAt: now, refreshRequested: false,
+            firedFor: ms != null && ms <= now ? ms : knowledgeProbe.firedFor };
+          if (ms != null) {
+            if (ms <= now) knowledgeDue = true;
+            else if (nearest == null || ms < nearest) nearest = ms;
+          }
         }
       } else if (knowledgeProbe.wakeAt != null) {
         const ms = knowledgeProbe.wakeAt;
-        if (ms <= now) knowledgeDue = true;
-        else if (nearest == null || ms < nearest) nearest = ms;
+        // 同一条到期只 kick 一次，不能靠缓存反复触发。
+        if (ms <= now && knowledgeProbe.firedFor !== ms) knowledgeDue = true;
+        else if (ms > now && (nearest == null || ms < nearest)) nearest = ms;
       }
       if (nearest != null) armTimer(nearest);
       else clearArmedTimer();
@@ -142,6 +152,7 @@ export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boole
     } finally {
       refreshInFlight = null;
       refreshRequestsDueKick = false;
+      if (stale || refreshGeneration !== generation) void refreshScheduleWakeFromDb({ kickDueTasks: false });
     }
   })();
   return refreshInFlight;
