@@ -135,7 +135,7 @@ async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Act
   const versions = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
       governance_hash,revoked_at,revoked_reason,created_at
     FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
-      AND NOT (v.id = ANY(${hidden}::uuid[]))
+      AND NOT (v.id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(hidden)}::jsonb)::uuid)))
     ORDER BY version DESC LIMIT 51`;
   const visibleVersions = redactVersionSources(versions as Row[], actor);
   const proposals = await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
@@ -282,8 +282,8 @@ export function registerProjectKnowledgeRoutes(
         LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
           AND ${publicKnowledgeVersion(db)}
         WHERE i.project_id=${projectId} AND ${publicKnowledgeItem(db)}
-          AND (v.id IS NULL OR NOT (v.id = ANY(${hidden}::uuid[])))
-          AND (i.active_version_id IS NULL OR NOT (i.active_version_id = ANY(${hidden}::uuid[])))
+          AND (v.id IS NULL OR NOT (v.id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(hidden)}::jsonb)::uuid))))
+          AND (i.active_version_id IS NULL OR NOT (i.active_version_id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(hidden)}::jsonb)::uuid))))
           AND (${input.kind ?? null}::text IS NULL OR i.kind=${input.kind ?? null})
           AND (${input.status ?? null}::text IS NULL OR i.status=${input.status ?? null})
           AND (${pattern}::text IS NULL OR i.title ILIKE ${pattern} ESCAPE '\\' OR i.logical_key ILIKE ${pattern} ESCAPE '\\')
@@ -348,7 +348,7 @@ export function registerProjectKnowledgeRoutes(
       const rows = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
           governance_hash,revoked_at,revoked_reason,created_at
         FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
-          AND NOT (v.id = ANY(${hidden}::uuid[]))
+          AND NOT (v.id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(hidden)}::jsonb)::uuid)))
         ORDER BY version DESC LIMIT ${page.limit + 1} OFFSET ${page.offset}`;
       return { items: redactVersionSources(rows.slice(0, page.limit) as Row[], req.actor),
         next_offset: rows.length > page.limit ? page.offset + page.limit : null };
