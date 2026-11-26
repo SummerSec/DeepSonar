@@ -18,6 +18,14 @@ Job 创建时冻结两类目录：
 
 读取时与当前有效权限取交集，先过滤再搜索、计数和分页。源/项目禁用 epoch、版本 revoke 和授权 revoke 只收紧。重新启用源或新建授权不会复活旧 Job。普通 retire 保留历史冻结版本可读，安全 revoke 则拒绝读取该版本。CAS 完整性失败必须显式拒绝。
 
+### 来源授权（#1286，2026-11-26）
+
+版本 `sources_json` 里的来源只用于**定位**（`evidence`→`artifacts.job_id`、`fact`→`canvas_nodes.canvas_id`、`task`→`jobs`），能否读该版本沿用**来源原有的授权**，不新定权限粒度：来源属于治理资料时，读者 Job 的冻结清单必须逐字包含该来源的 `input_ref` 与 `content_hash`，且读者当前阶段要在该来源的 `audience` 内——同一批次但不在受众里的任务不放行。
+
+- 普通已发布知识（来源是普通业务 Job）不受影响，管理 API 不为共享知识加额外审批；
+- 来源无法定位（引用已删除或解析失败）按原语义隐藏，不当作「没有受限来源」；
+- 归档不是撤权：只有原权限明确失效、来源不可用或真正撤销才隐藏。
+
 ## Agent 操作
 
 既有 `list_available_skills` / `search_skills` / `pull_skill` 返回当前 Job 可读 Skill；拉取返回稳定 `usage_ref`，不安装代码或扩大权限。项目 selector 为 `project:<item UUID>@<version>`。

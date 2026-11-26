@@ -1,4 +1,5 @@
 import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
+import { actorMayReadGovernanceSources, resolveSourceOwners } from "./source-scope.js";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import {
   KnowledgeControlPayloadSchemas, KNOWLEDGE_MUTATION_IDS,
@@ -44,7 +45,7 @@ async function actorFor(db: KnowledgeDb, context: PlatformRuntimeHandlerContext,
 
 async function visibleEntry(db: KnowledgeDb, actor: KnowledgeActor, entry: CatalogEntry): Promise<boolean> {
   if (entry.owner_project_id !== actor.projectId && entry.kind === "memory") return false;
-  const [version] = await db`SELECT v.id FROM project_knowledge_versions v
+  const [version] = await db`SELECT v.id, v.sources_json FROM project_knowledge_versions v
     JOIN project_knowledge_items i ON i.id=v.item_id AND i.project_id=v.project_id WHERE v.id=${entry.version_id}
     AND v.project_id=${entry.owner_project_id} AND v.item_id=${entry.item_id} AND v.version=${entry.version}
     AND v.content_sha256=${entry.hash} AND v.revoked_at IS NULL AND i.kind=${entry.kind} AND i.status<>'revoked'`;
@@ -56,7 +57,14 @@ async function visibleEntry(db: KnowledgeDb, actor: KnowledgeActor, entry: Catal
       JOIN project_knowledge_work w ON w.id=p.work_id
       WHERE p.project_id=${entry.owner_project_id} AND p.candidate_version_id=${entry.version_id}
       AND w.trigger_key LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"} LIMIT 1`;
-    return !restricted;
+    if (restricted) return false;
+    // #1286：来源只用来定位；能否读仍按该来源原有的授权（冻结清单 input_ref+content_hash 与 audience），
+    // 普通归档不算撤权，只有来源不可用或真正的权限失效才隐藏。
+    const resolved = await resolveSourceOwners(db, (version as Record<string, unknown>).sources_json);
+    // 来源不可用（引用已删除或无法定位）按原语义隐藏，不当作「没有受限来源」。
+    if (resolved.unresolved > 0) return false;
+    if (resolved.owners.some((owner) => owner.project_id !== null && owner.project_id !== actor.projectId)) return false;
+    return actorMayReadGovernanceSources(db, actor, resolved.owners);
   }
   if (!(await approvedKnowledgeVersion(db, entry.owner_project_id, entry.version_id))) return false;
   if (!entry.grant_id) return false;
