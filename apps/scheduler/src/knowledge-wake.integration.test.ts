@@ -198,7 +198,8 @@ test("#1287 两个未来普通任务在知识探测挂住时各自按时触发�
         VALUES(${randomUUID()},${owner.projectId},${canvasId},'explore','pending','{}'::jsonb,'{}'::jsonb)`;
     };
     await scheduled(new Date(Date.now() + 1_000).toISOString());
-    await scheduled(new Date(Date.now() + 2_000).toISOString());
+    const secondDue = Date.now() + 2_000;
+    await scheduled(new Date(secondDue).toISOString());
     let kicks = 0;
     bindScheduleWake(() => { kicks += 1; });
     clearScheduleWake();
@@ -207,8 +208,12 @@ test("#1287 两个未来普通任务在知识探测挂住时各自按时触发�
     try {
       await refreshScheduleWakeFromDb({ kickDueTasks: true }, db as never);
       const deadline = Date.now() + 6_000;
-      while (kicks < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.ok(kicks >= 2, `两个未来任务都必须在探测放行前触发（实际 kicks=${kicks}）`);
+      while (kicks < 1 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 1_400));
+      const armed = armedUntilForTests();
+      assert.ok(kicks >= 1, `第一个未来任务必须在探测放行前触发（实际 kicks=${kicks}）`);
+      assert.ok(armed != null && Math.abs(armed - secondDue) <= 1_500,
+        `未到期的第二个任务必须继续挂着自己的时间（armed=${armed} secondDue=${secondDue}）`);
     } finally {
       setKnowledgeWakeProbeForTests(null);
       clearScheduleWake();
