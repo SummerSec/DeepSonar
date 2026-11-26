@@ -111,26 +111,36 @@ async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Act
   const visibleVersions = redactVersionSources(versions as Row[], actor);
   // #1286：关联信息同样以「通过授权的版本」为边界，不能从全部历史版本取数。
   const visibleIds = (versions as Row[]).map((row) => String(row.id)).join("\u0001");
-  // 候选与基线分别校验：retire/reuse 这类提案可以只有基线；任一基线不可见时整条关联信息隐藏。
-  const proposals = await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
+  // 候选先按可见版本校验；基线单独批量校验（retire/reuse 可以只有基线）。
+  const candidates = await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
       p.candidate_version_id,p.maker_job_id,p.base_refs_json,p.evaluation_plan_json,p.reason,p.created_at
     FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
     WHERE p.project_id=${projectId} AND w.trigger_key NOT LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"}
       AND (p.candidate_version_id IS NULL OR p.candidate_version_id = ANY(
         CASE WHEN ${visibleIds} = '' THEN ARRAY[]::uuid[] ELSE string_to_array(${visibleIds}, chr(1))::uuid[] END))
-      AND NOT EXISTS (
-        SELECT 1 FROM jsonb_array_elements(
-          CASE WHEN jsonb_typeof(p.base_refs_json)='array' THEN p.base_refs_json ELSE '[]'::jsonb END) b
-        WHERE (b->>'item_ref') IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM project_knowledge_versions v
-            WHERE v.project_id = p.project_id
-              AND v.item_id = CASE WHEN (b->>'item_ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                THEN (b->>'item_ref')::uuid END
-              AND ${readableVersionSources(db, keysText)}
-          )
-      )
-    ORDER BY p.created_at DESC LIMIT 50`;
+    ORDER BY p.created_at DESC LIMIT 50` as Row[];
+  const baseItemIds = new Set<string>();
+  for (const row of candidates) {
+    const refs = Array.isArray(row.base_refs_json) ? row.base_refs_json : [];
+    for (const ref of refs) {
+      const itemRef = typeof ref === "object" && ref !== null && "item_ref" in ref ? (ref as { item_ref?: unknown }).item_ref : null;
+      if (typeof itemRef === "string") baseItemIds.add(itemRef);
+    }
+  }
+  const baseCsv = [...baseItemIds].join("\u0001");
+  const visibleBaseItems = new Set<string>(baseCsv
+    ? (await db`SELECT DISTINCT v.item_id FROM project_knowledge_versions v
+        WHERE v.project_id=${projectId}
+          AND v.item_id = ANY(string_to_array(${baseCsv}, chr(1))::uuid[])
+          AND ${readableVersionSources(db, keysText)}` as Row[]).map((row) => String(row.item_id))
+    : []);
+  const proposals = candidates.filter((row) => {
+    const refs = Array.isArray(row.base_refs_json) ? row.base_refs_json : [];
+    return refs.every((ref) => {
+      const itemRef = typeof ref === "object" && ref !== null && "item_ref" in ref ? (ref as { item_ref?: unknown }).item_ref : null;
+      return typeof itemRef !== "string" || visibleBaseItems.has(itemRef);
+    });
+  });
   const proposalIds = proposals.map((row) => row.id as string);
   const evaluations = proposalIds.length
     ? await db`SELECT id,proposal_id,proposal_revision,kind,actor_job_id,input_digest,result_json,created_at
