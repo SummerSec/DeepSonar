@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 80);
+INSERT INTO schema_meta (id, version) VALUES ('global', 79);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1742,12 +1742,6 @@ CREATE TABLE audit_logs (
 
 CREATE INDEX audit_logs_at_idx ON audit_logs (at DESC);
 CREATE INDEX audit_logs_project_idx ON audit_logs (project_id, at DESC);
--- #1287：知识集合策略每次刷新都要找「已登记未收尾」的来源，按动作做部分索引避免全表扫描。
-CREATE INDEX audit_logs_knowledge_source_idx ON audit_logs (project_id, resource_id, at)
-  WHERE action = 'project_knowledge.source_registered' AND actor_type = 'system'
-    AND actor_id = 'scheduler' AND result = 'ok' AND resource_type = 'job';
--- #1287：收尾反查（NOT EXISTS handled）按 job 定位已收集/已跳过审计。
-CREATE INDEX audit_logs_knowledge_handled_idx ON audit_logs (project_id, resource_type, resource_id, action);
 
 -- append-only 兜底：禁止 UPDATE/DELETE（§7.2）
 CREATE OR REPLACE FUNCTION audit_logs_append_only() RETURNS trigger AS $$

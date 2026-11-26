@@ -8,7 +8,7 @@
 
 import { sql } from "./db.js";
 import { readScheduleStartAt } from "./task-schedule.js";
-import { readNextKnowledgeWake } from "./knowledge-wake.js";
+import { readNextKnowledgeWake, shouldProbeKnowledgeWake, type KnowledgeWakeProbeState } from "./knowledge-wake.js";
 
 /** Node timers saturate around 2^31-1 ms; clamp and re-arm from DB. */
 const MAX_TIMER_MS = 2_147_483_647;
@@ -24,6 +24,14 @@ let armedUntilMs: number | null = null;
 let refreshInFlight: Promise<void> | null = null;
 let refreshRequestsDueKick = false;
 let kick: (() => void) | null = null;
+
+/** #1287：知识唤醒的集合策略查询很重，按最小间隔回库，不再每次刷新都重跑。 */
+let knowledgeProbe: KnowledgeWakeProbeState = { wakeAt: null, probedAt: 0, firedFor: null, refreshRequested: true };
+
+/** 知识工作被写入/推进后调用，下一次刷新立刻回库。 */
+export function noteKnowledgeWakeChange(): void {
+  knowledgeProbe.refreshRequested = true;
+}
 
 /** Wire the dispatcher kick once at boot to avoid a module cycle. */
 export function bindScheduleWake(kickDispatcher: () => void): void {
@@ -112,9 +120,17 @@ export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boole
         if (nearest == null || ms < nearest) nearest = ms;
       }
       let knowledgeDue = false;
-      const knowledgeWake = await readNextKnowledgeWake(sql);
-      if (knowledgeWake) {
-        const ms = knowledgeWake.getTime();
+      if (shouldProbeKnowledgeWake(knowledgeProbe, now)) {
+        const knowledgeWake = await readNextKnowledgeWake(sql);
+        const ms = knowledgeWake ? knowledgeWake.getTime() : null;
+        knowledgeProbe = { wakeAt: ms, probedAt: now, refreshRequested: false,
+          firedFor: ms != null && ms <= now ? ms : knowledgeProbe.firedFor };
+        if (ms != null) {
+          if (ms <= now) knowledgeDue = true;
+          else if (nearest == null || ms < nearest) nearest = ms;
+        }
+      } else if (knowledgeProbe.wakeAt != null) {
+        const ms = knowledgeProbe.wakeAt;
         if (ms <= now) knowledgeDue = true;
         else if (nearest == null || ms < nearest) nearest = ms;
       }
