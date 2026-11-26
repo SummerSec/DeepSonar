@@ -418,7 +418,12 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
                   // #1228: 这一段失败时，既保留分段宿主码（便于稳定识别），
                   // 也让原始错误名进入诊断（名称是标识符，不含正文）。
                   if (error && typeof error === 'object' && hostFailures.has(error)) throw error;
-                  if (error && typeof error === 'object') { error.reason = 'PI_MAIN_BUDGET_CLAMP_BLOCK_FAILED'; throw error; }
+                  // 只在没有既有 reason 时补标：内层宿主码（如 THINKING_MINIMUM）与 SDK 自带 reason
+                  // 都是更精确的失败原因，不能被这里覆盖；只读对象写不进去也不算新失败。
+                  if (error && typeof error === 'object' && error.reason == null) {
+                    try { error.reason = 'PI_MAIN_BUDGET_CLAMP_BLOCK_FAILED'; } catch { /* 只读错误对象保持原样 */ }
+                  }
+                  if (error && typeof error === 'object') throw error;
                   fail('PI_MAIN_BUDGET_CLAMP_BLOCK_FAILED');
                 }
               }
