@@ -3,6 +3,7 @@ import { z } from "zod";
 import { TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "@deepsonar/shared-types";
 import { audit } from "../../audit.js";
 import { actorHasScope, type Actor } from "../../auth.js";
+import { readableVersionKeysJson, readableVersionSources } from "./version-visibility.js";
 import { sql } from "../../db.js";
 import { validationHttpError } from "../../http-validation-error.js";
 import { projectScopeAllows } from "../../project-scope.js";
@@ -68,43 +69,6 @@ function redactVersionSources(rows: Row[], actor: Actor | undefined): Row[] {
   });
 }
 
-/** #1286：整版受限的来源授权判定（一次查询算出该读者看不到的版本 id，供分页前剔除）。 */
-async function hiddenVersionIds(db: Db, actor: Actor | undefined, projectId: string): Promise<string[]> {
-  if (actor && actorHasScope(actor, "tasks:read")) return [];
-  const allowedKeys: string[] = [];
-  if (actor) {
-    const assignments = await db`SELECT stage, input_manifest_json FROM project_knowledge_job_assignments
-      WHERE job_id=${actor.id} AND project_id=${projectId}` as Row[];
-    for (const row of assignments) {
-      const stage = String(row.stage);
-      const manifest = Array.isArray(row.input_manifest_json) ? row.input_manifest_json : [];
-      for (const entry of manifest) {
-        if (typeof entry !== "object" || entry === null) continue;
-        const value = entry as Record<string, unknown>;
-        const audience = Array.isArray(value.audience) ? value.audience.map(String) : [];
-        if (typeof value.input_ref !== "string" || typeof value.content_hash !== "string") continue;
-        if (!audience.includes(stage)) continue;
-        allowedKeys.push(`${value.input_ref}|${value.content_hash}`);
-      }
-    }
-  }
-  const keys = JSON.stringify(allowedKeys.length ? allowedKeys : [""]);
-  const rows = await db`SELECT v.id FROM project_knowledge_versions v
-    WHERE v.project_id=${projectId} AND EXISTS (
-      SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v.sources_json)='array' THEN v.sources_json ELSE '[]'::jsonb END) s
-      WHERE s->>'kind' IN ('fact','evidence','task') AND (
-        NOT ((s->>'kind') || ':' || COALESCE(s->>'ref', s->>'job_id') || '|' || COALESCE(s->>'content_hash','')
-          IN (SELECT jsonb_array_elements_text(${keys}::jsonb)))
-        OR NOT EXISTS (SELECT 1 FROM project_knowledge_job_assignments a
-          WHERE a.project_id=v.project_id AND a.job_id = CASE s->>'kind'
-            WHEN 'evidence' THEN (SELECT ar.job_id FROM artifact_evidence ev JOIN artifacts ar ON ar.id=ev.artifact_id WHERE ev.id = CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (s->>'ref')::uuid END)
-            WHEN 'fact' THEN (SELECT cn.job_id FROM canvas_nodes cn WHERE cn.id = CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (s->>'ref')::uuid END)
-            ELSE (SELECT j.id FROM jobs j WHERE j.id = CASE WHEN (s->>'job_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN (s->>'job_id')::uuid END) END)
-      )
-    )` as Row[];
-  return rows.map((row) => String(row.id));
-}
-
 function publicKnowledgeVersion(db: Db) {
   return db`NOT EXISTS (SELECT 1 FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
     WHERE p.project_id=v.project_id AND p.candidate_version_id=v.id AND w.trigger_key LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"})`;
@@ -120,22 +84,29 @@ async function itemFor(db: Db, projectId: string, itemId: string): Promise<Row |
   return item as Row | undefined;
 }
 
-async function versionFor(db: Db, projectId: string, itemId: string, versionId: string): Promise<Row | undefined> {
+async function versionFor(db: Db, projectId: string, itemId: string, versionId: string,
+  actor?: Actor): Promise<Row | undefined> {
+  const keysJson = await readableVersionKeysJson(db, actor, projectId);
   const [version] = await db`SELECT v.* FROM project_knowledge_versions v
-    WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND v.id=${versionId} AND ${publicKnowledgeVersion(db)}`;
+    WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND v.id=${versionId} AND ${publicKnowledgeVersion(db)}
+      AND ${readableVersionSources(db, keysJson)}`;
   return version as Row | undefined;
 }
 
 async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Actor) {
   const item = await itemFor(db, projectId, itemId);
   if (!item) return null;
-  const hidden = await hiddenVersionIds(db, actor, projectId);
-  // 只对无权读者隐藏时，整个条目连带标题都不再暴露（不是只藏来源字段）。
-  if (item.active_version_id && hidden.includes(String(item.active_version_id))) return null;
+  const keysJson = await readableVersionKeysJson(db, actor, projectId);
+  // 活跃版本整版受限时，整个条目连带标题都不再暴露（不是只藏来源字段）。
+  if (item.active_version_id) {
+    const [visible] = await db`SELECT ${readableVersionSources(db, keysJson)} AS ok
+      FROM project_knowledge_versions v WHERE v.id=${String(item.active_version_id)}`;
+    if (!visible?.ok) return null;
+  }
   const versions = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
       governance_hash,revoked_at,revoked_reason,created_at
     FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
-      AND NOT (v.id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(hidden)}::jsonb)::uuid)))
+      AND ${readableVersionSources(db, keysJson)}
     ORDER BY version DESC LIMIT 51`;
   const visibleVersions = redactVersionSources(versions as Row[], actor);
   const proposals = await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
@@ -274,7 +245,7 @@ export function registerProjectKnowledgeRoutes(
       if (!access(req, reply, projectId)) return;
       const input = List.parse(req.query);
       const pattern = input.query ? `%${input.query.replace(/[\\%_]/g, "\\$&")}%` : null;
-      const hidden = await hiddenVersionIds(db, req.actor, projectId);
+      const keysJson = await readableVersionKeysJson(db, req.actor, projectId);
       const rows = await db`SELECT i.id,i.project_id,i.kind,i.logical_key,i.title,i.keywords_json,
           i.status,i.active_version_id,i.generation,i.created_at,i.updated_at,
           v.version,v.content_sha256
@@ -282,8 +253,9 @@ export function registerProjectKnowledgeRoutes(
         LEFT JOIN project_knowledge_versions v ON v.id=i.active_version_id AND v.project_id=i.project_id
           AND ${publicKnowledgeVersion(db)}
         WHERE i.project_id=${projectId} AND ${publicKnowledgeItem(db)}
-          AND (v.id IS NULL OR NOT (v.id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(hidden)}::jsonb)::uuid))))
-          AND (i.active_version_id IS NULL OR NOT (i.active_version_id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(hidden)}::jsonb)::uuid))))
+          AND (v.id IS NULL OR ${readableVersionSources(db, keysJson)})
+          AND (i.active_version_id IS NULL OR EXISTS (SELECT 1 FROM project_knowledge_versions v
+            WHERE v.id=i.active_version_id AND ${readableVersionSources(db, keysJson)}))
           AND (${input.kind ?? null}::text IS NULL OR i.kind=${input.kind ?? null})
           AND (${input.status ?? null}::text IS NULL OR i.status=${input.status ?? null})
           AND (${pattern}::text IS NULL OR i.title ILIKE ${pattern} ESCAPE '\\' OR i.logical_key ILIKE ${pattern} ESCAPE '\\')
@@ -344,11 +316,11 @@ export function registerProjectKnowledgeRoutes(
       const item = await itemFor(db, projectId, Id.parse(itemId));
       if (!item) return reply.code(404).send({ error_code: "KNOWLEDGE_ITEM_NOT_FOUND" });
       const page = Page.parse(req.query);
-      const hidden = await hiddenVersionIds(db, req.actor, projectId);
+      const keysJson = await readableVersionKeysJson(db, req.actor, projectId);
       const rows = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
           governance_hash,revoked_at,revoked_reason,created_at
         FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
-          AND NOT (v.id = ANY(ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(hidden)}::jsonb)::uuid)))
+          AND ${readableVersionSources(db, keysJson)}
         ORDER BY version DESC LIMIT ${page.limit + 1} OFFSET ${page.offset}`;
       return { items: redactVersionSources(rows.slice(0, page.limit) as Row[], req.actor),
         next_offset: rows.length > page.limit ? page.offset + page.limit : null };
@@ -361,7 +333,7 @@ export function registerProjectKnowledgeRoutes(
       const projectId = Id.parse(id);
       if (!access(req, reply, projectId)) return;
       const item = await itemFor(db, projectId, Id.parse(itemId));
-      const version = await versionFor(db, projectId, Id.parse(itemId), Id.parse(versionId));
+      const version = await versionFor(db, projectId, Id.parse(itemId), Id.parse(versionId), req.actor);
       // #1286：管理 API 的按版本读取沿用来源原有授权，作者/受众之外的人看不到。
       if (version && !(await versionSourcesReadable(db, req, projectId, version))) {
         return reply.code(404).send({ error_code: "KNOWLEDGE_VERSION_NOT_FOUND" });
