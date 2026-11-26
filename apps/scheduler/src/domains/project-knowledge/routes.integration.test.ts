@@ -276,7 +276,44 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
         404, "引用缺失或跨项目的来源不能当成本项目普通来源");
     }
 
+    // 同一条目同时存在可见与受限版本：关联信息必须只来自可见版本。
+    const mixedCandidate = Buffer.from(JSON.stringify({ kind: "memory", logical_key: "mixed",
+      title: "混合版本知识", keywords: [], content: "可见正文" }), "utf8");
+    const mixedHash = createHash("sha256").update(mixedCandidate).digest("hex");
+    blobs.set(sharedAssetBlobUri(mixedHash), mixedCandidate);
+    await db`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri)
+      VALUES(${mixedHash},${mixedCandidate.length},'application/json',${sharedAssetBlobUri(mixedHash)})`;
+    const mixedItem = randomUUID(), mixedVisible = randomUUID(), mixedRestricted = randomUUID();
+    await db`INSERT INTO project_knowledge_items(id,project_id,kind,logical_key,title)
+      VALUES(${mixedItem},${owner.projectId},'memory','mixed','混合版本知识')`;
+    await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,
+      creator_job_id,creator_attempt_id,sources_json,governance_hash)
+      VALUES(${mixedRestricted},${owner.projectId},${mixedItem},1,${mixedHash},${owner.jobId},${owner.attemptId},
+        ${db.json([{ kind: "evidence", ref: String(evidence?.id), content_hash: "a".repeat(64) }] as never)},${mixedHash})`;
+    await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,
+      creator_job_id,creator_attempt_id,sources_json,governance_hash)
+      VALUES(${mixedVisible},${owner.projectId},${mixedItem},2,${mixedHash},${owner.jobId},${owner.attemptId},'[]',${mixedHash})`;
+    await db`UPDATE project_knowledge_items SET active_version_id=${mixedVisible},status='active' WHERE id=${mixedItem}`;
+    await db`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,owner_project_id,version_id)
+      VALUES(${owner.projectId},${owner.jobId},${owner.attemptId},'project-memory:mixed@1',${mixedHash},
+        ${owner.projectId},${mixedRestricted})`;
+    const [mixedWork] = await db`INSERT INTO project_knowledge_work(project_id,trigger_key,state,stage,governance_hash)
+      VALUES(${owner.projectId},${"knowledge:collect:mixed-" + mixedItem},'completed','settle',${"b".repeat(64)}) RETURNING id`;
+    await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
+      idempotency_key,request_digest,input_digest,reason,candidate_version_id)
+      VALUES(gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'create','candidate',1,${owner.jobId},
+        ${randomUUID()},${"c".repeat(64)},${"d".repeat(64)},'混合版本提案',${mixedRestricted})`;
+    const mixedDetail = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${mixedItem}` });
+    assert.equal(mixedDetail.statusCode, 200, mixedDetail.body);
+    assert.deepEqual((mixedDetail.json().versions as Array<{ id: string }>).map((row) => row.id), [mixedVisible],
+      "低权限读者只看得到授权版本");
+    assert.deepEqual(mixedDetail.json().proposals, [], "受限版本的提案不能出现在关联信息里");
+    assert.deepEqual(mixedDetail.json().usages, [], "受限版本的使用记录不能出现在关联信息里");
+
     actor = { ...actor, scopes: ["projects:read", "tasks:read"] };
+    const mixedAllowed = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${mixedItem}` });
+    assert.equal((mixedAllowed.json().versions as unknown[]).length, 2, "有源权限的读者保留完整历史视图");
+    assert.equal((mixedAllowed.json().proposals as unknown[]).length, 1);
     for (const hiddenItem of [missingSourceItem, foreignSourceItem]) {
       assert.equal((await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${hiddenItem}` })).statusCode,
         404, "tasks:read 只跳过清单比对，不跳过归属校验");

@@ -109,23 +109,28 @@ async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Act
       AND ${readableVersionSources(db, keysText)}
     ORDER BY version DESC LIMIT 51`;
   const visibleVersions = redactVersionSources(versions as Row[], actor);
-  const proposals = await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
-      p.candidate_version_id,p.maker_job_id,p.base_refs_json,p.evaluation_plan_json,p.reason,p.created_at
-    FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
-    WHERE p.project_id=${projectId} AND w.trigger_key NOT LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"} AND
-      (p.candidate_version_id IN (SELECT id FROM project_knowledge_versions WHERE project_id=${projectId} AND item_id=${itemId})
-       OR p.base_refs_json @> ${db.json([{ item_ref: itemId }])})
-    ORDER BY p.created_at DESC LIMIT 50`;
+  // #1286：关联信息同样以「通过授权的版本」为边界，不能从全部历史版本取数。
+  const visibleIds = (versions as Row[]).map((row) => String(row.id)).join("\u0001");
+  const proposals = visibleIds
+    ? await db`SELECT p.id,p.work_id,p.action,p.state,p.revision,p.parent_proposal_id,
+        p.candidate_version_id,p.maker_job_id,p.base_refs_json,p.evaluation_plan_json,p.reason,p.created_at
+      FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
+      WHERE p.project_id=${projectId} AND w.trigger_key NOT LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"}
+        AND p.candidate_version_id = ANY(string_to_array(${visibleIds}, chr(1))::uuid[])
+      ORDER BY p.created_at DESC LIMIT 50`
+    : [];
   const proposalIds = proposals.map((row) => row.id as string);
   const evaluations = proposalIds.length
     ? await db`SELECT id,proposal_id,proposal_revision,kind,actor_job_id,input_digest,result_json,created_at
         FROM project_knowledge_evaluations WHERE project_id=${projectId} AND proposal_id IN ${db(proposalIds)}
         ORDER BY created_at DESC LIMIT 100`
     : [];
-  const usages = await db`SELECT id,job_id,attempt_id,selector,content_sha256,version_id,feedback_json,created_at
-    FROM project_knowledge_usages WHERE project_id=${projectId} AND owner_project_id=${projectId}
-      AND version_id IN (SELECT id FROM project_knowledge_versions WHERE project_id=${projectId} AND item_id=${itemId})
-    ORDER BY created_at DESC LIMIT 100`;
+  const usages = visibleIds
+    ? await db`SELECT id,job_id,attempt_id,selector,content_sha256,version_id,feedback_json,created_at
+      FROM project_knowledge_usages WHERE project_id=${projectId} AND owner_project_id=${projectId}
+        AND version_id = ANY(string_to_array(${visibleIds}, chr(1))::uuid[])
+      ORDER BY created_at DESC LIMIT 100`
+    : [];
   return { ...item, versions: visibleVersions.slice(0, 50), versions_next_offset: versions.length > 50 ? 50 : null,
     proposals, evaluations, usages };
 }
@@ -342,7 +347,9 @@ export function registerProjectKnowledgeRoutes(
       // Only the owning project can inspect historical content. Source refs remain opaque.
       const candidate = await readKnowledgeBlob(db, String(version.content_sha256));
       const [visible] = redactVersionSources([version as Row], req.actor);
-      return { ...visible, item: { id: item.id, kind: item.kind, title: item.title, logical_key: item.logical_key }, candidate };
+      // 读取历史版本时用该版本自己的标题；当前条目标题会被新版本改写，不能带出去。
+      const versionTitle = recordField(candidate, "title") ?? item.title;
+      return { ...visible, item: { id: item.id, kind: item.kind, title: versionTitle, logical_key: item.logical_key }, candidate };
     } catch (error) { return errorReply(reply, error); }
   });
 
