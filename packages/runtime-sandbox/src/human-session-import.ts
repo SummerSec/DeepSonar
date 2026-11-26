@@ -19,7 +19,7 @@ const CLAUDE_STORAGE_METADATA = new Set([
   "api-request-shape", "api-request-blob", "api-request", "tools-used",
 ]);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
-const PI_NATIVE_SESSION_VERSIONS: ReadonlySet<string> = new Set(["1.5.2", "1.6.0"]);
+const PI_NATIVE_SESSION_VERSIONS: ReadonlySet<string> = new Set(["1.5.2", "1.6.0", "1.6.1"]);
 
 export function nativeHumanSessionCapability(cli: string, version: string) {
   // #1228：Pi 1.6.0 的会话仍是 version 3 布局（header + message 行），投影规则不变，

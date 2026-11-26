@@ -17,7 +17,7 @@ try {
   const manifest = JSON.parse(fs.readFileSync(root + "/lib/deepsonar-request-budget.manifest.json", "utf8"));
   if (pkg.name !== "@deepseek-ai/dsh-llm-pi-ai" || pkg.version !== "0.2.2-rc.1"
     || manifest.version !== 1 || manifest.vendorVersion !== pkg.version
-    || !["1.5.2", "1.6.0"].includes(manifest.sdkVersion)
+    || !["1.5.2", "1.6.0", "1.6.1"].includes(manifest.sdkVersion)
     || manifest.vendorSha256 !== ${JSON.stringify(DSH_REQUEST_BUDGET_VENDOR_SHA256)}
     || manifest.artifactSha256 !== ${JSON.stringify(DSH_REQUEST_BUDGET_ARTIFACT_SHA256)}
     || manifest.helperSha256 !== ${JSON.stringify(createHash("sha256").update(DSH_REQUEST_BUDGET_SOURCE).digest("hex"))}) {

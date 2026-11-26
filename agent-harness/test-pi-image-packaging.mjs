@@ -228,7 +228,7 @@ test("the Docker smoke mounts harness code only and never replaces the installed
   assert.match(source, /--name/);
   assert.match(source, /DEEPSONAR_PI_RPC_TIMEOUT_MS/);
   assert.match(source, /DEEPSONAR_PI_IMAGE_PROOF=1/);
-  assert.match(source, /HOST-ONLY Pi 1\.6\.0/);
+  assert.match(source, /HOST-ONLY Pi 1\.6\.1/);
   assert.match(source, /image proof forbids a host Pi binary override/);
   assert.match(source, /DEEPSONAR_PI_WRAPPER_SHA256/);
   assert.doesNotMatch(source, /path\.join\(repo, "agent-harness"\)/u);

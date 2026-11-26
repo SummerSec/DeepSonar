@@ -29,7 +29,7 @@ export async function installDshRequestBudget(installRoot, sourceRoot) {
   const piAiRoot = resolve(installRoot, 'node_modules/@earendil-works/pi-ai');
   const sdk = JSON.parse(await readFile(piAiRoot + '/package.json', 'utf8'));
   // DSH 的 vendor bundle 仍锁 pi-ai 1.5.2；Pi 运行时是 1.6.0。两者都是已核对版本。
-  const SDK_VERSIONS = ['1.5.2', '1.6.0'];
+  const SDK_VERSIONS = ['1.5.2', '1.6.0', '1.6.1'];
   if (sdk.name !== '@earendil-works/pi-ai' || !SDK_VERSIONS.includes(sdk.version)) throw new Error('DSH_BUDGET_SDK_VERSION');
   const verification = `
 import { readFile as readBudgetFile } from 'node:fs/promises';

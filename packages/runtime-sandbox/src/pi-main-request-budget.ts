@@ -5,7 +5,7 @@ const PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE = String.raw`
 const hostFailures = new WeakMap();
 // #1228: 已核验的 pi-ai 版本集合必须定义在模板内部；引用模板外的常量会在生成的
 // 运行时模块里变成 ReferenceError（1.6.0 的 clamp 路径就是这样炸的）。
-const SDK_VERSIONS = Object.freeze(['1.6.0', '1.5.2']);
+const SDK_VERSIONS = Object.freeze(['1.6.1', '1.6.0', '1.5.2']);
 function fail(code) {
   const error = new Error(code);
   hostFailures.set(error, code);
@@ -145,7 +145,7 @@ export function assertPiAnthropicThinkingBudget(model, options, effectiveMaxToke
  * 同一份预算扩展会挂在两个运行时上：Pi 1.6.0 自带平铺的 pi-ai 1.6.0，
  * DSH 的锁版本 vendor bundle 仍是 pi-ai 1.5.2。只接受这两个已核对的版本。
  */
-export const PI_MAIN_BUDGET_SDK_VERSIONS = Object.freeze(['1.6.0', '1.5.2']);
+export const PI_MAIN_BUDGET_SDK_VERSIONS = Object.freeze(['1.6.1', '1.6.0', '1.5.2']);
 
 /** Pi 1.6.0's public provider streamSimple extension runs before SDK HTTP generation. */
 export const PI_MAIN_REQUEST_BUDGET_SOURCE = String.raw`

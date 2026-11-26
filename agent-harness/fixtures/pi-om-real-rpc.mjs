@@ -38,7 +38,7 @@ export const PI_RPC_SCENARIOS = Object.freeze([
 
 function resolveCli(binary) {
   const { executable, metadata } = resolvePiPackage(binary);
-  assert.equal(metadata.version, "1.6.0", "real RPC smoke requires the pinned Pi CLI");
+  assert.equal(metadata.version, "1.6.1", "real RPC smoke requires the pinned Pi CLI");
   return executable;
 }
 
