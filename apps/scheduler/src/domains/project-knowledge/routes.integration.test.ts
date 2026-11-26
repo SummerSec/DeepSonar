@@ -357,7 +357,7 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
     actor = { ...actor, scopes: ["projects:read", "tasks:read"] };
     const mixedAllowed = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${mixedItem}` });
     assert.equal((mixedAllowed.json().versions as unknown[]).length, 2, "有源权限的读者保留完整历史视图");
-    assert.equal((mixedAllowed.json().proposals as unknown[]).length, 2, "有源权限时候选与基线提案都在");
+    assert.equal((mixedAllowed.json().proposals as unknown[]).length, 3, "候选、基线提案与旁证提案在共享权限下都在");
     for (const hiddenItem of [missingSourceItem, foreignSourceItem]) {
       assert.equal((await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${hiddenItem}` })).statusCode,
         404, "tasks:read 只跳过清单比对，不跳过归属校验");
