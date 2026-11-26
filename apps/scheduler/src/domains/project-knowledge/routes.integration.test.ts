@@ -203,6 +203,20 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
       VALUES(${versionId},${owner.projectId},${itemId},1,${hash},${owner.jobId},${owner.attemptId},
         ${db.json([{ kind: "evidence", ref: String(evidence?.id), content_hash: "c".repeat(64) }] as never)},${hash})`;
     await db`UPDATE project_knowledge_items SET active_version_id=${versionId},status='active' WHERE id=${itemId}`;
+    // 普通共享知识：来源为空，projects:read 读者必须仍能读正文，只是看不到来源字段。
+    const plainItem = randomUUID(), plainVersion = randomUUID();
+    const plainBytes = Buffer.from(JSON.stringify({ kind: "memory", logical_key: "plain", title: "普通共享知识",
+      keywords: [], content: "普通正文" }), "utf8");
+    const plainHash = createHash("sha256").update(plainBytes).digest("hex");
+    blobs.set(sharedAssetBlobUri(plainHash), plainBytes);
+    await db`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri)
+      VALUES(${plainHash},${plainBytes.length},'application/json',${sharedAssetBlobUri(plainHash)})`;
+    await db`INSERT INTO project_knowledge_items(id,project_id,kind,logical_key,title)
+      VALUES(${plainItem},${owner.projectId},'memory','plain','普通共享知识')`;
+    await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,
+      creator_job_id,creator_attempt_id,sources_json,governance_hash)
+      VALUES(${plainVersion},${owner.projectId},${plainItem},1,${plainHash},${owner.jobId},${owner.attemptId},'[]',${plainHash})`;
+    await db`UPDATE project_knowledge_items SET active_version_id=${plainVersion},status='active' WHERE id=${plainItem}`;
 
     const app = Fastify();
     let actor: Actor = { type: "api_token", id: randomUUID(), name: "reader", projectId: owner.projectId,
@@ -210,21 +224,31 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
     app.addHook("onRequest", async (request) => { request.actor = actor; });
     registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
     const base = `/projects/${owner.projectId}/knowledge/${itemId}`;
-    const detail = await app.inject({ method: "GET", url: base });
-    assert.equal(detail.statusCode, 200);
-    const detailVersion = detail.json().versions[0] as Record<string, unknown>;
-    assert.equal(detailVersion.sources_json, undefined, "条目详情不能回传受限来源");
-    assert.equal(detailVersion.creator_job_id, undefined, "条目详情不能回传作者任务");
-    assert.equal(detailVersion.creator_attempt_id, undefined, "条目详情不能回传作者尝试");
+    // 第一层：整个版本受限 → 列表、详情、精确读取都不暴露它的存在。
+    const listing = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge` });
+    assert.deepEqual(listing.json().items.map((row: { title: string }) => row.title), ["普通共享知识"],
+      "无权读者的列表不能出现只由受限版本构成的条目");
+    assert.equal((await app.inject({ method: "GET", url: base })).statusCode, 404, "受限条目详情不可见");
     const list = await app.inject({ method: "GET", url: `${base}/versions` });
-    assert.equal(list.json().items[0].sources_json, undefined, "版本列表不能回传受限来源");
+    assert.deepEqual(list.json().items, [], "版本列表不能暴露受限版本");
     const exact = await app.inject({ method: "GET", url: `${base}/versions/${versionId}` });
     assert.equal(exact.statusCode, 404, "精确读取按来源授权拒绝");
+    // 第二层：普通共享知识仍可读正文，但不回传来源字段。
+    const plainBase = `/projects/${owner.projectId}/knowledge/${plainItem}`;
+    const plainDetail = await app.inject({ method: "GET", url: plainBase });
+    assert.equal(plainDetail.statusCode, 200, "普通共享知识对 projects:read 读者仍可读");
+    const plainVersionRow = plainDetail.json().versions[0] as Record<string, unknown>;
+    assert.equal(plainVersionRow.sources_json, undefined, "普通条目的来源字段对无权读者裁掉");
+    assert.equal(plainVersionRow.creator_job_id, undefined, "普通条目的作者任务对无权读者裁掉");
+    const plainExact = await app.inject({ method: "GET", url: `${plainBase}/versions/${plainVersion}` });
+    assert.equal(plainExact.statusCode, 200, "普通版本精确读取仍返回正文");
+    assert.equal((plainExact.json().candidate as Record<string, unknown>).content, "普通正文");
 
     actor = { ...actor, scopes: ["projects:read", "tasks:read"] };
     const allowed = await app.inject({ method: "GET", url: `${base}/versions/${versionId}` });
     assert.equal(allowed.statusCode, 200, "能读原始资料的读者按既有 scope 放行");
     const allowedDetail = await app.inject({ method: "GET", url: base });
+    assert.equal(allowedDetail.statusCode, 200);
     assert.ok(Array.isArray((allowedDetail.json().versions[0] as Record<string, unknown>).sources_json));
   });
 });
