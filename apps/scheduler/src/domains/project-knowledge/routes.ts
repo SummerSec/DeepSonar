@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { TASK_KNOWLEDGE_SUGGESTION_OPERATION } from "@deepsonar/shared-types";
 import { audit } from "../../audit.js";
-import { actorHasScope } from "../../auth.js";
+import { actorHasScope, type Actor } from "../../auth.js";
 import { sql } from "../../db.js";
 import { validationHttpError } from "../../http-validation-error.js";
 import { projectScopeAllows } from "../../project-scope.js";
@@ -58,6 +58,16 @@ function access(req: FastifyRequest, reply: FastifyReply, projectId: string, wri
 
 // Evaluation-only drafts use the existing version store, but stay private to the
 // source-checked closeout detail. A revision must not hide the existing active item.
+/** 无权读原始资料的人看不到受限版本的来源字段（#1286）。 */
+function redactVersionSources(rows: Row[], actor: Actor | undefined): Row[] {
+  if (actor && actorHasScope(actor, "tasks:read")) return rows;
+  return rows.map((row) => {
+    const { sources_json: _sources, creator_job_id: _job, creator_attempt_id: _attempt, ...rest } = row;
+    // SAFETY: 只是删掉三个已知键，剩余键仍来自同一行查询结果（Row），结构不变。
+    return rest as Row;
+  });
+}
+
 function publicKnowledgeVersion(db: Db) {
   return db`NOT EXISTS (SELECT 1 FROM project_knowledge_proposals p JOIN project_knowledge_work w ON w.id=p.work_id
     WHERE p.project_id=v.project_id AND p.candidate_version_id=v.id AND w.trigger_key LIKE ${CLOSEOUT_EVALUATION_PREFIX + "%"})`;
@@ -202,9 +212,9 @@ async function versionSourcesReadable(db: KnowledgeDb, req: FastifyRequest, proj
   const resolved = await resolveSourceOwners(db, version.sources_json);
   if (resolved.unresolved > 0) return false;
   if (resolved.owners.some((owner) => owner.project_id !== projectId)) return false;
-  const role = req.actor?.role;
-  return actorMayReadGovernanceSources(db, { jobId: req.actor?.id ?? null, projectId,
-    humanAuthority: role === "admin" || role === "operator" }, resolved.owners);
+  // 沿用来源原有权限：能读原始资料（tasks:read/admin）的人不必再持有治理 Job 清单；角色名不参与判定。
+  const humanAuthority = Boolean(req.actor && actorHasScope(req.actor, "tasks:read"));
+  return actorMayReadGovernanceSources(db, { jobId: req.actor?.id ?? null, projectId, humanAuthority }, resolved.owners);
 }
 
 export function registerProjectKnowledgeRoutes(
@@ -293,7 +303,8 @@ export function registerProjectKnowledgeRoutes(
           governance_hash,revoked_at,revoked_reason,created_at
         FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
         ORDER BY version DESC LIMIT ${page.limit + 1} OFFSET ${page.offset}`;
-      return { items: rows.slice(0, page.limit), next_offset: rows.length > page.limit ? page.offset + page.limit : null };
+      return { items: redactVersionSources(rows.slice(0, page.limit) as Row[], req.actor),
+        next_offset: rows.length > page.limit ? page.offset + page.limit : null };
     } catch (error) { return errorReply(reply, error); }
   });
 
