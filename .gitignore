@@ -22,3 +22,5 @@ deploy/.upgrade/
 # Deployment-only human administrator seed (never commit or copy into builds).
 deploy/bootstrap-admin/
 .deepsonar-bootstrap-admin
+agent-harness/dsh-runtime/deepsonar-claude-key.mjs
+agent-harness/dsh-runtime/deepsonar-private-reader.mjs
