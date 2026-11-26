@@ -16,10 +16,14 @@ export interface KnowledgeWriteResult {
 }
 
 
-/** 已撤回的条目不允许任何人工维护动作。 */
+/** 撤回的条目禁止任何维护；已下架的条目必须先恢复，编辑不能把它偷偷重新生效。 */
 function refuseClosed(status: unknown): void {
-  if (status !== "revoked") return;
-  throw new KnowledgeOperationError("KNOWLEDGE_REVOKED", "该知识条目已被撤回，不能再维护", "permanent_failure", "停止维护这个条目；需要新内容请新建条目。");
+  if (status === "revoked") {
+    throw new KnowledgeOperationError("KNOWLEDGE_REVOKED", "该知识条目已被撤回，不能再维护", "permanent_failure", "停止维护这个条目；需要新内容请新建条目。");
+  }
+  if (status === "retired") {
+    throw new KnowledgeOperationError("KNOWLEDGE_ITEM_ARCHIVED", "该知识条目已下架，编辑不会让它重新生效", "model_correctable", "先恢复这个条目，再基于它的当前版本提交编辑；不要用编辑绕过下架。");
+  }
 }
 
 const notFound = (): never => {

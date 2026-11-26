@@ -531,6 +531,7 @@ test("a late edit cannot re-activate a knowledge item that was archived while it
     gate.release?.();
     const late = await editing;
     assert.equal(late.statusCode, 409, late.body);
+    assert.equal(late.json().error_code, "KNOWLEDGE_ITEM_ARCHIVED", "迟到的编辑必须被下架状态拒绝");
     const [row] = await db`SELECT status, active_version_id, keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
     assert.equal(row!.status, "retired", "迟到的编辑不得让条目重新生效");
     assert.equal(String(row!.active_version_id), versionRef, "生效版本必须仍是下架前那一版");
