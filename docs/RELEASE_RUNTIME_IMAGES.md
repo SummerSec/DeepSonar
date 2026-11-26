@@ -1,7 +1,10 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；最新正式版 v0.6.26，于 2026-11-25 正式发布（release run 45689672668）；既有 tag 与镜像保持不可变**。
-> 同步日期：2026-11-25
+> 状态：**运维 as-built；最新正式版 v0.6.27，于 2026-11-26 正式发布（release run 45882241100）；既有 tag 与镜像保持不可变**。
+> 同步日期：2026-11-26
+>
+>
+> **v0.6.27 发布结果（2026-11-26）**。候选 base 为 v0.6.26 之后的 main，compare 为 `v0.6.26...v0.6.27`。注释 tag 对象 `cadaf180` 解引用到提交 `c708e5fd`；发布准备为纯文档 PR #1289，因此按流程在 `c708e5fd` 上手动分发五条门禁并全部成功：ci `45879606944`、chrome-runtime `45879611599`、mobile-runtime `45879616401`、openharmony-runtime `45879621498`、reverse-runtime `45879625705`。Release 工作流 `45882241100` 一次成功，GitHub Release 于 2026-11-26T20:18:21Z 发布，附件 5 个（management-skill、reverse-evidence、platform-signature-evidence、两份 runtime-image-registry JSON）。schema 保持 79（与 v0.6.26 相同），属同 schema 镜像更新，无需重建。正式镜像构建日志中的只读版本打印：base/kali `{"node":"v24.22.3","undici_bundled":"7.30.2","undici_dsh":"8.12.4","undici_pi":"8.12.4","pi":"1.6.1"}`，scheduler `{"undici_bundled":"7.30.2","undici_workspace":"7.30.2","undici_opensandbox":"7.30.2"}`，web `{"undici_bundled":"7.30.2"}`。清单回写为 PR #1290（`bot/sync-runtime-registry-v0.6.27`）。
 >
 > **v0.6.26 发布结果（2026-11-25）**。候选 base 为 v0.6.24 之后的 main，compare 为 `v0.6.25...v0.6.26`（`v0.6.25` 为未发布失败版本，见下）。注释 tag 对象 `35603425` 解引用到提交 `5ad86ced`，五个门禁在同一 SHA 手动分发并全绿：ci `45685228356`、chrome-runtime `45685236592`、mobile-runtime `45685244006`、openharmony-runtime `45685253031`、reverse-runtime `45685263565`。Release 工作流 `45689672668` 一次成功，GitHub Release 于 2026-11-25T20:25:36Z 发布，附件 5 个（management-skill、reverse-evidence、platform-signature-evidence、两份 runtime-image-registry JSON）。schema 保持 79，与 v0.6.24 相同，升级为同 schema 镜像更新，无需重建。清单回写为 PR #1281（`bot/sync-runtime-registry-v0.6.26`）。
 >
