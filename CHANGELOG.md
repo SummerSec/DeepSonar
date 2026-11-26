@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [0.6.27] - 2026-11-26
+
+### 修复
+
+- **知识唤醒查询不再拖住普通任务领取（#1287）**：Dispatcher 先领取并启动普通任务，再在后台单飞推进知识；唤醒探测与普通任务定时器各自单飞，新知识失效才推进代次并补查一次，任务定时器只会提前不会被知识探测推迟。真实 PostgreSQL 回归用两条 pending 任务 + 永远挂住的知识探测证明任务仍按时被领取。
+- **受限来源的知识不再对无权限读者可见（#1286）**：已发布条目的可见性改为按来源的原有授权判定（清单 `input_ref` + `content_hash` + 读者当前阶段），来源归属与项目先校验，`tasks:read` 只跳过清单比对、不跳过归属校验；受限版本在分页前整体剔除，条目关联（提案/评估/使用）按授权版本边界返回，基线按提案引用的 `version_ref` 判定，归档不当作撤销。
+- **Pi Agent 候选升到 1.6.1（#1228）**：会话导入按已核验版本集合放开；预算扩展的 SDK 版本校验自包含在运行时模板里，异常不再覆盖真实失败原因；`PI_MEMORY_CONTEXT_POLICY_SHA256` 按原始字节重算并在 CI 校验源文件一致性；控制面与运行时镜像在构建时只读打印 Node 内置、工作区、DSH vendor、Pi 自身与 OpenSandbox 传递的 Undici 实际版本。
+
+### 新增
+
+- **业务 Job 终态不再自动登记知识来源（#1219 第四阶段第二步）**：新任务只通过 `submit_task_knowledge_suggestion` 显式沉淀 Memory，Skill 仍走显式治理评审；切换前登记的来源与在途知识工作继续收尾，历史登记审计保持可查。
+
+### 升级与验收范围
+
+- schema 仍为 79，与 v0.6.26 相同，本次没有数据库结构变更，不需要受控重建。
+- 镜像层面 Pi 1.6.1 与 Undici 修复版本（Node 内置 7.30.2、工作区与 OpenSandbox 7.30.2、DSH vendor 8.12.4、Pi 8.12.4）在候选镜像中实测；发布前仍在同一 SHA 上跑完五条门禁。
+
 ## [0.6.26] - 2026-11-25
 
 ### 修复
@@ -1888,3 +1905,4 @@
 [0.6.24]: https://github.com/SummerSec/DeepSonar/compare/v0.6.23...v0.6.24
 [0.6.25]: https://github.com/SummerSec/DeepSonar/compare/v0.6.24...v0.6.25
 [0.6.26]: https://github.com/SummerSec/DeepSonar/compare/v0.6.25...v0.6.26
+[0.6.27]: https://github.com/SummerSec/DeepSonar/compare/v0.6.26...v0.6.27
