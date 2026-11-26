@@ -12,7 +12,7 @@ import type { KnowledgeDb } from "./types.js";
 export async function readableVersionKeysJson(db: KnowledgeDb, actor: Actor | undefined,
   projectId: string): Promise<string> {
   // 能读原始资料的人沿用其既有 scope，不必再持有治理 Job 的冻结清单。
-  if (actor && actorHasScope(actor, "tasks:read")) return JSON.stringify(["*"]);
+  if (actor && actorHasScope(actor, "tasks:read")) return "*";
   const keys: string[] = [];
   if (actor) {
     const rows = await db`SELECT stage, input_manifest_json FROM project_knowledge_job_assignments
@@ -30,17 +30,18 @@ export async function readableVersionKeysJson(db: KnowledgeDb, actor: Actor | un
       }
     }
   }
-  return JSON.stringify(keys.length ? keys : [""]);
+  // 用控制字符拼成一条文本参数，避免 jsonb 解析路径（标量/数组形状都曾踩过）。
+  return keys.join("\u0001");
 }
 
 /** 该版本对当前读者是否可见；`v` 是查询里的版本别名。 */
-export function readableVersionSources(db: KnowledgeDb, keysJson: string) {
-  return db`(COALESCE(('*' = ANY(ARRAY(SELECT jsonb_array_elements_text(${keysJson}::jsonb)))), false)
+export function readableVersionSources(db: KnowledgeDb, keysText: string) {
+  return db`(${keysText} = '*'
     OR NOT EXISTS (
     SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v.sources_json)='array' THEN v.sources_json ELSE '[]'::jsonb END) s
     WHERE s->>'kind' IN ('fact','evidence','task') AND (
       NOT ((s->>'kind') || ':' || COALESCE(s->>'ref', s->>'job_id') || '|' || COALESCE(s->>'content_hash','')
-        = ANY(ARRAY(SELECT jsonb_array_elements_text(${keysJson}::jsonb))))
+        = ANY(string_to_array(${keysText}, chr(1)))))
       OR NOT EXISTS (SELECT 1 FROM project_knowledge_job_assignments a
         WHERE a.project_id=v.project_id AND a.job_id = CASE s->>'kind'
           WHEN 'evidence' THEN (SELECT ar.job_id FROM artifact_evidence ev JOIN artifacts ar ON ar.id=ev.artifact_id
