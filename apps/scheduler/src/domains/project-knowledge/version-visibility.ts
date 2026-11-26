@@ -35,39 +35,57 @@ export async function readableVersionKeysJson(db: KnowledgeDb, actor: Actor | un
 }
 
 /** 该版本对当前读者是否可见；`v` 是查询里的版本别名。
- * 普通业务来源直接可见；治理来源要求清单与受众匹配；来源解析不到（引用被删）按原语义隐藏。 */
+ * 先验证来源存在且属于同一项目，再区分普通共享来源（直接可见）与治理来源（要求清单与受众匹配）；
+ * 来源缺失或跨项目一律按原有安全语义隐藏。`keysText === '*'` 只跳过来源清单比对，不跳过归属校验。 */
 export function readableVersionSources(db: KnowledgeDb, keysText: string) {
-  return db`(${keysText} = '*'
-    OR NOT EXISTS (
+  return db`NOT EXISTS (
       SELECT 1
       FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v.sources_json) = 'array' THEN v.sources_json ELSE '[]'::jsonb END) AS s
       LEFT JOIN LATERAL (
-        SELECT CASE s->>'kind'
-          WHEN 'evidence' THEN (
-            SELECT ar.job_id FROM artifact_evidence ev JOIN artifacts ar ON ar.id = ev.artifact_id
-            WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN ev.id = (s->>'ref')::uuid END
-          )
-          WHEN 'fact' THEN (
-            SELECT cn.job_id FROM canvas_nodes cn
-            WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN cn.id = (s->>'ref')::uuid END
-          )
-          ELSE (
-            SELECT j.id FROM jobs j
-            WHERE CASE WHEN (s->>'job_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN j.id = (s->>'job_id')::uuid END
-          )
-        END AS owner_job
+        SELECT
+          CASE s->>'kind'
+            WHEN 'evidence' THEN (
+              SELECT ar.project_id FROM artifact_evidence ev JOIN artifacts ar ON ar.id = ev.artifact_id
+              WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN ev.id = (s->>'ref')::uuid END
+            )
+            WHEN 'fact' THEN (
+              SELECT c.project_id FROM canvas_nodes cn JOIN canvases c ON c.id = cn.canvas_id
+              WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN cn.id = (s->>'ref')::uuid END
+            )
+            ELSE (
+              SELECT j.project_id FROM jobs j
+              WHERE CASE WHEN (s->>'job_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN j.id = (s->>'job_id')::uuid END
+            )
+          END AS owner_project,
+          CASE s->>'kind'
+            WHEN 'evidence' THEN (
+              SELECT ar.job_id FROM artifact_evidence ev JOIN artifacts ar ON ar.id = ev.artifact_id
+              WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN ev.id = (s->>'ref')::uuid END
+            )
+            WHEN 'fact' THEN (
+              SELECT cn.job_id FROM canvas_nodes cn
+              WHERE CASE WHEN (s->>'ref') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN cn.id = (s->>'ref')::uuid END
+            )
+            ELSE (
+              SELECT j.id FROM jobs j
+              WHERE CASE WHEN (s->>'job_id') ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN j.id = (s->>'job_id')::uuid END
+            )
+          END AS owner_job
       ) r ON true
       WHERE s->>'kind' IN ('fact','evidence','task')
         AND (
-          r.owner_job IS NULL
+          r.owner_project IS NULL
+          OR r.owner_project <> v.project_id
           OR (
-            EXISTS (SELECT 1 FROM project_knowledge_job_assignments a
+            r.owner_job IS NOT NULL
+            AND EXISTS (SELECT 1 FROM project_knowledge_job_assignments a
               WHERE a.project_id = v.project_id AND a.job_id = r.owner_job)
+            AND ${keysText} <> '*'
             AND NOT (
               (s->>'kind') || ':' || COALESCE(s->>'ref', s->>'job_id') || '|' || COALESCE(s->>'content_hash','')
               = ANY(string_to_array(${keysText}, chr(1)))
             )
           )
         )
-    ))`;
+    )`;
 }

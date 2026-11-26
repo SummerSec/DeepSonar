@@ -244,7 +244,43 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
     assert.equal(plainExact.statusCode, 200, "普通版本精确读取仍返回正文");
     assert.equal((plainExact.json().candidate as Record<string, unknown>).content, "普通正文");
 
+    // 来源归属校验：引用缺失或属于别的项目时，即使读者有 tasks:read 也必须隐藏。
+    const foreign = await seedKnowledgeJob(db);
+    const [foreignArtifact] = await db`INSERT INTO artifacts(id,project_id,job_id,artifact_key,kind,source_operation)
+      VALUES(gen_random_uuid(),${foreign.projectId},${foreign.jobId},'foreign','fact','emit_fact') RETURNING id`;
+    const [foreignEvidence] = await db`INSERT INTO artifact_evidence(id,artifact_id,statement,kind)
+      VALUES(gen_random_uuid(),${String(foreignArtifact?.id)},'别的项目的观测','observation') RETURNING id`;
+    const seedSourcedItem = async (logicalKey: string, sources: unknown) => {
+      const candidateBytes = Buffer.from(JSON.stringify({ kind: "memory", logical_key: logicalKey,
+        title: logicalKey, keywords: [], content: "正文" }), "utf8");
+      const candidateHash = createHash("sha256").update(candidateBytes).digest("hex");
+      blobs.set(sharedAssetBlobUri(candidateHash), candidateBytes);
+      await db`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri)
+        VALUES(${candidateHash},${candidateBytes.length},'application/json',${sharedAssetBlobUri(candidateHash)})`;
+      const item = randomUUID(), version = randomUUID();
+      await db`INSERT INTO project_knowledge_items(id,project_id,kind,logical_key,title)
+        VALUES(${item},${owner.projectId},'memory',${logicalKey},${logicalKey})`;
+      await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,
+        creator_job_id,creator_attempt_id,sources_json,governance_hash)
+        VALUES(${version},${owner.projectId},${item},1,${candidateHash},${owner.jobId},${owner.attemptId},
+          ${db.json(sources as never)},${candidateHash})`;
+      await db`UPDATE project_knowledge_items SET active_version_id=${version},status='active' WHERE id=${item}`;
+      return item;
+    };
+    const missingSourceItem = await seedSourcedItem("missing-source",
+      [{ kind: "evidence", ref: randomUUID(), content_hash: "d".repeat(64) }]);
+    const foreignSourceItem = await seedSourcedItem("foreign-source",
+      [{ kind: "evidence", ref: String(foreignEvidence?.id), content_hash: "e".repeat(64) }]);
+    for (const hiddenItem of [missingSourceItem, foreignSourceItem]) {
+      assert.equal((await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${hiddenItem}` })).statusCode,
+        404, "引用缺失或跨项目的来源不能当成本项目普通来源");
+    }
+
     actor = { ...actor, scopes: ["projects:read", "tasks:read"] };
+    for (const hiddenItem of [missingSourceItem, foreignSourceItem]) {
+      assert.equal((await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${hiddenItem}` })).statusCode,
+        404, "tasks:read 只跳过清单比对，不跳过归属校验");
+    }
     const allowed = await app.inject({ method: "GET", url: `${base}/versions/${versionId}` });
     assert.equal(allowed.statusCode, 200, "能读原始资料的读者按既有 scope 放行");
     const allowedDetail = await app.inject({ method: "GET", url: base });
