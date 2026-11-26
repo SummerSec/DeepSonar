@@ -45,6 +45,7 @@ LABEL org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
 ENV DEEPSONAR_GIT_REVISION=${GIT_REVISION}
 
 ENV NODE_ENV=production
+RUN node -p 'JSON.stringify({node: process.version, undici_bundled: process.versions.undici, undici_workspace: (() => { try { return require("/app/packages/runtime-sandbox/node_modules/undici/package.json").version } catch { return "absent" } })(), undici_opensandbox: (() => { try { const r = require("node:module").createRequire("/app/node_modules/@alibaba-group/opensandbox/package.json"); return r("undici/package.json").version } catch { return "absent" } })()})'
 # Content-addressed blobs (shared assets, evidence) must live on the mounted volume.
 # Compose mounts blob_data at /app/data; without this, cwd-relative ./data/blobs
 # lands on the container writable layer and is lost on recreate.

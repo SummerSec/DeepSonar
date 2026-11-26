@@ -1282,8 +1282,8 @@ if (failures.length) {
 // #1228：镜像把 packages/runtime-sandbox/src/pi-main-request-budget.ts 原样复制进 runtime，
 // 守卫常量必须与仓库里的最终文件字节一致，否则 Pi 启动前就会被完整性校验挡下。
 {
-  const source = readFileSync(new URL("../packages/runtime-sandbox/src/pi-main-request-budget.ts", import.meta.url), "utf8")
-    .replace(/\r\n/g, "\n");
+  // 镜像 COPY 原样复制字节，运行时守卫也按原始字节求哈希，所以这里同样不能做换行归一化。
+  const source = readFileSync(new URL("../packages/runtime-sandbox/src/pi-main-request-budget.ts", import.meta.url));
   const actual = createHash("sha256").update(source).digest("hex");
   const guard = readFileSync(new URL("../packages/runtime-sandbox/src/pi-memory-image-guard.ts", import.meta.url), "utf8");
   const pinned = /PI_MEMORY_CONTEXT_POLICY_SHA256\s*=\s*"([0-9a-f]{64})"/u.exec(guard)?.[1] ?? "";
