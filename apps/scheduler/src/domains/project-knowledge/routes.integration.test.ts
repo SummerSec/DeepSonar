@@ -303,17 +303,32 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
       idempotency_key,request_digest,input_digest,reason,candidate_version_id)
       VALUES(gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'create','candidate',1,${owner.jobId},
         ${randomUUID()},${"c".repeat(64)},${"d".repeat(64)},'混合版本提案',${mixedRestricted})`;
+    // 只有基线的 retire 提案（无候选）：基线可见时必须保留。
+    await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
+      idempotency_key,request_digest,input_digest,reason,base_refs_json)
+      VALUES(gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'retire','candidate',1,${owner.jobId},
+        ${randomUUID()},${"e".repeat(64)},${"f".repeat(64)},'基线退役提案',${db.json([{ item_ref: mixedItem }] as never)})`;
+    // 候选可见但基线受限：低权限读者不能拿到这条关联信息。
+    await db`INSERT INTO project_knowledge_proposals(id,project_id,work_id,action,state,revision,maker_job_id,
+      idempotency_key,request_digest,input_digest,reason,candidate_version_id,base_refs_json)
+      VALUES(gen_random_uuid(),${owner.projectId},${String(mixedWork?.id)},'revise','candidate',1,${owner.jobId},
+        ${randomUUID()},${"1".repeat(64)},${"2".repeat(64)},'候选可见但基线受限',${plainVersion},
+        ${db.json([{ item_ref: itemId }] as never)})`;
+    const plainSourced = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${plainItem}` });
+    assert.deepEqual((plainSourced.json().proposals as unknown[]).length, 0,
+      "候选可见但基线受限时，低权限读者拿不到任何关联信息");
     const mixedDetail = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${mixedItem}` });
     assert.equal(mixedDetail.statusCode, 200, mixedDetail.body);
     assert.deepEqual((mixedDetail.json().versions as Array<{ id: string }>).map((row) => row.id), [mixedVisible],
       "低权限读者只看得到授权版本");
-    assert.deepEqual(mixedDetail.json().proposals, [], "受限版本的提案不能出现在关联信息里");
+    assert.equal((mixedDetail.json().proposals as unknown[]).length, 1,
+      "受限候选的提案被剔除，但只有基线的 retire 提案（基线可见）必须保留");
     assert.deepEqual(mixedDetail.json().usages, [], "受限版本的使用记录不能出现在关联信息里");
 
     actor = { ...actor, scopes: ["projects:read", "tasks:read"] };
     const mixedAllowed = await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${mixedItem}` });
     assert.equal((mixedAllowed.json().versions as unknown[]).length, 2, "有源权限的读者保留完整历史视图");
-    assert.equal((mixedAllowed.json().proposals as unknown[]).length, 1);
+    assert.equal((mixedAllowed.json().proposals as unknown[]).length, 3, "有源权限时候选与基线提案都在");
     for (const hiddenItem of [missingSourceItem, foreignSourceItem]) {
       assert.equal((await app.inject({ method: "GET", url: `/projects/${owner.projectId}/knowledge/${hiddenItem}` })).statusCode,
         404, "tasks:read 只跳过清单比对，不跳过归属校验");
