@@ -5,6 +5,8 @@ import { JSDOM } from "jsdom";
 import { api } from "../api";
 import { projectKnowledgeApi, type KnowledgeDetail, type KnowledgeItem, type KnowledgeVersion, type KnowledgeVersionDetail } from "../ProjectKnowledgeApi";
 
+const submitKeys: string[] = [];
+
 // 真正挂载页面：评审点名要求页面级证据（不是返回 null 的 Harness）。
 test("knowledge maintenance keeps feedback visible, unique keys per draft and repeatable archive/undo", async (context) => {
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
@@ -143,6 +145,7 @@ test("create draft stays with its project and a late response does not disturb t
   const originalApi = { ...api };
   const originalKnowledge = { ...projectKnowledgeApi };
   const createdProjects: string[] = [];
+  submitKeys.length = 0;
   let release: ((value: { item_ref: string; version_ref: string; version: number }) => void) | null = null;
   const item: KnowledgeItem = { id: "item-a", project_id: "project-a", kind: "memory", logical_key: "human-note-x1",
     title: "项目 A 的知识", keywords_json: [], status: "active", active_version_id: "version-a1", version: 1,
@@ -408,7 +411,11 @@ test("a delayed create success keeps text typed after submitting and does not sw
         usage_count: 0, feedback_count: 0, successful_feedback: 0 }, skipped_sources: [] }) as never,
     backfill: async () => ({ items: [], next_offset: null }),
     receipts: async () => ({ items: [], next_offset: null }),
-    create: async () => new Promise((resolve) => { release = resolve; }),
+    create: async (_projectId: string, body: { logical_key: string }) => {
+      submitKeys.push(body.logical_key);
+      if (submitKeys.length === 1) return new Promise((resolve) => { release = resolve; });
+      return { item_ref: `item-${submitKeys.length}`, version_ref: `v-${submitKeys.length}`, version: 1 };
+    },
     revise: async () => ({ item_ref: item.id, version_ref: "v2", version: 2 }),
     archive: async () => ({ item_ref: item.id, status: "retired" }),
     restore: async () => ({ item_ref: item.id, status: "active" }),
@@ -446,7 +453,12 @@ test("a delayed create success keeps text typed after submitting and does not sw
     await act(async () => { release?.({ item_ref: "item-new", version_ref: "v-new", version: 1 }); });
     await flush();
     assert.equal((field("知识正文") as HTMLTextAreaElement | null)?.value, "等待期间又写的内容", "迟到的成功不得清掉后来输入的内容");
-    assert.ok(byText(/上一次提交已成功；当前草稿已保留/u), "应提示草稿已保留");
+    assert.ok(byText(/上一次提交已成功；当前草稿已保留/u), "应提示草稿已保留，可继续提交");
+    // 保留下来的草稿必须能继续提交：第二次用的创建标识与第一次不同，且同样成功。
+    await click(byText("提交新建"));
+    assert.equal(submitKeys.length, 2, "第二次提交要真的发出请求");
+    assert.notEqual(submitKeys[0], submitKeys[1], "保留草稿时要换新的创建标识，避免撞同一个逻辑键");
+    assert.ok(byText(/新建知识成功，已打开该条目|上一次提交已成功/u), "第二次提交也要有成功反馈");
   } finally {
     Object.assign(api, originalApi);
     Object.assign(projectKnowledgeApi, originalKnowledge);

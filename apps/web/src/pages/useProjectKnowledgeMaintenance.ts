@@ -85,42 +85,44 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
 
   const currentProject = useRef(projectId);
   currentProject.current = projectId;
+  // 提交成功后的处理抽成独立函数：判断草稿是否被继续编辑过、必要时保留草稿并换新标识。
+  const settleCreate = useCallback((requestProject: string, snapshot: { title: string; content: string },
+    itemRef: string, suffixAfterSubmit: string): void => {
+    const current = draftsRef.current[requestProject];
+    const unchanged = !current || (current.title === snapshot.title && current.content === snapshot.content);
+    setDrafts((map) => {
+      if (unchanged) {
+        const next = { ...map };
+        delete next[requestProject];
+        return next;
+      }
+      const kept = map[requestProject];
+      if (!kept) return map;
+      return { ...map, [requestProject]: { ...kept, suffix: suffixAfterSubmit } };
+    });
+    if (currentProject.current !== requestProject) {
+      patchSubmit(requestProject, { busy: false, notice: "新建知识成功（在其它项目完成）" });
+      return;
+    }
+    if (!unchanged) {
+      patchSubmit(requestProject, { busy: false, notice: "上一次提交已成功；当前草稿已保留，可继续提交" });
+      return;
+    }
+    patchSubmit(requestProject, { busy: false, notice: "新建知识成功，已打开该条目" });
+    onSelectItem(itemRef);
+    onRefresh();
+  }, [patchSubmit, onSelectItem, onRefresh]);
+
   const submitCreate = useCallback(() => {
     // 请求与草稿都绑定打开表单时的项目；迟到的回调只更新它自己的项目。
     const requestProject = projectId;
-    // 用「提交时的内容快照」判断这份草稿是否已被用户改过，而不是用逻辑键后缀。
-    const submitSnapshot = { title: draftTitle, content: draftContent };
+    const snapshot = { title: draftTitle, content: draftContent };
     patchSubmit(requestProject, { busy: true, notice: null, error: null });
     projectKnowledgeApi.create(requestProject, {
       kind: "memory", logical_key: draftKey, title: draftTitle.trim(), content: draftContent,
-    }).then((result) => {
-      // 只清「这一次提交」的那代草稿：等待期间用户重新输入的内容不能被回执覆盖。
-      const unchanged = ((): boolean => {
-        const current = draftsRef.current[requestProject];
-        if (!current) return true;
-        return current.title === submitSnapshot.title && current.content === submitSnapshot.content;
-      })();
-      if (unchanged) {
-        setDrafts((map) => {
-          const next = { ...map };
-          delete next[requestProject];
-          return next;
-        });
-      }
-      if (currentProject.current !== requestProject) {
-        patchSubmit(requestProject, { busy: false, notice: "新建知识成功（在其它项目完成）" });
-        return;
-      }
-      if (!unchanged) {
-        // 用户已经接着输入新内容：保留草稿，也不自动切走当前编辑。
-        patchSubmit(requestProject, { busy: false, notice: "上一次提交已成功；当前草稿已保留" });
-        return;
-      }
-      patchSubmit(requestProject, { busy: false, notice: "新建知识成功，已打开该条目" });
-      onSelectItem(result.item_ref);
-      onRefresh();
-    }).catch((error) => patchSubmit(requestProject, { busy: false, error: message(error) }));
-  }, [projectId, draftTitle, draftContent, draftKey, draftSuffix, onSelectItem, onRefresh, patchSubmit]);
+    }).then((result) => settleCreate(requestProject, snapshot, result.item_ref, newSuffix()))
+      .catch((error) => patchSubmit(requestProject, { busy: false, error: message(error) }));
+  }, [projectId, draftTitle, draftContent, draftKey, patchSubmit, settleCreate]);
 
   const submitEdit = useCallback(() => {
     if (!editDraft) return;
