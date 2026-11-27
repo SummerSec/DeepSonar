@@ -25,42 +25,63 @@ export const CLASSIFIER_STATUSES = Object.freeze({
 // it can suppress the full CI workflow. In particular, do not replace this
 // with a Markdown suffix rule, docs/**, or a suffix-only check.
 //
-// #1221 adds two reviewed exceptions on top of the list:
-//  - root `DESIGN.md` is documentation only; `docs-freshness` still runs in the
-//    docs lane and is what keeps its schema/version statements honest;
-//  - new or modified plain Markdown under `docs/superpowers/plans/` are design
-//    notes with no build, packaging or runtime consumer (verified by grep), so
-//    they do not need a per-file allowlist entry. The rule stays a *file name*
-//    rule (no nested directories, no leading dot, ASCII name, exactly `.md`),
-//    and every non A/M git status (delete, rename, copy, type change, unknown)
-//    still fails closed before this rule is consulted.
+// Reviewed rules and deliberate exclusions:
+//  - root `AGENTS.md` and `DESIGN.md` are documentation only; `docs-freshness`
+//    still runs in the docs lane (checking schema/version statements, links,
+//    branch-name policy references, and shared doc-copy guards). Root
+//    `CLAUDE.md` is intentionally excluded because it is a Git symlink (120000).
+//  - `docs/DEPRECATIONS.md` is intentionally EXCLUDED because
+//    `agent-harness/retired-runtime-cleanup.test.mjs` extracts its SQL cleanup
+//    snippet and executes it against PostgreSQL in `gate-db-domain`.
+//  - `skills/**`, `.agents/skills/**`, `docs/brand/**`, `docs/evidence/**`,
+//    `agent-harness/**`, `database/README.md`, and `deploy/*.md` stay excluded.
+//  - Three reviewed single-level directories (`docs/superpowers/plans/`,
+//    `docs/superpowers/specs/`, and numbered ADRs under `docs/architecture/adr/`)
+//    have no build, packaging, or runtime consumer (verified by grep) and use
+//    strict file-name regexes below. Every non-A/M git status (delete, rename,
+//    copy, type change, unknown) and every non-100644 blob mode still fail
+//    closed before any allowlist entry is consulted.
 export const DOCS_ONLY_PATHS = Object.freeze([
+  "AGENTS.md",
   "CHANGELOG.md",
   "DESIGN.md",
   "LICENSE",
   "README.md",
   "THIRD_PARTY_NOTICES.md",
   "docs/AGENT_CLI_RUNTIME_ADAPTERS.md",
+  "docs/AGENT_REPAIR_LIFECYCLE.md",
   "docs/AGENT_RUNTIME_CONTEXT.md",
   "docs/AGENT_RUNTIME_PROFILES.md",
+  "docs/AI_NATIVE_TRUSTED_KERNEL.md",
   "docs/ARCHITECTURE.md",
   "docs/ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md",
-  "docs/AI_NATIVE_TRUSTED_KERNEL.md",
-  "docs/CLI_CAPABILITIES.md",
   "docs/CI_COST_ACCEPTANCE_992.md",
+  "docs/CLI_CAPABILITIES.md",
   "docs/DEVICE_ACCESS.md",
   "docs/EVIDENCE_TRACE.md",
   "docs/EXTENSION_MATERIALIZATION.md",
+  "docs/HUMAN_CONTINUATION.md",
+  "docs/INTEGRATION_POOL_TEARDOWN.md",
   "docs/ISSUE_752_TRIAL.md",
   "docs/LANGUAGE_SERVER_CAPABILITIES.md",
+  "docs/MODEL_GATEWAY_TRANSPARENCY.md",
   "docs/ONE_CLICK_DEPLOYMENT.md",
+  "docs/OPENSANDBOX_1_2_UPGRADE.md",
+  "docs/PI_MODEL_BUDGET_RECOVERY.md",
+  "docs/PI_OBSERVATIONAL_MEMORY.md",
+  "docs/PI_OBSERVATIONAL_MEMORY_DECISIONS.md",
+  "docs/PI_OBSERVATIONAL_MEMORY_GATEWAY.md",
+  "docs/PI_OBSERVATIONAL_MEMORY_INTEGRATION.md",
+  "docs/PI_OBSERVATIONAL_MEMORY_RPC.md",
   "docs/PI_RPC_PAYLOAD_LIMITS.md",
   "docs/PLAN_BOUNDED_INTENT_DESIGN.md",
   "docs/PLAN_GAP_PROJECTION.md",
+  "docs/PROGRAM_ELIGIBILITY.md",
   "docs/PROJECT_FINDING_EVALUATION.md",
   "docs/PROJECT_FINDING_RESEARCH.md",
   "docs/PROJECT_KNOWLEDGE.md",
   "docs/PROJECT_REVIEW_2026-08.md",
+  "docs/PROJECT_TASK_QUEUE.md",
   "docs/PROVIDER_ADAPTER_MODEL_DESCRIPTOR.md",
   "docs/REA_CLI_CAPABILITIES.md",
   "docs/README.md",
@@ -70,17 +91,23 @@ export const DOCS_ONLY_PATHS = Object.freeze([
   "docs/REPAIR_FEEDBACK_BASELINE.md",
   "docs/REPAIR_FEEDBACK_CLI_MATRIX.md",
   "docs/REPAIR_FEEDBACK_DONE_REPAIR.md",
+  "docs/RUNTIME_BUILD_TIMING.md",
   "docs/RUNTIME_IMAGE_CONTRACT_DEPLOY.md",
+  "docs/RUNTIME_IMAGE_GOVERNANCE_979.md",
   "docs/RUNTIME_IMAGE_REGISTRY_CONTRACT.md",
   "docs/RUNTIME_ROLE_IMAGE_MATRIX.md",
   "docs/RUNTIME_TEST_TOOLCHAINS.md",
   "docs/RUNTIME_TOOL_MANUALS.md",
   "docs/SHARED_ASSET_BLOB_STORE.md",
+  "docs/SKILL_SUGGESTIONS.md",
+  "docs/SUPERAGENT_GAP_RESEARCH.md",
+  "docs/TARGET_AUTHORIZATION.md",
   "docs/TASK_DISPATCH_ACCEPTANCE.md",
   "docs/TASK_GOAL_REVIEW.md",
   "docs/TASK_OUTCOME_ADMISSION.md",
   "docs/TASK_OUTCOME_REPORT.md",
   "docs/TASK_RESULT_REVIEW.md",
+  "docs/TASTE_SKILL_TUTORIAL_LANDING_PROMPTS.md",
   "docs/TODO_CANVAS_PROCESS_TRUTH.md",
   "docs/USAGE_LIMITS.md",
   "docs/architecture/01-system-specification.md",
@@ -96,32 +123,23 @@ export const DOCS_ONLY_PATHS = Object.freeze([
   "docs/architecture/11-engineering-specs.md",
   "docs/architecture/12-risks-and-tech-debt.md",
   "docs/architecture/README.md",
-  "docs/architecture/adr/0001-no-backward-compatibility.md",
-  "docs/architecture/adr/0002-schema-baseline.md",
-  "docs/architecture/adr/0003-api-only-control.md",
-  "docs/architecture/adr/0004-fact-and-finding-verification.md",
-  "docs/architecture/adr/0005-event-evidence-stream.md",
-  "docs/architecture/adr/0006-runtime-image-admission.md",
-  "docs/architecture/adr/0007-paused-upgrade-recovery.md",
-  "docs/architecture/adr/0008-maintenance-candidate-upgrade.md",
-  "docs/architecture/adr/0009-finding-source-identity.md",
   "docs/architecture/adr/README.md",
   "docs/architecture/traceability.md",
   "docs/runbooks/runtime-image-pull-partial-failure.md",
-  "docs/superpowers/plans/2026-10-15-architecture-741.md",
-  "docs/superpowers/plans/2026-10-20-project-knowledge-lifecycle.md",
-  "docs/superpowers/specs/2026-10-20-project-knowledge-lifecycle.md",
 ]);
 
 const DOCS_ONLY_SET = new Set(DOCS_ONLY_PATHS);
 
 /**
- * #1221：已评审的设计方案目录。只接受 `docs/superpowers/plans/` 下**直接**新增或修改的
- * 普通 Markdown 文件名（ASCII 名称、必须 `.md` 结尾、无子目录、无前导点），避免变成
- * `docs/**` 或后缀放行。删除/重命名/复制/类型变更在到达这里之前已 fail closed。
+ * 已评审的受控单层文档目录（#1221 起扩展）：
+ *  - `docs/superpowers/plans/` 与 `docs/superpowers/specs/`：ASCII 文件名、必须 `.md` 结尾、无子目录、无前导点；
+ *  - `docs/architecture/adr/`：严格 4 位编号 ADR（`0001-topic.md`），避免放行未核查杂项文档。
+ * 避免变成 `docs/**` 或后缀放行；删除/重命名/复制/类型变更及非 100644 blob 模式在到达这里之前已 fail closed。
  */
 const REVIEWED_DOC_DIRECTORIES = Object.freeze([
   /^docs\/superpowers\/plans\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$/u,
+  /^docs\/superpowers\/specs\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$/u,
+  /^docs\/architecture\/adr\/[0-9]{4}-[a-z0-9-]+\.md$/u,
 ]);
 const ALWAYS_FULL_SEGMENTS = new Set(["code", "config", "evidence", "prompts", "skills", "workflows"]);
 

@@ -707,3 +707,64 @@ test("#992 the CLI writes the explanation to GITHUB_STEP_SUMMARY", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("真实 git 提交下 AGENTS.md/ADR/specs 走文档快车道，docs/DEPRECATIONS.md 保持完整门禁", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-real-docs-allowlist-"));
+  const git = (...args) => {
+    const run = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+    assert.equal(run.status, 0, `git ${args.join(" ")}: ${run.stderr}`);
+    return run.stdout.trim();
+  };
+  try {
+    git("init", "-q");
+    git("config", "user.email", "ci@example.invalid");
+    git("config", "user.name", "ci");
+    mkdirSync(join(dir, "docs/architecture/adr"), { recursive: true });
+    mkdirSync(join(dir, "docs/superpowers/specs"), { recursive: true });
+    writeFileSync(join(dir, "AGENTS.md"), "initial\n");
+    writeFileSync(join(dir, "DESIGN.md"), "initial\n");
+    writeFileSync(join(dir, "README.md"), "initial\n");
+    writeFileSync(join(dir, "docs/DEPRECATIONS.md"), "initial\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "base");
+    const base = git("rev-parse", "HEAD");
+
+    writeFileSync(join(dir, "AGENTS.md"), "updated\n");
+    writeFileSync(join(dir, "DESIGN.md"), "updated\n");
+    writeFileSync(join(dir, "README.md"), "updated\n");
+    writeFileSync(join(dir, "docs/architecture/adr/0027-sample-adr.md"), "# ADR\n");
+    writeFileSync(join(dir, "docs/superpowers/specs/2026-12-01-sample-spec.md"), "# Spec\n");
+    git("add", ".");
+    git("commit", "-q", "-m", "allowlisted docs");
+    const docsHead = git("rev-parse", "HEAD");
+    const docsOutput = join(dir, "docs-out.txt");
+    writeFileSync(docsOutput, "");
+    const docsRun = spawnSync(process.execPath, [join(ROOT, "agent-harness/ci-run-plan.mjs"), "--event-name", "pull_request",
+      "--base", base, "--head", docsHead, "--draft", "false", "--ci-pr-mode", "tiered", "--root", ROOT], {
+      cwd: dir, env: { ...process.env, GITHUB_OUTPUT: docsOutput, GITHUB_STEP_SUMMARY: join(dir, "docs-summary.md") }, encoding: "utf8",
+    });
+    assert.equal(docsRun.status, 0, docsRun.stderr);
+    const docsOutText = readFileSync(docsOutput, "utf8");
+    assert.match(docsOutText, /mode=docs/u);
+    assert.match(docsOutText, /docs_only=true/u);
+    assert.match(docsOutText, /chrome_fuzz_arm=skipped/u);
+
+    git("reset", "--hard", base);
+    writeFileSync(join(dir, "docs/DEPRECATIONS.md"), "updated sql\n");
+    git("add", "docs/DEPRECATIONS.md");
+    git("commit", "-q", "-m", "deprecations");
+    const depHead = git("rev-parse", "HEAD");
+    const depOutput = join(dir, "dep-out.txt");
+    writeFileSync(depOutput, "");
+    const depRun = spawnSync(process.execPath, [join(ROOT, "agent-harness/ci-run-plan.mjs"), "--event-name", "pull_request",
+      "--base", base, "--head", depHead, "--draft", "false", "--ci-pr-mode", "tiered", "--root", ROOT], {
+      cwd: dir, env: { ...process.env, GITHUB_OUTPUT: depOutput, GITHUB_STEP_SUMMARY: join(dir, "dep-summary.md") }, encoding: "utf8",
+    });
+    assert.equal(depRun.status, 0, depRun.stderr);
+    const depOutText = readFileSync(depOutput, "utf8");
+    assert.match(depOutText, /mode=ready-full/u);
+    assert.match(depOutText, /docs_only=false/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

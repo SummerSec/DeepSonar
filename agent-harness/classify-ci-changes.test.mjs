@@ -119,7 +119,6 @@ test("#1221 root DESIGN.md and plain plan documents are safe docs, not a directo
     "docs/superpowers/plans/.hidden.md",
     "docs/superpowers/plans/plan.md.bak",
     "docs/superpowers/plans/说明.md",
-    "docs/superpowers/specs/new-spec.md",
     "docs/superpowers/plans",
   ]) {
     assert.equal(isDocsOnlyPath(path), false, path);
@@ -184,4 +183,74 @@ test("#1221 missing or non-regular blob modes fail closed instead of trusting th
   assert.equal(classifyRecords([
     { status: "A", paths: ["docs/superpowers/plans/new.md"], oldMode: "000000", newMode: "100644" },
   ], prEvent).mode, CLASSIFIER_MODES.DOCS_ONLY);
+});
+
+test("expanded docs allowlist covers AGENTS.md, audited docs/, numbered ADRs and specs while keeping sensitive files fail-closed", () => {
+  for (const path of [
+    "AGENTS.md",
+    "docs/AGENT_REPAIR_LIFECYCLE.md",
+    "docs/HUMAN_CONTINUATION.md",
+    "docs/PI_OBSERVATIONAL_MEMORY.md",
+    "docs/RUNTIME_BUILD_TIMING.md",
+    "docs/TARGET_AUTHORIZATION.md",
+    "docs/TASTE_SKILL_TUTORIAL_LANDING_PROMPTS.md",
+    "docs/architecture/adr/README.md",
+    "docs/architecture/adr/0001-no-backward-compatibility.md",
+    "docs/architecture/adr/0026-remove-project-task-queue.md",
+    "docs/architecture/adr/0027-future-decision.md",
+    "docs/superpowers/specs/2026-11-21-task-knowledge-closeout-design.md",
+    "docs/superpowers/specs/new-spec.md",
+  ]) {
+    assert.equal(isDocsOnlyPath(path), true, path);
+  }
+
+  // docs/DEPRECATIONS.md contains SQL executed by agent-harness/retired-runtime-cleanup.test.mjs
+  // against PostgreSQL in gate-db-domain and MUST stay excluded from docs-only.
+  for (const path of [
+    "docs/DEPRECATIONS.md",
+    "CLAUDE.md",
+    "docs/architecture/adr/notes.md",
+    "docs/architecture/adr/001-short.md",
+    "docs/architecture/adr/0027-Upper.md",
+    "docs/architecture/adr/sub/0027-nested.md",
+    "docs/architecture/adr/.0027-hidden.md",
+    "docs/superpowers/specs/notes.txt",
+    "docs/superpowers/specs/sub/dir.md",
+    "docs/superpowers/specs/.hidden.md",
+    "docs/superpowers/specs/spec.md.bak",
+    "docs/superpowers/specs/说明.md",
+    "docs/brand/deepsonar-icon-brandkit-prompt.md",
+    "docs/evidence/report.md",
+    "skills/deepsonar-management/SKILL.md",
+    ".agents/skills/architecture-doc-sync/SKILL.md",
+    "database/README.md",
+    "deploy/README.md",
+  ]) {
+    assert.equal(isDocsOnlyPath(path), false, path);
+  }
+
+  assert.deepEqual(classifyRecords([
+    record("M", "AGENTS.md"),
+    record("M", "DESIGN.md"),
+    record("M", "README.md"),
+    record("A", "docs/architecture/adr/0027-future-decision.md"),
+    record("A", "docs/superpowers/specs/2026-12-01-sample-spec.md"),
+  ], pr), {
+    mode: CLASSIFIER_MODES.DOCS_ONLY,
+    status: CLASSIFIER_STATUSES.OK,
+    reason: "all_paths_allowlisted",
+    changedCount: 5,
+  });
+
+  // AGENTS.md symlink/exec mode or delete/rename and docs/DEPRECATIONS.md edits must fail closed.
+  for (const badRecords of [
+    [record("M", "docs/DEPRECATIONS.md")],
+    [record("M", "CLAUDE.md")],
+    [record("D", "AGENTS.md")],
+    [record("R100", "AGENTS.md", "docs/README.md")],
+    [{ status: "M", paths: ["AGENTS.md"], oldMode: "100644", newMode: "120000" }],
+    [{ status: "M", paths: ["AGENTS.md"], oldMode: "100644", newMode: "100755" }],
+  ]) {
+    assert.equal(classifyRecords(badRecords, pr).mode, CLASSIFIER_MODES.FULL, JSON.stringify(badRecords));
+  }
 });
