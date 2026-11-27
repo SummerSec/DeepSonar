@@ -390,12 +390,10 @@ test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平
   }
 });
 
-test("#1262 a settlement 404 never becomes the job's terminal error", () => {
+test("#1262 a settlement 404 is treated as no evidence, not as a failure", () => {
   const source = PI_MAIN_REQUEST_BUDGET_SOURCE;
-  assert.ok(source.includes("readGatewayNoStart(gateway, token, requestId, options?.signal).catch((error) =>"),
-    "结算探针必须被包在兜底里，404 不能直接抛成终态错误");
-  assert.ok(source.includes("error.status === 404) return false;"), "只有 404 按「没有证据」处理");
-  assert.ok(source.includes("throw error;"), "其它结算失败仍要硬失败，配置错误不能被吞");
-  assert.ok(!source.includes("|| !await readGatewayNoStart(gateway, token, requestId, options?.signal)) {"),
-    "旧的直接取反写法必须消失");
+  assert.ok(source.includes("await settlementBodyHint(response).catch(() => undefined);\n      return false;"),
+    "404 必须在探针内部按「没有证据」返回 false");
+  assert.ok(!source.includes("throw { status: response.status, bodyHint, endpoint };"),
+    "404 不能再抛出成终态错误");
 });

@@ -260,11 +260,6 @@ function classifySettlementBody(text, complete) {
   } catch { return 'other'; }
 }
 
-function settlementOrigin(value) {
-  // endpoint() 已经校验过协议与形状；这里只取 origin，任何异常都退回 undefined。
-  try { return new URL(value).origin; } catch { return undefined; }
-}
-
 async function settlementBodyHint(response) {
   if (!response.body) return 'empty';
   const reader = response.body.getReader();
@@ -315,9 +310,11 @@ export async function readGatewayNoStart(baseUrl, token, requestId, requestSigna
         await response.body?.cancel().catch(() => undefined);
         throw { status: response.status };
       }
-      const bodyHint = await settlementBodyHint(response).catch(() => undefined);
-      const endpoint = settlementOrigin(baseUrl);
-      throw { status: response.status, bodyHint, endpoint };
+      // #1262: 404 既可能是 Scheduler 的 not_found，也可能是代理/路由的默认 404 页，
+      // 两者都无法证明「这次请求没有落地」，所以按「没有证据」处理：既不重试，
+      // 也不把 404 变成任务终态错误（原 SDK 失败继续作为终态诊断）。
+      await settlementBodyHint(response).catch(() => undefined);
+      return false;
     }
     const chunks = []; let size = 0;
     if (response.body) for await (const chunk of response.body) {
@@ -471,14 +468,7 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
                 || thrownDiagnostic && thrownDiagnostic.category !== 'transient_retryable'
                 || failure.reason === 'aborted' || failure.error?.stopReason === 'aborted'
                 || permanentRequestDiagnostic(requestDiagnostic(failure.error, 'sdk', options?.signal), options?.signal)
-                || !await readGatewayNoStart(gateway, token, requestId, options?.signal).catch((error) => {
-                  // #1262: 结算探针拿到 404 时无法证明「这次请求没有落地」（Scheduler 的
-                  // not_found 与代理默认 404 页都长这样），因此既不能重试，也不该把 404
-                  // 变成任务终态错误。保守按「没有证据」处理，保留原始 SDK 失败继续收敛；
-                  // 其它状态（401/403/5xx/超时/解析失败）仍然硬失败，配置错误不会被吞。
-                  if (error && typeof error === 'object' && error.status === 404) return false;
-                  throw error;
-                })) {
+                || !await readGatewayNoStart(gateway, token, requestId, options?.signal)) {
                 if (pendingStart) output.push(pendingStart);
                 output.push(failure); break;
               }
