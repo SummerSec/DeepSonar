@@ -72,8 +72,9 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
     await legacy`INSERT INTO project_knowledge_work(project_id,trigger_key,state,stage,governance_hash)
       VALUES(${owner.projectId},${"knowledge:upgrade-fixture"},'completed','settle',${hash})`;
     const [work] = await legacy`SELECT id FROM project_knowledge_work WHERE project_id=${owner.projectId} AND trigger_key='knowledge:upgrade-fixture'`;
-    await legacy`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage,arm,input_manifest_json)
-      VALUES(${owner.jobId},${owner.projectId},${String(work!.id)},'settle','without',
+    // arm 只对 trial 阶段允许，这里用 settle + 冻结清单，不带 arm。
+    await legacy`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage,input_manifest_json)
+      VALUES(${owner.jobId},${owner.projectId},${String(work!.id)},'settle',
         ${legacy.json([{ input_ref: `evidence:${evidenceRef}`, kind: "evidence", content_hash: sourceHash, audience: ["settle"] }])})`;
     // 已有反馈：升级前就存在的使用记录，升级后必须仍指向同一版本。
     await legacy`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,owner_project_id,version_id,feedback_json)
