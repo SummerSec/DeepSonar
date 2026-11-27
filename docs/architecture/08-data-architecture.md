@@ -197,6 +197,8 @@ Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 
 
 同 Job 同 fingerprint 的完整规范化提案以 `source_digest` 比较（v1 前缀的 SHA-256，递归排序对象键，数组有序，含 raw 来源）。相同提案重交无新增效果；内容不同明确拒绝并回滚，不能静默丢弃新证据。当前没有 Finding 修订协议，title/location/rule_id/profile 身份字段变化是新提案；同 Job 同身份却环境/版本不同必须冲突，不能伪装同源。Job 行锁与同事务 event_dedup 保证并发重放顺序。hash 不是根因或目标版本证据，资产/版本未知仍未知。
 
+Research 去重的作用域是**项目**，不是画布（#1294）：同一漏洞在不同 canvas / 不同 Job 被重复上报时必须能合并到同一 canonical 与同一去重 cluster，`finding_dedupe_clusters.canvas_id` 从此只表示 cluster 行由哪个画布首次创建（溯源），不再参与匹配；因此不再只按 `canvas_id` 选候选，也不在 cluster 查找时按画布过滤。合并仍只写 `finding_research` 的 canonical/cluster 投影，不改写 Finding 的 verify_status、severity 或 disposition。项目级唯一约束（`project_id, canonical_finding_id`）属于 schema 变更，等当前待合并的知识 schema 定版后单独排期。
+
 基线重建保留已有 Finding UUID、job_id、状态、证据和 Artifact key。历史行的新增 source_digest 为 NULL；原提交事件重放仍由 event_dedup 拦截，但新提交若命中无法证明内容相同的历史来源则 fail closed，不推导摘要或替换旧 Artifact。导入导出携带已有摘要；无摘要的历史行保持未知。此前项目指纹提前去重的提交不自动补造来源，只有另行证明来源和授权才能评估恢复。数据完整性起点是部署本写入契约后接受的独立来源，不是重建日期之前所有事件。跨任务关系、投影和质量评估不属于此切片。
 
 ## Finding 操作员见证身份与强关系（#819）

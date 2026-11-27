@@ -110,6 +110,28 @@ if (!testDatabaseUrl) {
       assert.equal(byId[dupId]?.severity, "medium");
       assert.equal(byId[xssId]?.severity, "critical");
 
+      // 跨 canvas 的同一条漏洞必须合并到同一 canonical：去重是项目作用域，不是画布作用域（#1294）。
+      const otherCanvasId = randomUUID();
+      const otherJobId = randomUUID();
+      const crossId = randomUUID();
+      await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${otherCanvasId}, ${projectId}, 'second audit', ${sql.json({})})`;
+      await sql`INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${otherCanvasId}, 'root', 'root', 'analysis_complete', ${sql.json({})})`;
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
+        VALUES (${otherJobId}, ${projectId}, ${otherCanvasId}, 'audit', 'succeeded', ${sql.json({})}, ${sql.json({})})`;
+      await sql`
+        INSERT INTO findings (id, project_id, job_id, fingerprint, title, severity, location, summary, category, verify_status, created_at)
+        VALUES (${crossId}, ${projectId}, ${otherJobId}, 'fp-sql-cross', 'SQL injection in login handler (second audit)',
+          'high', 'src/auth/login.ts:42', 'same sink reported from another canvas', 'injection', 'pending', ${"2026-09-11T00:03:00.000Z"})`;
+      const crossRun = await research.runFindingResearch(sql, { canvasId: otherCanvasId, projectId, kind: "dedupe" });
+      assert.ok(crossRun.processed >= 0);
+      const [crossRow] = await sql`
+        SELECT canonical_finding_id, dedupe_cluster_id, is_canonical FROM finding_research WHERE finding_id = ${crossId}`;
+      const crossClusterId = String(crossRow?.dedupe_cluster_id);
+      assert.equal(crossRow?.canonical_finding_id, firstId, "另一个 canvas 上的同一条漏洞必须合并到原 canonical");
+      assert.equal(crossRow?.dedupe_cluster_id, byId[firstId]?.dedupe_cluster_id, "跨 canvas 必须共用同一个去重 cluster");
+      assert.equal(crossRow?.is_canonical, false);
+
       const gate = await verifyModule.evaluateAnalysisCompleteGate(sql, canvasId);
       assert.equal(gate.ok, false, "unconfirmed findings still block report after research");
 
@@ -144,6 +166,41 @@ if (!testDatabaseUrl) {
       assert.equal(ledger.statusCode, 200);
       assert.ok((ledger.json() as { runs: unknown[] }).runs.length >= 1);
 
+      // 组由 A 画布创建、成员属于 B 画布：打开 B 仍要看到 B 自己的成员，且组不因创建画布不同而消失（#1294）。
+      const otherLedger = await app.inject({ method: "GET", url: `/canvases/${otherCanvasId}/finding-research` });
+      assert.equal(otherLedger.statusCode, 200);
+      const otherView = otherLedger.json() as {
+        clusters: Array<{ id: string }>;
+        members: Array<{ finding_id: string }>;
+      };
+      assert.ok(otherView.members.some((member) => member.finding_id === crossId), "B 自己的成员必须可见");
+      assert.ok(otherView.clusters.some((cluster) => cluster.id === crossClusterId), "去重组按项目读取");
+      assert.ok(!otherView.members.some((member) => member.finding_id === firstId), "A 的成员不得出现在 B 的成员列表");
+      assert.equal(otherView.members.length, 1, "只返回本画布成员，不跨项目/跨画布扩散");
+      // 同项目里与本画布无关的第三个组不得出现在 B 的响应里（含 canonical 标题）。
+      const thirdCanvasId = randomUUID();
+      const thirdJobId = randomUUID();
+      const thirdId = randomUUID();
+      await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${thirdCanvasId}, ${projectId}, 'third audit', ${sql.json({})})`;
+      await sql`INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${thirdCanvasId}, 'root', 'root', 'analysis_complete', ${sql.json({})})`;
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
+        VALUES (${thirdJobId}, ${projectId}, ${thirdCanvasId}, 'audit', 'succeeded', ${sql.json({})}, ${sql.json({})})`;
+      await sql`
+        INSERT INTO findings (id, project_id, job_id, fingerprint, title, severity, location, summary, category, verify_status, created_at)
+        VALUES (${thirdId}, ${projectId}, ${thirdJobId}, 'fp-unrelated', 'Unrelated hardcoded secret in tool', 'low',
+          'tool/other.ts:7', 'unrelated to login or search', 'secret', 'pending', ${"2026-09-11T00:04:00.000Z"})`;
+      await research.runFindingResearch(sql, { canvasId: thirdCanvasId, projectId, kind: "dedupe" });
+      const afterThird = await app.inject({ method: "GET", url: `/canvases/${otherCanvasId}/finding-research` });
+      const afterThirdView = afterThird.json() as { clusters: Array<{ id: string; canonical_title: string }> };
+      assert.ok(!afterThirdView.clusters.some((cluster) => cluster.canonical_title.includes("hardcoded secret")),
+        "与本画布无关的组（含标题）不得出现");
+      const emptyCanvasId = randomUUID();
+      await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${emptyCanvasId}, ${projectId}, 'empty audit', ${sql.json({})})`;
+      const emptyView = await app.inject({ method: "GET", url: `/canvases/${emptyCanvasId}/finding-research` });
+      assert.equal(emptyView.statusCode, 200);
+      assert.deepEqual((emptyView.json() as { clusters: unknown[] }).clusters, [], "空画布不得返回全项目组");
+
       const lateId = randomUUID();
       await sql`
         INSERT INTO findings (id, project_id, job_id, fingerprint, title, severity, location, summary, category, verify_status)
@@ -161,9 +218,9 @@ if (!testDatabaseUrl) {
       assert.equal(failed.status, "failed");
       assert.match(failed.error ?? "", /anchor compare unavailable/);
       const afterFail = await sql`SELECT id, verify_status, severity FROM findings WHERE project_id = ${projectId} ORDER BY created_at`;
-      assert.equal(afterFail.length, 4);
+      assert.equal(afterFail.length, 6);
       assert.ok(afterFail.some((row) => row.id === lateId));
-      assert.deepEqual(afterFail.map((row) => row.verify_status), ["pending", "pending", "pending", "pending"]);
+      assert.deepEqual(afterFail.map((row) => row.verify_status), ["pending", "pending", "pending", "pending", "pending", "pending"]);
       const lateResearch = await sql`SELECT finding_id FROM finding_research WHERE finding_id = ${lateId}`;
       assert.equal(lateResearch.length, 0, "failed compare must not drop or auto-cluster the candidate");
       const failedRuns = await sql`SELECT status, error FROM finding_research_runs WHERE canvas_id = ${canvasId} AND status = 'failed'`;

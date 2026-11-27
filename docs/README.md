@@ -2,6 +2,7 @@
 
 - 2026-11-26：项目知识补齐人类维护入口（#1256）——操作员可直接新建/编辑/下架/恢复条目，人类版本用 `created_by_type=human` 记录作者，评测淘汰与安全撤回不可恢复；详见 [项目知识](./PROJECT_KNOWLEDGE.md#人类维护入口12562026-11-26)。schema 80 只把版本的 `creator_job_id/creator_attempt_id` 改成可空并新增作者列，非空库仍需受控重建。
 
+研究去重改为项目作用域（#1294）：同一漏洞在不同 canvas 重复上报会合并到同一 canonical / cluster，`finding_dedupe_clusters.canvas_id` 只作溯源；口径见 [Finding 来源身份](../docs/architecture/08-data-architecture.md#finding-来源身份770-a)。
 
 业务 Job 终态不再自动登记知识来源（[#1219 第四阶段第二步](PROJECT_KNOWLEDGE.md#自动来源登记的退役1219-第四阶段第二步2026-11-25)）：新路径（任务收尾入库、用后必评、知识卡片与反馈明细）已经可用，旧采集链不再有新来源，采集与唤醒代码留待第三步整体删除。
 
