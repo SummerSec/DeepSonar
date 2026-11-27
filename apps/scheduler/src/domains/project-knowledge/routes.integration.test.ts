@@ -383,7 +383,8 @@ test("human maintenance creates, revises, archives and restores knowledge with a
     };
     setSharedAssetBlobStoreForTests(humanStore);
     const app = Fastify();
-    const actor: Actor = { type: "api_token", id: "author-1", name: "maintainer-a", projectId: owner.projectId,
+    const authorId = "3f1d2c4b-5a69-4e78-9b01-2c3d4e5f6a7b";
+    const actor: Actor = { type: "api_token", id: authorId, name: "maintainer-a", projectId: owner.projectId,
       scopes: ["projects:read", "projects:write"] };
     app.addHook("onRequest", async (request) => { request.actor = actor; });
     registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
@@ -411,7 +412,7 @@ test("human maintenance creates, revises, archives and restores knowledge with a
     assert.equal(detailRes.statusCode, 200, detailRes.body);
     const detailVersions = (detailRes.json() as { versions: Array<Record<string, unknown>> }).versions;
     assert.deepEqual(detailVersions.map((row) => [row.created_by_type, row.created_by]),
-      [["human", "author-1"], ["human", "author-1"]]);
+      [["human", authorId], ["human", authorId]]);
     assert.equal(detailVersions[0]?.revision_reason, "改了正文的一处错别字");
     const pagedRes = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions?limit=10` });
     assert.equal(pagedRes.statusCode, 200, pagedRes.body);
@@ -422,11 +423,11 @@ test("human maintenance creates, revises, archives and restores knowledge with a
     assert.equal(exactRes.statusCode, 200, exactRes.body);
     const exact = exactRes.json() as Record<string, unknown>;
     assert.equal(exact.created_by_type, "human");
-    assert.equal(exact.created_by, "author-1");
+    assert.equal(exact.created_by, authorId);
     assert.equal(exact.revision_reason, "改了正文的一处错别字");
     const authors = await db`SELECT created_by_type, created_by FROM project_knowledge_versions
       WHERE item_id=${itemRef} ORDER BY version`;
-    assert.deepEqual(authors.map((row) => [row.created_by_type, row.created_by]), [["human", "author-1"], ["human", "author-1"]]);
+    assert.deepEqual(authors.map((row) => [row.created_by_type, row.created_by]), [["human", authorId], ["human", authorId]]);
     const archived = await app.inject({ method: "POST", url: `${base}/${itemRef}/archive`, payload: {} });
     assert.equal(archived.statusCode, 200, archived.body);
     const [archivedRow] = await db`SELECT status, retired_reason FROM project_knowledge_items WHERE id=${itemRef}`;
@@ -618,5 +619,33 @@ test("revoke and edit are exercised in both explicit commit orders", async () =>
     assert.equal(row!.status, "active", "编辑先提交时条目保持生效");
     const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${second.item_ref}`;
     assert.equal(versions[0]!.total, 2, "编辑先提交时两个版本都在");
+  });
+});
+
+test("a non-uuid API token identity can read knowledge without being treated as a Job", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "legacy-operator", name: "legacy", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "legacy-token", title: "旧标识创建的知识", content: "正文" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const detail = await app.inject({ method: "GET", url: `${base}/${itemRef}` });
+    assert.equal(detail.statusCode, 200, detail.body);
+    const versions = (detail.json() as { versions: Array<Record<string, unknown>> }).versions;
+    assert.deepEqual(versions.map((row) => row.created_by), ["legacy-operator"]);
   });
 });
