@@ -104,7 +104,7 @@ async function itemDetail(db: Db, projectId: string, itemId: string, actor?: Act
       FROM project_knowledge_versions v WHERE v.id=${String(item.active_version_id)}`;
     if (!visible?.ok) return null;
   }
-  const versions = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
+  const versions = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,created_by_type,created_by,revision_reason,sources_json,
       governance_hash,revoked_at,revoked_reason,created_at
     FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
       AND ${readableVersionSources(db, keysText)}
@@ -338,7 +338,7 @@ export function registerProjectKnowledgeRoutes(
       if (!item) return reply.code(404).send({ error_code: "KNOWLEDGE_ITEM_NOT_FOUND" });
       const page = Page.parse(req.query);
       const keysText = await readableVersionKeysJson(db, req.actor, projectId);
-      const rows = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,
+      const rows = await db`SELECT id,version,content_sha256,creator_job_id,creator_attempt_id,created_by_type,created_by,revision_reason,sources_json,
           governance_hash,revoked_at,revoked_reason,created_at
         FROM project_knowledge_versions v WHERE v.project_id=${projectId} AND v.item_id=${itemId} AND ${publicKnowledgeVersion(db)}
           AND ${readableVersionSources(db, keysText)}

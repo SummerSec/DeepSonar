@@ -502,7 +502,7 @@ AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当�
 | GET | /projects/:id/knowledge/backfill | projects:read | 只读历史来源、资格及收尾节点状态，默认10、最多20条 |
 | GET | /projects/:id/knowledge/closeout/:rootId | projects:read | 按任务根节点读取候选与评测摘要，详情还要求来源与修订目标读取权限 |
 | POST | /projects/:id/knowledge | projects:write | `{kind,logical_key,title,keywords?,content?\|files?}` 新建人类维护知识（记忆正文 ≤12288 字节或 Skill 文件包，二者互斥），直接生效并记录作者；同标识已存在 `409 KNOWLEDGE_BASE_CONFLICT` |
-| POST | /projects/:id/knowledge/:itemId/versions | projects:write | `{expected_version,title,keywords?,content?\|files?}` 生成新版本并保留历史；版本已变 `409 KNOWLEDGE_VERSION_CONFLICT`，撤回条目 `409 KNOWLEDGE_REVOKED`，已下架条目 `409 KNOWLEDGE_ITEM_ARCHIVED`（先恢复再编辑） |
+| POST | /projects/:id/knowledge/:itemId/versions | projects:write | `{expected_version,title,keywords?,content?\|files?,reason?}` 生成新版本并保留历史（`reason` 可选，随这一版保留）；版本列表与精确版本都返回 `created_by_type/created_by`（`job` 或 `human`）与 `revision_reason`；版本已变 `409 KNOWLEDGE_VERSION_CONFLICT`，撤回条目 `409 KNOWLEDGE_REVOKED`，已下架条目 `409 KNOWLEDGE_ITEM_ARCHIVED`（先恢复再编辑） |
 | POST | /projects/:id/knowledge/:itemId/archive | projects:write | 用户下架（`retired` + `retired_reason=archived_by_user`），不删除历史版本；撤回条目 `409 KNOWLEDGE_REVOKED` |
 | POST | /projects/:id/knowledge/:itemId/restore | projects:write | 只恢复用户下架的条目；评测淘汰或撤回 `409 KNOWLEDGE_RESTORE_DENIED` |
 | POST | /projects/:id/knowledge/closeout/:rootId/evaluate | projects:write | 以 candidate_ref 送评单条画布候选，同一候选复用原工作，还需 projects:read 和 tasks:read。评测结果留在原节点 |

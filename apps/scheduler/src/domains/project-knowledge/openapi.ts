@@ -54,6 +54,7 @@ export const KNOWLEDGE_MANAGEMENT_OPERATIONS: Op[] = [
       keywords: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 80 } },
       content: { type: "string", maxLength: 12288 },
       files: { type: "object", description: "Skill 文件包；与 content 互斥" },
+      reason: { type: "string", minLength: 1, maxLength: 2000, description: "可选的修订原因；与这一版一起保留" },
     },
   }),
   post(prefix + "/{itemId}/archive", "项目操作员下架知识（retired + archived_by_user），不删除历史版本", {

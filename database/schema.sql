@@ -2931,6 +2931,7 @@ CREATE TABLE project_knowledge_versions (
   creator_attempt_id uuid REFERENCES job_attempts(id),
   created_by_type text NOT NULL DEFAULT 'job' CHECK (created_by_type IN ('job','human')),
   created_by text,
+  revision_reason text CHECK (revision_reason IS NULL OR length(revision_reason) BETWEEN 1 AND 2000),
   sources_json jsonb NOT NULL CHECK (jsonb_typeof(sources_json) = 'array'),
   governance_hash text NOT NULL CHECK (governance_hash ~ '^[a-f0-9]{64}$'),
   revoked_at timestamptz,

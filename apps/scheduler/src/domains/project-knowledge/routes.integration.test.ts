@@ -401,9 +401,29 @@ test("human maintenance creates, revises, archives and restores knowledge with a
     assert.equal(stale.statusCode, 409, stale.body);
     assert.equal(stale.json().error_code, "KNOWLEDGE_VERSION_CONFLICT");
     const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
-      expected_version: 1, title: "人类维护的知识（修订）", content: "第二条人工沉淀内容（修订后）" } });
+      expected_version: 1, title: "人类维护的知识（修订）", content: "第二条人工沉淀内容（修订后）",
+      reason: "改了正文的一处错别字" } });
     assert.equal(revised.statusCode, 201, revised.body);
     assert.equal((revised.json() as { version: number }).version, 2);
+    const revisedVersionRef = (revised.json() as { version_ref: string }).version_ref;
+    // 三处读接口返回同一组作者字段与可选修订原因。
+    const detailRes = await app.inject({ method: "GET", url: `${base}/${itemRef}` });
+    assert.equal(detailRes.statusCode, 200, detailRes.body);
+    const detailVersions = (detailRes.json() as { versions: Array<Record<string, unknown>> }).versions;
+    assert.deepEqual(detailVersions.map((row) => [row.created_by_type, row.created_by]),
+      [["human", "author-1"], ["human", "author-1"]]);
+    assert.equal(detailVersions[0]?.revision_reason, "改了正文的一处错别字");
+    const pagedRes = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions?limit=10` });
+    assert.equal(pagedRes.statusCode, 200, pagedRes.body);
+    const paged = (pagedRes.json() as { items: Array<Record<string, unknown>> }).items;
+    assert.deepEqual(paged.map((row) => row.created_by_type), ["human", "human"]);
+    assert.equal(paged[0]?.revision_reason, "改了正文的一处错别字");
+    const exactRes = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions/${revisedVersionRef}` });
+    assert.equal(exactRes.statusCode, 200, exactRes.body);
+    const exact = exactRes.json() as Record<string, unknown>;
+    assert.equal(exact.created_by_type, "human");
+    assert.equal(exact.created_by, "author-1");
+    assert.equal(exact.revision_reason, "改了正文的一处错别字");
     const authors = await db`SELECT created_by_type, created_by FROM project_knowledge_versions
       WHERE item_id=${itemRef} ORDER BY version`;
     assert.deepEqual(authors.map((row) => [row.created_by_type, row.created_by]), [["human", "author-1"], ["human", "author-1"]]);

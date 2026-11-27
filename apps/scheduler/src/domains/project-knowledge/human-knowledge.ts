@@ -63,6 +63,8 @@ export interface KnowledgeRevisionInput {
   files?: unknown;
   /** 未传表示沿用基准版本的关键词；显式 [] 才表示清空。 */
   keywords?: string[];
+  /** 可选的修订原因：仅在提供时与版本一起保存，不强制填写。 */
+  reason?: string;
 }
 
 export async function reviseHumanKnowledgeItem(
@@ -114,8 +116,8 @@ export async function reviseHumanKnowledgeItem(
     // SAFETY: postgres.js 的事务句柄与连接句柄共用同一 SQL 接口；这里只登记同一事务内的 blob 元数据。
     const blobDb = tx as unknown as KnowledgeDb;
     await registerKnowledgeBlob(blobDb, blob.hash, blob.bytes);
-    const [created] = await tx`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,created_by_type,created_by,sources_json,governance_hash)
-      VALUES(${author.projectId},${itemId},${version},${blob.hash},'human',${author.id},'[]'::jsonb,${humanGovernanceHash({ projectId: author.projectId, itemId, version, contentHash: blob.hash })}) RETURNING id,version`;
+    const [created] = await tx`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,created_by_type,created_by,revision_reason,sources_json,governance_hash)
+      VALUES(${author.projectId},${itemId},${version},${blob.hash},'human',${author.id},${input.reason ?? null},'[]'::jsonb,${humanGovernanceHash({ projectId: author.projectId, itemId, version, contentHash: blob.hash })}) RETURNING id,version`;
     await tx`UPDATE project_knowledge_items SET status='active',retired_reason=NULL,active_version_id=${String(created!.id)},title=${candidate.title},keywords_json=${tx.json(candidate.keywords ?? [])},generation=generation+1,updated_at=now() WHERE id=${itemId}`;
     return { item_ref: itemId, version_ref: String(created!.id), version: Number(created!.version) };
   });

@@ -187,7 +187,7 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 - 编辑：必须带 `expected_version`，生成新版本并保留历史；版本已被别人推进时返回 `KNOWLEDGE_VERSION_CONFLICT`，需要重新读取最新版本。已下架的条目必须先恢复（`409 KNOWLEDGE_ITEM_ARCHIVED`），编辑不会让它重新生效；基准版本被撤回时直接 `KNOWLEDGE_REVOKED`。
 - 下架：状态置 `retired` 且 `retired_reason=archived_by_user`，历史版本与来源不动。
 - 恢复：只对用户下架的条目生效；评测淘汰（`stale`/评测 `retired`）与安全撤回（`revoked`）不可通过恢复绕过，返回 `KNOWLEDGE_RESTORE_DENIED`。
-- 作者来源：人类写入的版本用 `created_by_type='human'` 与 `created_by` 记录作者，不再伪造 Job/Attempt；Job 写入的版本仍是 `created_by_type='job'` 并保留 `creator_job_id/creator_attempt_id`（schema 80）。
+- 作者来源：人类写入的版本用 `created_by_type='human'` 与 `created_by` 记录作者，可选 `reason` 随版本保存为 `revision_reason`；条目详情、分页版本列表与精确版本三处返回同一组作者字段（Job 写入的版本仍带 `creator_job_id/creator_attempt_id`），不再伪造 Job/Attempt；Job 写入的版本仍是 `created_by_type='job'` 并保留 `creator_job_id/creator_attempt_id`（schema 80）。
 - 权限与可见性沿用既有规则：来源授权、受限版本剔除、分页前过滤都不因人类写入而放宽；Web 页面渲染是人类维护的后续切片。
 
 ## 验证与运维

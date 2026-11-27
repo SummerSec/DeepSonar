@@ -27,6 +27,7 @@ const ReviseBody = z.object({
   keywords: Keywords,
   content: z.string().optional(),
   files: z.unknown().optional(),
+  reason: z.string().trim().min(1).max(2000).optional(),
 }).strict();
 
 function access(req: FastifyRequest, reply: FastifyReply, projectId: string): boolean {
@@ -89,10 +90,11 @@ export function registerHumanKnowledgeRoutes(
         ...(body.keywords === undefined ? {} : { keywords: body.keywords }),
         ...(body.content === undefined ? {} : { content: body.content }),
         ...(body.files === undefined ? {} : { files: body.files }),
+        ...(body.reason === undefined ? {} : { reason: body.reason }),
       };
       const result = await reviseHumanKnowledgeItem(db, authorOf(req, projectId), parsedItem, body.expected_version, revision);
       await recordAudit(req, { action: "project_knowledge.revise", projectId, resourceType: "project_knowledge_item",
-        resourceId: parsedItem, after: { version: result.version, expected_version: body.expected_version } });
+        resourceId: parsedItem, after: { version: result.version, expected_version: body.expected_version, reason: body.reason ?? null } });
       return reply.code(201).send(result);
     } catch (error) { return reply_(reply, error); }
   });
