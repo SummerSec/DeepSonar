@@ -37,3 +37,10 @@ test("best-effort research isolates persistence failures with a savepoint", () =
   assert.match(bestEffort, /withResearchSavepoint\(tx, \(inner\) => runFindingResearch/);
   assert.match(bestEffort, /withResearchSavepoint\(tx, \(inner\) => recordFailedRun/);
 });
+
+test("dedupe stays project-scoped so the same finding merges across canvases (#1294)", () => {
+  assert.doesNotMatch(application, /WHERE j\.canvas_id/, "去重不得再把画布当成作用域");
+  assert.match(application, /WHERE f\.project_id = \$\{projectId\}/);
+  assert.match(application, /FROM finding_research\s+WHERE project_id = \$\{input\.projectId\}/);
+  assert.match(application, /WHERE project_id = \$\{input\.projectId\} AND canonical_finding_id = \$\{assignment\.canonicalFindingId\}[\s\S]{0,80}LIMIT 1/);
+});

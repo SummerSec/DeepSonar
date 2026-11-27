@@ -110,6 +110,27 @@ if (!testDatabaseUrl) {
       assert.equal(byId[dupId]?.severity, "medium");
       assert.equal(byId[xssId]?.severity, "critical");
 
+      // 跨 canvas 的同一条漏洞必须合并到同一 canonical：去重是项目作用域，不是画布作用域（#1294）。
+      const otherCanvasId = randomUUID();
+      const otherJobId = randomUUID();
+      const crossId = randomUUID();
+      await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${otherCanvasId}, ${projectId}, 'second audit', ${sql.json({})})`;
+      await sql`INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${otherCanvasId}, 'root', 'root', 'analysis_complete', ${sql.json({})})`;
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
+        VALUES (${otherJobId}, ${projectId}, ${otherCanvasId}, 'audit', 'succeeded', ${sql.json({})}, ${sql.json({})})`;
+      await sql`
+        INSERT INTO findings (id, project_id, job_id, fingerprint, title, severity, location, summary, category, verify_status, created_at)
+        VALUES (${crossId}, ${projectId}, ${otherJobId}, 'fp-sql-cross', 'SQL injection in login handler (second audit)',
+          'high', 'src/auth/login.ts:42', 'same sink reported from another canvas', 'injection', 'pending', ${"2026-09-11T00:03:00.000Z"})`;
+      const crossRun = await research.runFindingResearch(sql, { canvasId: otherCanvasId, projectId, kind: "dedupe" });
+      assert.ok(crossRun.processed >= 0);
+      const [crossRow] = await sql`
+        SELECT canonical_finding_id, dedupe_cluster_id, is_canonical FROM finding_research WHERE finding_id = ${crossId}`;
+      assert.equal(crossRow?.canonical_finding_id, firstId, "另一个 canvas 上的同一条漏洞必须合并到原 canonical");
+      assert.equal(crossRow?.dedupe_cluster_id, byId[firstId]?.dedupe_cluster_id, "跨 canvas 必须共用同一个去重 cluster");
+      assert.equal(crossRow?.is_canonical, false);
+
       const gate = await verifyModule.evaluateAnalysisCompleteGate(sql, canvasId);
       assert.equal(gate.ok, false, "unconfirmed findings still block report after research");
 

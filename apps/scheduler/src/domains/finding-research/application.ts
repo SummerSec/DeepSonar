@@ -90,13 +90,14 @@ function asCandidate(row: FindingRow): ResearchCandidate {
   };
 }
 
-async function loadCanvasFindings(tx: FindingResearchTransaction, canvasId: string): Promise<FindingRow[]> {
+// 去重按项目作用域：同一漏洞在不同 canvas / 不同 Job 被重复上报时必须能合并，
+// 只在单画布内比较会让每份记录都成为独立 canonical（#1294）。
+async function loadProjectFindings(tx: FindingResearchTransaction, projectId: string): Promise<FindingRow[]> {
   return tx`
     SELECT f.id, f.title, f.location, f.summary, f.category, f.profile, f.severity,
            f.evidence_refs_json, f.created_at
     FROM findings f
-    JOIN jobs j ON j.id = f.job_id
-    WHERE j.canvas_id = ${canvasId}
+    WHERE f.project_id = ${projectId}
     ORDER BY f.created_at ASC, f.id ASC`;
 }
 
@@ -140,7 +141,9 @@ async function persistAssignments(
     if (!clusterId) {
       const [existing] = await tx<{ id: string }[]>`
         SELECT id FROM finding_dedupe_clusters
-        WHERE canvas_id = ${input.canvasId} AND canonical_finding_id = ${assignment.canonicalFindingId}`;
+        WHERE project_id = ${input.projectId} AND canonical_finding_id = ${assignment.canonicalFindingId}
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1`;
       clusterId = existing?.id ?? randomUUID();
       if (!existing) {
         await tx`
@@ -202,13 +205,13 @@ export async function runFindingResearch(
   const maxBatches = input.maxBatches ?? (input.kind === "dedupe" ? 1 : FINDING_RESEARCH_MAX_BATCHES);
   const model = input.model ?? FINDING_RESEARCH_MODEL;
   const promptRevision = input.promptRevision ?? FINDING_RESEARCH_PROMPT_REVISION;
-  const findings = await loadCanvasFindings(tx, input.canvasId);
+  const findings = await loadProjectFindings(tx, input.projectId);
   if (findings.length === 0) return { status: "noop", runIds: [], processed: 0, remaining: 0 };
 
   const membership = await tx<ResearchRow[]>`
     SELECT finding_id, dedupe_cluster_id, canonical_finding_id, is_canonical
     FROM finding_research
-    WHERE canvas_id = ${input.canvasId}`;
+    WHERE project_id = ${input.projectId}`;
   const clusteredIds = new Set(membership.map((row) => String(row.finding_id)));
   const candidates = findings.map(asCandidate);
   const anchors = candidates.filter((item) =>
