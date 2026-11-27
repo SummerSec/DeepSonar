@@ -690,7 +690,14 @@ test("legacy schema-79 knowledge rows keep their job author after the schema-80 
     assert.equal(row.content_sha256, hash);
     assert.equal(row.created_by_type, "job");
     assert.equal(row.created_by, null);
-    assert.equal(row.creator_job_id, owner.jobId);
+    // 不持 tasks:read 的读者看不到 creator_job_id/creator_attempt_id，作者列仍可读；原值回库核对。
+    assert.equal(row.creator_job_id, undefined);
+    const [stored] = await db`SELECT creator_job_id, creator_attempt_id, created_by_type, created_by
+      FROM project_knowledge_versions WHERE id=${versionRef}`;
+    assert.equal(stored!.creator_job_id, owner.jobId);
+    assert.equal(stored!.creator_attempt_id, owner.attemptId);
+    assert.equal(stored!.created_by_type, "job");
+    assert.equal(stored!.created_by, null);
     // 再写一次人工修订：旧历史不变，新版本可读。
     const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
       expected_version: 1, title: "升级前就存在的知识", content: "升级后的人工修订" } });
@@ -700,6 +707,6 @@ test("legacy schema-79 knowledge rows keep their job author after the schema-80 
     const versions = (detail.json() as { versions: Array<Record<string, unknown>> }).versions;
     assert.deepEqual(versions.map((value) => [value.version, value.created_by_type]), [[2, "human"], [1, "job"]]);
     assert.equal(versions[1]?.id, versionRef);
-    assert.equal(versions[1]?.creator_job_id, owner.jobId);
+    assert.equal(versions[1]?.created_by_type, "job");
   });
 });
