@@ -344,13 +344,109 @@ test("a late create failure in one project neither shows an error nor blocks sub
     await flush();
     await click(byText("新建知识"));
     await act(async () => { typeInto(titleInput(), "B 的草稿"); });
-    // A 迟到失败：不得在 B 显示错误，也不得让 B 的提交按钮变灰
+    // A 还没有响应时，B 的提交按钮就必须可用（不被别的项目的进行中状态挡住）
+    const submitWhilePending = byText("提交新建") as HTMLButtonElement | undefined;
+    assert.ok(submitWhilePending, "B 仍应有提交按钮");
+    assert.equal(submitWhilePending!.disabled, false, "A 未返回不应阻塞 B 的提交");
+    // A 迟到失败：不得在 B 显示错误，B 的按钮仍可用
     await act(async () => { rejectCreate?.(new Error("A 的提交失败")); });
     await flush();
     assert.ok(!byText(/A 的提交失败/u), "A 的失败不得显示在 B");
-    const submitB = byText("提交新建") as HTMLButtonElement | undefined;
-    assert.ok(submitB, "B 仍应有提交按钮");
-    assert.equal(submitB!.disabled, false, "A 未返回不应阻塞 B 的提交");
+    const submitAfterFailure = byText("提交新建") as HTMLButtonElement | undefined;
+    assert.ok(submitAfterFailure, "B 仍应有提交按钮");
+    assert.equal(submitAfterFailure!.disabled, false, "A 的失败不应阻塞 B 的提交");
+  } finally {
+    Object.assign(api, originalApi);
+    Object.assign(projectKnowledgeApi, originalKnowledge);
+    await act(async () => { root.unmount(); });
+  }
+});
+
+test("a delayed create success keeps text typed after submitting and does not switch the user away", async (context) => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
+  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true };
+  const previous = new Map(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  context.after(() => {
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete (globalThis as Record<string, unknown>)[key];
+    }
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { MemoryRouter, Route, Routes } = await import("react-router-dom");
+  const { AuthProvider } = await import("../auth");
+  const { ProjectKnowledgePage } = await import("./ProjectKnowledgePage");
+  const originalApi = { ...api };
+  const originalKnowledge = { ...projectKnowledgeApi };
+  let release: ((value: { item_ref: string; version_ref: string; version: number }) => void) | null = null;
+  const item: KnowledgeItem = { id: "item-a", project_id: "project-a", kind: "memory", logical_key: "human-note-z1",
+    title: "已有知识", keywords_json: [], status: "active", active_version_id: "version-a1", version: 1,
+    content_sha256: null, generation: 1, updated_at: "2026-11-26T00:00:00.000Z" };
+  const version: KnowledgeVersion = { id: "version-a1", version: 1, content_sha256: "c".repeat(64),
+    creator_job_id: null, created_by_type: "human", created_by: null, revision_reason: null,
+    sources_json: [], revoked_at: null, revoked_reason: null, created_at: "2026-11-26T00:00:00.000Z" };
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: (key: string) => key === "deepsonar_api_token" ? "fixture-token" : null, setItem: () => undefined, removeItem: () => undefined,
+  } });
+  Object.assign(api, {
+    authStatus: async () => ({ auth_required: true }),
+    authMe: async () => ({ authenticated: true, auth_required: true,
+      actor: { type: "api_token", id: "maintainer", name: "maintainer", role: "operator", scopes: ["projects:read", "projects:write"] } }),
+    projects: async () => [], credentials: async () => [],
+  });
+  Object.assign(projectKnowledgeApi, {
+    list: async () => ({ items: [item], next_offset: null }),
+    detail: async () => ({ ...item, versions: [version], versions_next_offset: null, proposals: [], evaluations: [], usages: [] }),
+    version: async () => ({ ...version, item: { id: item.id, kind: "memory", title: item.title, logical_key: item.logical_key },
+      candidate: { kind: "memory", content: "正文" } }) as never,
+    grants: async () => [],
+    activity: async () => ({ items: [], next_offset: null,
+      collection: { state: "idle", pending_sources: 0, consecutive_failures: 0, next_collection_at: null },
+      summary: { registered_sources: 0, collected_sources: 0, skipped_sources: 0, pending_sources: 0,
+        active_memory: 0, active_skills: 0, draft_items: 0, completed_work: 0, blocked_work: 0,
+        usage_count: 0, feedback_count: 0, successful_feedback: 0 }, skipped_sources: [] }) as never,
+    backfill: async () => ({ items: [], next_offset: null }),
+    receipts: async () => ({ items: [], next_offset: null }),
+    create: async () => new Promise((resolve) => { release = resolve; }),
+    revise: async () => ({ item_ref: item.id, version_ref: "v2", version: 2 }),
+    archive: async () => ({ item_ref: item.id, status: "retired" }),
+    restore: async () => ({ item_ref: item.id, status: "active" }),
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  const flush = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); };
+  const byText = (text: string | RegExp): HTMLElement | undefined =>
+    [...dom.window.document.querySelectorAll("button,p,span")].find((node) =>
+      (typeof text === "string" ? node.textContent === text : text.test(node.textContent ?? ""))) as HTMLElement | undefined;
+  const click = async (target: HTMLElement | undefined) => {
+    assert.ok(target, "期望的控件必须渲染出来");
+    await act(async () => { target!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+    await flush();
+  };
+  const field = (label: string) => dom.window.document.querySelector(`[aria-label='${label}']`) as HTMLInputElement | HTMLTextAreaElement | null;
+  const typeInto = (input: HTMLInputElement | HTMLTextAreaElement | null, value: string): void => {
+    assert.ok(input, "输入框必须存在");
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input!), "value")!.set!;
+    setter.call(input, value);
+    input!.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  };
+  try {
+    await act(async () => {
+      root.render(createElement(MemoryRouter, { initialEntries: ["/projects/project-a/knowledge"] },
+        createElement(AuthProvider, null,
+          createElement(Routes, null,
+            createElement(Route, { path: "/projects/:projectId/knowledge", element: createElement(ProjectKnowledgePage) })))));
+    });
+    await flush();
+    await click(byText("新建知识"));
+    await act(async () => { typeInto(field("知识标题"), "标题 X"); typeInto(field("知识正文"), "提交时的正文"); });
+    await click(byText("提交新建"));
+    // 等待期间用户继续输入正文
+    await act(async () => { typeInto(field("知识正文"), "等待期间又写的内容"); });
+    await act(async () => { release?.({ item_ref: "item-new", version_ref: "v-new", version: 1 }); });
+    await flush();
+    assert.equal((field("知识正文") as HTMLTextAreaElement | null)?.value, "等待期间又写的内容", "迟到的成功不得清掉后来输入的内容");
+    assert.ok(byText(/上一次提交已成功；当前草稿已保留/u), "应提示草稿已保留");
   } finally {
     Object.assign(api, originalApi);
     Object.assign(projectKnowledgeApi, originalKnowledge);

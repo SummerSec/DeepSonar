@@ -35,6 +35,8 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   // 新建草稿按项目隔离：切到别的项目不会带着上一个项目的正文，回到原项目还能接着写。
   interface CreateDraft { open: boolean; title: string; content: string; suffix: string }
   const [drafts, setDrafts] = useState<Record<string, CreateDraft>>({});
+  const draftsRef = useRef<Record<string, CreateDraft>>({});
+  draftsRef.current = drafts;
   const newSuffix = (): string => Math.random().toString(36).slice(2, 8);
   const draft: CreateDraft = drafts[projectId] ?? { open: false, title: "", content: "", suffix: newSuffix() };
   const updateDraft = useCallback((change: Partial<CreateDraft>) => {
@@ -86,21 +88,32 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const submitCreate = useCallback(() => {
     // 请求与草稿都绑定打开表单时的项目；迟到的回调只更新它自己的项目。
     const requestProject = projectId;
-    const requestSuffix = draftSuffix;
+    // 用「提交时的内容快照」判断这份草稿是否已被用户改过，而不是用逻辑键后缀。
+    const submitSnapshot = { title: draftTitle, content: draftContent };
     patchSubmit(requestProject, { busy: true, notice: null, error: null });
     projectKnowledgeApi.create(requestProject, {
       kind: "memory", logical_key: draftKey, title: draftTitle.trim(), content: draftContent,
     }).then((result) => {
       // 只清「这一次提交」的那代草稿：等待期间用户重新输入的内容不能被回执覆盖。
-      setDrafts((map) => {
-        const current = map[requestProject];
-        if (!current || current.suffix !== requestSuffix) return map;
-        const next = { ...map };
-        delete next[requestProject];
-        return next;
-      });
+      const unchanged = ((): boolean => {
+        const current = draftsRef.current[requestProject];
+        if (!current) return true;
+        return current.title === submitSnapshot.title && current.content === submitSnapshot.content;
+      })();
+      if (unchanged) {
+        setDrafts((map) => {
+          const next = { ...map };
+          delete next[requestProject];
+          return next;
+        });
+      }
       if (currentProject.current !== requestProject) {
         patchSubmit(requestProject, { busy: false, notice: "新建知识成功（在其它项目完成）" });
+        return;
+      }
+      if (!unchanged) {
+        // 用户已经接着输入新内容：保留草稿，也不自动切走当前编辑。
+        patchSubmit(requestProject, { busy: false, notice: "上一次提交已成功；当前草稿已保留" });
         return;
       }
       patchSubmit(requestProject, { busy: false, notice: "新建知识成功，已打开该条目" });
