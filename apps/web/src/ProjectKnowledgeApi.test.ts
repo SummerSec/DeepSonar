@@ -289,3 +289,33 @@ test("#1256 卡片评价行按契约语义显示：不适用、未评价与有�
   assert.equal(feedbackLine({ total: 10, success: 5, failure: 1, inapplicable: 2, unrated: 2 }),
     "10 条阅读记录：有用 5 · 不适用 2 · 无用 1 · 未评价 2");
 });
+
+test("#1256 人类维护请求打到项目知识入口，编辑带 expected_version", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const calls: Array<{ path: string; method: string; body?: string }> = [];
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: (key: string) => key === "deepsonar_api_token" ? "fixture-token" : null,
+  } });
+  globalThis.fetch = (async (input, init) => {
+    calls.push({ path: String(input), method: init?.method ?? "GET", body: init?.body as string | undefined });
+    return new Response(JSON.stringify({ item_ref: "item", version_ref: "version", version: 2, status: "active" }), { status: 201 });
+  }) as typeof fetch;
+  try {
+    await projectKnowledgeApi.create("owner", { kind: "memory", logical_key: "human-key", title: "人工知识", content: "正文" });
+    await projectKnowledgeApi.revise("owner", "item", { expected_version: 1, title: "人工知识（改）", content: "新正文", reason: "修正错别字" });
+    await projectKnowledgeApi.archive("owner", "item");
+    await projectKnowledgeApi.restore("owner", "item");
+    assert.deepEqual(calls.map((call) => [call.method, call.path]), [
+      ["POST", "/api/projects/owner/knowledge"],
+      ["POST", "/api/projects/owner/knowledge/item/versions"],
+      ["POST", "/api/projects/owner/knowledge/item/archive"],
+      ["POST", "/api/projects/owner/knowledge/item/restore"],
+    ]);
+    assert.equal(calls[0]?.body, '{"kind":"memory","logical_key":"human-key","title":"人工知识","content":"正文"}');
+    assert.equal(calls[1]?.body, '{"expected_version":1,"title":"人工知识（改）","content":"新正文","reason":"修正错别字"}');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+  }
+});

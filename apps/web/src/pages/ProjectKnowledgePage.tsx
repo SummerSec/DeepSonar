@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { api, type Project } from "../api";
 import { useAuth } from "../auth";
 import { canAccessAnyScope } from "../permissions";
 import { SearchableSelect } from "../SearchableSelect";
+import { useProjectKnowledgeMaintenance } from "./useProjectKnowledgeMaintenance";
 import { PageHeader } from "../ui";
 import { feedbackLine } from "../project-knowledge-card.js";
 import { ProjectKnowledgeActivity } from "./ProjectKnowledgeActivity";
@@ -21,6 +22,14 @@ const field = "rounded-lg border border-white/10 bg-white/[.03] px-3 py-2 text-s
 const button = "rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[.06] disabled:cursor-not-allowed disabled:opacity-40";
 
 const card = "rounded-xl border border-white/[.07] bg-white/[.025] p-4";
+const UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const versionAuthor = (value: KnowledgeVersion): string => {
+  if (value.created_by_type !== "human") return "Job";
+  const name = value.created_by && !UUID_LIKE.test(value.created_by) ? value.created_by : null;
+  return name ? `人工维护 ${name}` : "人工维护";
+};
+const versionLabel = (value: KnowledgeVersion): string => `作者：${versionAuthor(value)}`;
+
 const date = (value: string | null | undefined) => value ? new Date(value).toLocaleString("zh-CN") : "—";
 const short = (value: string | null | undefined) => value ? `${value.slice(0, 8)}…` : "—";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -79,6 +88,8 @@ export function ProjectKnowledgePage() {
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
   const [nextVersionOffset, setNextVersionOffset] = useState<number | null>(null);
   const [versionId, setVersionId] = useState<string | null>(null);
+  const versionIdRef = useRef<string | null>(null);
+  versionIdRef.current = versionId;
   const [version, setVersion] = useState<KnowledgeVersionDetail | null>(null);
   const [grants, setGrants] = useState<KnowledgeGrant[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -105,17 +116,26 @@ export function ProjectKnowledgePage() {
     let active = true;
     setDetailError(null);
     setDetailLoading(true);
-    setVersionId(null);
     setVersion(null);
     setVersions([]);
     projectKnowledgeApi.detail(projectId, selectedId)
-      .then((result) => {
+      .then(async (result) => {
         if (!active) return;
         setDetail(result);
         setVersions(result.versions);
         setNextVersionOffset(result.versions_next_offset);
-        setVersionId(result.active_version_id ?? result.versions[0]?.id ?? null);
         setDetailLoading(false);
+        const fallback = result.active_version_id ?? result.versions[0]?.id ?? null;
+        const wanted = versionIdRef.current;
+        if (!wanted) { setVersionId(fallback); return; }
+        // 刷新时保留用户正在看的历史版本与编辑基准：按「精确版本仍可读」判定，
+        // 不能用第一页是否包含它来判断（历史版本可能在分页第二页）。
+        try {
+          await projectKnowledgeApi.version(projectId, selectedId, wanted);
+          setVersionId(wanted);
+        } catch {
+          setVersionId(fallback);
+        }
       })
       .catch((error) => { if (active) { setDetail(null); setDetailError(error instanceof Error ? error.message : String(error)); setDetailLoading(false); } });
     return () => { active = false; };
@@ -138,6 +158,19 @@ export function ProjectKnowledgePage() {
     if (!canWrite) return;
     api.projects().then(setProjects).catch(() => setProjects([]));
   }, [canWrite]);
+
+  const maintenance = useProjectKnowledgeMaintenance({
+    projectId: projectId ?? "", selectedId, versionId, refreshKey: refresh,
+    onSelectVersion: (next) => setVersionId(next),
+    onSelectItem: (itemId) => setParams((current) => { const next = new URLSearchParams(current); next.set("item", itemId); return next; }),
+    onRefresh: () => setRefresh((value) => value + 1),
+  });
+  const {
+    createOpen, setCreateOpen, draftTitle, setDraftTitle, draftContent, setDraftContent, draftKey,
+    createBusy, createNotice, createError, submitCreate,
+    editDraft, setEditDraft, editActive, editBusy, editNotice, editError, submitEdit, openEdit,
+    canUndoArchive, undoBusy, archiveItem, undoArchive,
+  } = maintenance;
 
   const granteeOptions = useMemo(() => projects.filter((p) => p.id !== projectId)
     .map((p) => ({ value: p.id, label: p.name, hint: p.id })), [projects, projectId]);
@@ -186,7 +219,24 @@ export function ProjectKnowledgePage() {
               placeholder="全部状态" options={["draft", "active", "stale", "retired", "revoked"]
                 .map((value) => ({ value, label: value }))} />
           </div>
-          <button type="button" className={button} onClick={() => setRefresh((value) => value + 1)}>刷新</button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={button} onClick={() => setRefresh((value) => value + 1)}>刷新</button>
+            {canWrite && <button type="button" className={button} aria-expanded={createOpen}
+              onClick={() => setCreateOpen(!createOpen)}>新建知识</button>}
+          </div>
+          {canWrite && createOpen && <div className="space-y-2 border-t border-white/[.06] pt-3">
+            <input aria-label="知识标题" value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)}
+              placeholder="标题" className={field + " w-full"} />
+            <p className="text-[11px] text-zinc-600">逻辑键由系统生成：{draftKey}</p>
+            <textarea aria-label="知识正文" value={draftContent} rows={5}
+              onChange={(event) => setDraftContent(event.target.value)}
+              placeholder="正文（≤12288 字节）" className={field + " w-full font-mono text-xs"} />
+            <button type="button" className={button} disabled={createBusy || !draftTitle.trim()} onClick={submitCreate}>
+              {createBusy ? "提交中…" : "提交新建"}
+            </button>
+            {createError && <p role="alert" className="text-xs text-rose-300/80">{createError}</p>}
+          </div>}
+          {createNotice && <p role="status" className="text-xs text-emerald-300/80">{createNotice}</p>}
         </div>
         {listError && <ErrorBox message={listError} onRetry={() => setRefresh((value) => value + 1)} />}
         {listLoading && <p className={card + " text-sm text-zinc-500"}>正在加载知识目录…</p>}
@@ -222,11 +272,42 @@ export function ProjectKnowledgePage() {
             {versions.map((entry) => <button key={entry.id} type="button"
               onClick={() => setVersionId(entry.id)}
               className={button + " " + (versionId === entry.id ? "border-acc-400/50 text-acc-300" : "")}>
-              v{entry.version}{entry.revoked_at ? " · 已撤销" : ""}
+              v{entry.version} · {versionAuthor(entry)}{entry.revoked_at ? " · 已撤销" : ""}
             </button>)}
             {nextVersionOffset !== null && <button type="button" className={button} onClick={loadMoreVersions}>加载更多版本</button>}
+            {canWrite && version && version.candidate.kind === "memory" && (!editActive || editDraft?.versionId !== version.id) &&
+              <button type="button" className={button} onClick={() => openEdit({
+                itemId: detail.id, versionId: version.id, expectedVersion: version.version,
+                title: version.item.title, content: version.candidate.content ?? "",
+              })}>编辑正文（基于 v{version.version}）</button>}
+            {canWrite && editActive && <button type="button" className={button} onClick={() => setEditDraft(null)}>取消编辑</button>}
+            {canWrite && detail.status !== "revoked" && !canUndoArchive(detail.id) &&
+              <button type="button" className={button} disabled={undoBusy} onClick={() => archiveItem(detail.id)}>下架知识</button>}
+            {canWrite && canUndoArchive(detail.id) &&
+              <button type="button" className={button} disabled={undoBusy} onClick={() => undoArchive(detail.id)}>撤销下架</button>}
           </div>
+          {editNotice && <p role="status" className="mt-3 text-xs text-emerald-300/80">{editNotice}</p>}
+          {editError && <p role="alert" className="mt-3 text-xs text-rose-300/80">{editError}</p>}
+          {createError && !createOpen && <p role="alert" className="mt-3 text-xs text-rose-300/80">{createError}</p>}
+          {canWrite && editActive && editDraft && <div className="mt-3 space-y-2 border-t border-white/[.06] pt-3">
+            <p className="text-[11px] text-zinc-600">正在编辑 v{editDraft.expectedVersion} 的草稿；切换到其他条目或版本会作废这份草稿。</p>
+            <input aria-label="编辑标题" value={editDraft.title}
+              onChange={(event) => setEditDraft({ ...editDraft, title: event.target.value })} className={field + " w-full"} />
+            <textarea aria-label="编辑正文" value={editDraft.content} rows={6}
+              onChange={(event) => setEditDraft({ ...editDraft, content: event.target.value })}
+              className={field + " w-full font-mono text-xs"} />
+            <input aria-label="修订原因" value={editDraft.reason ?? ""} placeholder="修订原因（可选）"
+              onChange={(event) => setEditDraft({ ...editDraft, reason: event.target.value })}
+              className={field + " w-full"} />
+            <button type="button" className={button} disabled={editBusy || !editDraft.title.trim()} onClick={submitEdit}>
+              {editBusy ? "保存中…" : `保存为新版本（v${editDraft.expectedVersion + 1}）`}
+            </button>
+          </div>}
         </div>
+          {version && <p className="px-1 text-[11px] text-zinc-500">
+            {versionLabel(version)} · {date(version.created_at)}
+            {version.revision_reason ? ` · 修订原因：${version.revision_reason}` : ""}
+          </p>}
           {version && <VersionContent value={version} />}
           <div className="grid gap-4 lg:grid-cols-2">
             <section className={card}><h3 className="mb-3 text-sm text-zinc-200">提案与审查</h3>
