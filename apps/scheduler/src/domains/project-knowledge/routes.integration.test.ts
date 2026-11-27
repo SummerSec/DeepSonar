@@ -6,6 +6,7 @@ import type { Actor } from "../../auth.js";
 import { setSharedAssetBlobStoreForTests, sharedAssetBlobUri, type BlobStore } from "../../blob-store/index.js";
 import { registerProjectKnowledgeRoutes } from "./routes.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./test-support.js";
+import { intersectColumns } from "../../schema-rebuild.js";
 
 if (!process.env.TEST_DATABASE_URL) throw new Error("TEST_DATABASE_URL is required for knowledge route integration");
 
@@ -650,7 +651,7 @@ test("a non-uuid API token identity can read knowledge without being treated as 
   });
 });
 
-test("legacy schema-79 knowledge rows keep their job author after the schema-80 baseline", async () => {
+test("schema-80 defaults keep a job author for rows written without the new author columns", async () => {
   await withKnowledgeDatabase(async (db) => {
     const owner = await seedKnowledgeJob(db);
     const blobs = new Map<string, Buffer>();
@@ -661,6 +662,12 @@ test("legacy schema-79 knowledge rows keep their job author after the schema-80 
       materializeLocal: async () => { throw new Error("unused"); },
     };
     setSharedAssetBlobStoreForTests(store);
+    // 受控重建按列交集拷列：79 形状的版本行没有 80 新增列，拷进 80 后由默认值补成 job 作者。
+    const legacyColumns = ["id", "project_id", "item_id", "version", "content_sha256", "creator_job_id",
+      "creator_attempt_id", "sources_json", "governance_hash", "revoked_at", "revoked_reason", "created_at"];
+    const targetColumns = [...legacyColumns, "created_by_type", "created_by", "revision_reason"];
+    assert.deepEqual(intersectColumns(legacyColumns, targetColumns), [...legacyColumns].sort((a, b) => a.localeCompare(b)),
+      "重建只拷 79 已有的列，80 新增列由默认值补齐");
     // 按 schema 79 的形状写入：只给 creator_job_id/creator_attempt_id，不给 80 新增的作者列。
     const candidate = { kind: "memory", logical_key: "legacy-row", title: "升级前就存在的知识", keywords: [], content: "旧正文" };
     const bytes = Buffer.from(JSON.stringify(candidate), "utf8");
@@ -708,5 +715,14 @@ test("legacy schema-79 knowledge rows keep their job author after the schema-80 
     assert.deepEqual(versions.map((value) => [value.version, value.created_by_type]), [[2, "human"], [1, "job"]]);
     assert.equal(versions[1]?.id, versionRef);
     assert.equal(versions[1]?.created_by_type, "job");
+    assert.equal(versions[1]?.creator_job_id, undefined, "projects:read 身份看不到 Job 标识（既有脱敏）");
+    // 同一份数据换成带 tasks:read 的读者：能读到原 Job/Attempt 作者，且不做别的放宽。
+    actor.scopes = ["projects:read", "projects:write", "tasks:read"];
+    const privileged = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions/${versionRef}` });
+    assert.equal(privileged.statusCode, 200, privileged.body);
+    const privilegedRow = privileged.json() as Record<string, unknown>;
+    assert.equal(privilegedRow.creator_job_id, owner.jobId);
+    assert.equal(privilegedRow.creator_attempt_id, owner.attemptId);
+    actor.scopes = ["projects:read", "projects:write"];
   });
 });
