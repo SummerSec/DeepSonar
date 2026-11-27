@@ -303,7 +303,7 @@ test("#1256 人类维护请求打到项目知识入口，编辑带 expected_vers
   }) as typeof fetch;
   try {
     await projectKnowledgeApi.create("owner", { kind: "memory", logical_key: "human-key", title: "人工知识", content: "正文" });
-    await projectKnowledgeApi.revise("owner", "item", { expected_version: 1, title: "人工知识（改）", content: "新正文" });
+    await projectKnowledgeApi.revise("owner", "item", { expected_version: 1, title: "人工知识（改）", content: "新正文", reason: "修正错别字" });
     await projectKnowledgeApi.archive("owner", "item");
     await projectKnowledgeApi.restore("owner", "item");
     assert.deepEqual(calls.map((call) => [call.method, call.path]), [
@@ -313,7 +313,7 @@ test("#1256 人类维护请求打到项目知识入口，编辑带 expected_vers
       ["POST", "/api/projects/owner/knowledge/item/restore"],
     ]);
     assert.equal(calls[0]?.body, '{"kind":"memory","logical_key":"human-key","title":"人工知识","content":"正文"}');
-    assert.equal(calls[1]?.body, '{"expected_version":1,"title":"人工知识（改）","content":"新正文"}');
+    assert.equal(calls[1]?.body, '{"expected_version":1,"title":"人工知识（改）","content":"新正文","reason":"修正错别字"}');
   } finally {
     globalThis.fetch = originalFetch;
     if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);

@@ -252,7 +252,7 @@ export function ProjectKnowledgePage() {
             {versions.map((entry) => <button key={entry.id} type="button"
               onClick={() => setVersionId(entry.id)}
               className={button + " " + (versionId === entry.id ? "border-acc-400/50 text-acc-300" : "")}>
-              v{entry.version}{entry.revoked_at ? " · 已撤销" : ""}
+              v{entry.version}{entry.created_by_type === "human" ? ` · 人工维护${entry.created_by ? ` ${entry.created_by}` : ""}` : " · Job"}{entry.revoked_at ? " · 已撤销" : ""}
             </button>)}
             {nextVersionOffset !== null && <button type="button" className={button} onClick={loadMoreVersions}>加载更多版本</button>}
             {canWrite && version && version.candidate.kind === "memory" && (!editActive || editDraft?.versionId !== version.id) &&
@@ -276,6 +276,9 @@ export function ProjectKnowledgePage() {
             <textarea aria-label="编辑正文" value={editDraft.content} rows={6}
               onChange={(event) => setEditDraft({ ...editDraft, content: event.target.value })}
               className={field + " w-full font-mono text-xs"} />
+            <input aria-label="修订原因" value={editDraft.reason ?? ""} placeholder="修订原因（可选）"
+              onChange={(event) => setEditDraft({ ...editDraft, reason: event.target.value })}
+              className={field + " w-full"} />
             <button type="button" className={button} disabled={editBusy || !editDraft.title.trim()} onClick={submitEdit}>
               {editBusy ? "保存中…" : `保存为新版本（v${editDraft.expectedVersion + 1}）`}
             </button>

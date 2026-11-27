@@ -23,7 +23,13 @@ export interface KnowledgeVersion {
   id: string;
   version: number;
   content_sha256: string;
-  creator_job_id: string;
+  /** 人工维护的版本没有 Job/Attempt，这里两列为 null。 */
+  creator_job_id: string | null;
+  creator_attempt_id?: string | null;
+  created_by_type?: "job" | "human";
+  created_by?: string | null;
+  /** 可选的人工修订原因，与这一版一起保存。 */
+  revision_reason?: string | null;
   sources_json: Array<{ kind: string; ref: string; content_hash: string }>;
   revoked_at: string | null;
   revoked_reason: string | null;
@@ -179,7 +185,7 @@ export const projectKnowledgeApi = {
     request<KnowledgeVersion>(`${base(projectId)}/${encodeURIComponent(itemId)}/versions/${encodeURIComponent(versionId)}/revoke`, "POST", { reason }),
   create: (projectId: string, body: { kind: "memory" | "skill"; logical_key: string; title: string; keywords?: string[]; content?: string }) =>
     request<{ item_ref: string; version_ref: string; version: number }>(base(projectId), "POST", body),
-  revise: (projectId: string, itemId: string, body: { expected_version: number; title: string; keywords?: string[]; content?: string }) =>
+  revise: (projectId: string, itemId: string, body: { expected_version: number; title: string; keywords?: string[]; content?: string; reason?: string }) =>
     request<{ item_ref: string; version_ref: string; version: number }>(`${base(projectId)}/${encodeURIComponent(itemId)}/versions`, "POST", body),
   archive: (projectId: string, itemId: string) =>
     request<{ item_ref: string; status: string }>(`${base(projectId)}/${encodeURIComponent(itemId)}/archive`, "POST", {}),

@@ -7,6 +7,8 @@ export interface EditDraft {
   expectedVersion: number;
   title: string;
   content: string;
+  /** 可选修订原因，随这一版一起保存。 */
+  reason?: string;
 }
 
 /**
@@ -73,6 +75,7 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
     setEditBusy(true); setEditNotice(null); setEditError(null);
     projectKnowledgeApi.revise(projectId, editDraft.itemId, {
       expected_version: editDraft.expectedVersion, title: editDraft.title.trim(), content: editDraft.content,
+      ...(editDraft.reason?.trim() ? { reason: editDraft.reason.trim() } : {}),
     }).then((result) => {
       setEditDraft(null); setEditNotice(`已生成 v${result.version}`); onRefresh();
     }).catch((error) => setEditError(message(error))).finally(() => setEditBusy(false));

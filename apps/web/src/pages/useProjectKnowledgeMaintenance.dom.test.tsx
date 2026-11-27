@@ -29,7 +29,8 @@ test("knowledge maintenance keeps feedback visible, unique keys per draft and re
     title: "中文知识条目", keywords_json: [], status: "active", active_version_id: "version-a1", version: 1,
     content_sha256: null, generation: 1, updated_at: "2026-11-26T00:00:00.000Z" };
   const version: KnowledgeVersion = { id: "version-a1", version: 1, content_sha256: "c".repeat(64),
-    creator_job_id: null as never, sources_json: [], revoked_at: null, revoked_reason: null, created_at: "2026-11-26T00:00:00.000Z" } as never;
+    creator_job_id: null, created_by_type: "human", created_by: "maintainer-a", revision_reason: null,
+    sources_json: [], revoked_at: null, revoked_reason: null, created_at: "2026-11-26T00:00:00.000Z" };
   const detail: KnowledgeDetail = { ...item, versions: [version], versions_next_offset: null, proposals: [], evaluations: [], usages: [] };
   const versionDetail: KnowledgeVersionDetail = { ...version, item: { id: item.id, kind: "memory", title: item.title, logical_key: item.logical_key },
     candidate: { kind: "memory", content: "原始正文" } } as never;
@@ -93,6 +94,8 @@ test("knowledge maintenance keeps feedback visible, unique keys per draft and re
     assert.equal(created.length, 2, "两次新建都要发出请求");
     assert.notEqual(created[0]?.logical_key, created[1]?.logical_key, "两条中文标题不能撞同一个逻辑键");
     assert.ok(created.every((entry) => /^human-[\p{L}\p{N}._/-]*$/u.test(entry.logical_key) || /^human-note-[a-z0-9]+$/u.test(entry.logical_key)));
+    // 人工维护的版本在版本按钮上标出作者，不假设一定有 Job
+    assert.ok(byText(/v1 · 人工维护 maintainer-a/u), "人工版本必须显示作者来源");
     // 新建成功的提示在表单关闭后仍然可见
     assert.ok(byText(/新建知识成功/u), "新建成功提示必须对用户可见");
     // 下架 → 撤销 → 再次下架 → 再次撤销
