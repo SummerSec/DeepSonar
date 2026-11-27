@@ -389,3 +389,11 @@ test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平
     process.argv[1] = original;
   }
 });
+
+test("#1262 a settlement 404 is treated as no evidence, not as a failure", () => {
+  const source = PI_MAIN_REQUEST_BUDGET_SOURCE;
+  assert.ok(source.includes("await settlementBodyHint(response).catch(() => undefined);\n      return false;"),
+    "404 必须在探针内部按「没有证据」返回 false");
+  assert.ok(!source.includes("throw { status: response.status, bodyHint, endpoint };"),
+    "404 不能再抛出成终态错误");
+});

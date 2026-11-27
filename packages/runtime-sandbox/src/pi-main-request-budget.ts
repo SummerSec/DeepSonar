@@ -260,11 +260,6 @@ function classifySettlementBody(text, complete) {
   } catch { return 'other'; }
 }
 
-function settlementOrigin(value) {
-  // endpoint() 已经校验过协议与形状；这里只取 origin，任何异常都退回 undefined。
-  try { return new URL(value).origin; } catch { return undefined; }
-}
-
 async function settlementBodyHint(response) {
   if (!response.body) return 'empty';
   const reader = response.body.getReader();
@@ -315,9 +310,11 @@ export async function readGatewayNoStart(baseUrl, token, requestId, requestSigna
         await response.body?.cancel().catch(() => undefined);
         throw { status: response.status };
       }
-      const bodyHint = await settlementBodyHint(response).catch(() => undefined);
-      const endpoint = settlementOrigin(baseUrl);
-      throw { status: response.status, bodyHint, endpoint };
+      // #1262: 404 既可能是 Scheduler 的 not_found，也可能是代理/路由的默认 404 页，
+      // 两者都无法证明「这次请求没有落地」，所以按「没有证据」处理：既不重试，
+      // 也不把 404 变成任务终态错误（原 SDK 失败继续作为终态诊断）。
+      await settlementBodyHint(response).catch(() => undefined);
+      return false;
     }
     const chunks = []; let size = 0;
     if (response.body) for await (const chunk of response.body) {

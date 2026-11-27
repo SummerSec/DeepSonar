@@ -290,28 +290,26 @@ test("#1083 settlement transport, HTTP and parsing failures retain their own saf
 });
 
 // #1262: the same 404 can come from the gateway itself or from something in
-// front of it. The response shape is the only evidence the client holds, so it
-// must survive as an allowlisted enum (not_found / other / empty) while body
-// text, URLs and headers stay out of the Job.
-test("#1262 settlement 404 keeps an allowlisted body hint instead of prose", async () => {
+// front of it, and neither proves the request never ran. It therefore must not
+// become the Job's terminal error and must not license a retry; the original SDK
+// failure stays the terminal diagnostic and no body/URL/token text leaks.
+test("#1262 settlement 404 never replaces the terminal failure or licenses a retry", async () => {
   for (const scenario of [
-    { settlementStatus: 404, settlementBody: '{"status":"not_found"}', bodyHint: "not_found" },
-    { settlementStatus: 404, settlementBody: '<html>proxy default page</html>', bodyHint: "other" },
-    { settlementStatus: 404, settlementBody: "   ", bodyHint: "empty" },
+    { settlementStatus: 404, settlementBody: '{"status":"not_found"}' },
+    { settlementStatus: 404, settlementBody: '<html>proxy default page</html>' },
+    { settlementStatus: 404, settlementBody: "   " },
   ]) {
     const f = await fixture(scenario);
     const events = await f.request();
     const detail = diagnostic(events);
-    assert.equal(detail.stage, "settlement");
-    assert.equal(detail.status, 404);
-    assert.equal(detail.bodyHint, scenario.bodyHint);
-    // #1262：结算 404 还要能看出打到了哪个 origin（只到 origin，不含路径/凭据）。
-    assert.match(String(detail.endpoint), /^http:\/\/127\.0\.0\.1:\d+$/u);
+    assert.notEqual(detail.stage, "settlement", "404 不得成为终态错误");
+    assert.equal(detail.stage, "sdk", "保留原始 SDK 失败作为终态诊断");
+    assert.equal(f.calls.length, 1, "404 不构成「没落地」证明，不能重试");
     assert.equal(f.queries.length, 2, "failed settlement query is not polled or replayed");
-    // No prose, URL or header value may leak through the hint.
-    assert.doesNotMatch(JSON.stringify(events), /proxy default page|<html>|private|synthetic-/u);
+    assert.doesNotMatch(JSON.stringify(events), /not_found|proxy default page|private|synthetic-(?:main|control)-token/u);
   }
 });
+
 
 test("#1083 genuine host identity failures keep fixed codes before any allowance or SDK generation", async () => {
   const f = await fixture();
