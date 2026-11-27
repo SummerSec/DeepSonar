@@ -122,6 +122,9 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
     const exactRow = exact.json() as Record<string, unknown>;
     assert.equal(exactRow.created_by_type, "job");
     assert.equal(exactRow.creator_job_id, owner.jobId);
+    // 有权限的读要能带回来源本身：证据 id 与内容哈希都必须原样读回。
+    assert.deepEqual(exactRow.sources_json, [{ kind: "evidence", ref: evidenceRef, content_hash: sourceHash }],
+      "升级后来源字段必须完整读回");
     assert.equal((exactRow.candidate as Record<string, unknown>).content, "升级前正文");
     // 升级前的反馈仍指向旧版本。
     const [usage] = await legacy`SELECT version_id, feedback_json FROM project_knowledge_usages
