@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [0.6.28] - 2026-11-27
+
+### 新增
+
+- **项目知识的人类维护入口（#1256 第四阶段）**：操作员可以直接新建、编辑、下架与恢复项目知识，不再只能依赖 Agent 会话沉淀。人类版本用 `created_by_type=human` 记录作者，可附可选修订原因；编辑按 `expected_version` 检查冲突，未提交的字段继承上一版（关键词不会被静默清空），基版本不可读时整笔回滚。评测淘汰与安全撤回不可恢复，与「用户下架」分开。详情、版本分页与精确版本三处返回同一套作者与修订原因。
+
+### 修复
+
+- **finding 语义去重按项目作用域生效（#1294）**：此前去重候选与 cluster 都以 `canvas_id` 为作用域，同一漏洞在不同画布被重复上报时，每条记录都自成一个 canonical（现场 591 条记录对应 591 个单成员 cluster）。现在候选、成员与 cluster 查找都按 `project_id`，跨画布重复会合并到同一 canonical；画布 Research 读接口的组按项目读，但只返回本画布成员真正用到的组，空画布不再返回全项目视图。
+- **结算探针的 404 不再成为任务终态（#1262）**：查询 `GET /gateway/_settlement/:id` 拿到 404 时，既可能是 Scheduler 的 `not_found`，也可能是代理或路由的默认 404 页，两者都无法证明「这次请求没有落地」。此前这种 404 会直接把 Job 判成永久失败，白跑整份沙箱。现在按「没有证据」处理：不据此重试（避免重复外部效果），也不替换任务终态；401/403/5xx/超时仍按配置错误硬失败。
+
+### 升级与验收范围
+
+- schema 由 79 升到 80：`project_knowledge_items` 增加 `retired_reason`，`project_knowledge_versions` 的作者列可为空并新增 `created_by_type` / `created_by` / `revision_reason`。空库直接套用基线；**非空库不会自动升级**，必须按 runbook 走受控重建（备份、列交集回填、序列校准），历史版本保持 `created_by_type=job` 与原 Job/Attempt 作者。
+- 升级路径由 #1292 的演练覆盖：以 v0.6.27 的真实 schema 79 为基线、走真实 `rebuildSchemaOnReservedSession` 重建，验证旧作者、来源、反馈与正文都保留，随后同一目的人工修订正常生成新版本。
+- 其余改动为行为修复与界面调整，无新增运行时依赖。
+
 ## [0.6.27] - 2026-11-26
 
 ### 修复
@@ -1906,3 +1923,4 @@
 [0.6.25]: https://github.com/SummerSec/DeepSonar/compare/v0.6.24...v0.6.25
 [0.6.26]: https://github.com/SummerSec/DeepSonar/compare/v0.6.25...v0.6.26
 [0.6.27]: https://github.com/SummerSec/DeepSonar/compare/v0.6.26...v0.6.27
+[0.6.28]: https://github.com/SummerSec/DeepSonar/compare/v0.6.27...v0.6.28
