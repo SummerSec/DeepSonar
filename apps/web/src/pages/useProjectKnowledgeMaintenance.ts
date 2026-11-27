@@ -50,9 +50,19 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const draftContent = draft.content;
   const setDraftContent = useCallback((value: string) => updateDraft({ content: value }), [updateDraft]);
   const draftSuffix = draft.suffix;
-  const [createBusy, setCreateBusy] = useState(false);
-  const [createNotice, setCreateNotice] = useState<string | null>(null);
-  const [createError, setCreateError] = useState<string | null>(null);
+  // 提交状态与反馈也按项目隔离：A 的进行中/失败不影响 B 的按钮与提示。
+  interface SubmitState { busy: boolean; notice: string | null; error: string | null }
+  const [submits, setSubmits] = useState<Record<string, SubmitState>>({});
+  const submitState = submits[projectId] ?? { busy: false, notice: null, error: null };
+  const patchSubmit = useCallback((target: string, change: Partial<SubmitState>) => {
+    setSubmits((map) => {
+      const base: SubmitState = map[target] ?? { busy: false, notice: null, error: null };
+      return { ...map, [target]: { ...base, ...change } };
+    });
+  }, []);
+  const createBusy = submitState.busy;
+  const createNotice = submitState.notice;
+  const createError = submitState.error;
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [editBusy, setEditBusy] = useState(false);
   const [editNotice, setEditNotice] = useState<string | null>(null);
@@ -65,7 +75,7 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   // 切条目、切版本或刷新后旧草稿一律作废：草稿只属于打开它时的「项目+条目+基准版本」。
   useEffect(() => {
     setEditDraft(null); setEditNotice(null); setEditError(null);
-  }, [selectedId, versionId, refreshKey, projectId]);
+  }, [selectedId, versionId, projectId]);
 
   const editActive = Boolean(editDraft && editDraft.itemId === selectedId && editDraft.versionId === versionId);
   const draftKey = useMemo(() => generatedLogicalKey(draftTitle, draftSuffix), [draftTitle, draftSuffix]);
@@ -76,21 +86,28 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const submitCreate = useCallback(() => {
     // 请求与草稿都绑定打开表单时的项目；迟到的回调只更新它自己的项目。
     const requestProject = projectId;
-    setCreateBusy(true); setCreateNotice(null); setCreateError(null);
+    const requestSuffix = draftSuffix;
+    patchSubmit(requestProject, { busy: true, notice: null, error: null });
     projectKnowledgeApi.create(requestProject, {
       kind: "memory", logical_key: draftKey, title: draftTitle.trim(), content: draftContent,
     }).then((result) => {
+      // 只清「这一次提交」的那代草稿：等待期间用户重新输入的内容不能被回执覆盖。
       setDrafts((map) => {
+        const current = map[requestProject];
+        if (!current || current.suffix !== requestSuffix) return map;
         const next = { ...map };
         delete next[requestProject];
         return next;
       });
-      if (currentProject.current !== requestProject) { onRefresh(); return; }
-      setCreateNotice("新建知识成功，已打开该条目");
+      if (currentProject.current !== requestProject) {
+        patchSubmit(requestProject, { busy: false, notice: "新建知识成功（在其它项目完成）" });
+        return;
+      }
+      patchSubmit(requestProject, { busy: false, notice: "新建知识成功，已打开该条目" });
       onSelectItem(result.item_ref);
       onRefresh();
-    }).catch((error) => setCreateError(message(error))).finally(() => setCreateBusy(false));
-  }, [projectId, draftTitle, draftContent, draftKey, onSelectItem, onRefresh]);
+    }).catch((error) => patchSubmit(requestProject, { busy: false, error: message(error) }));
+  }, [projectId, draftTitle, draftContent, draftKey, draftSuffix, onSelectItem, onRefresh, patchSubmit]);
 
   const submitEdit = useCallback(() => {
     if (!editDraft) return;
@@ -104,18 +121,18 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   }, [projectId, editDraft, onRefresh]);
 
   const archiveItem = useCallback((itemId: string) => {
-    setUndoBusy(true); setCreateError(null);
+    setUndoBusy(true); patchSubmit(projectId, { error: null });
     projectKnowledgeApi.archive(projectId, itemId)
       .then(() => { setArchiveReceipts((map) => ({ ...map, [itemId]: { receiptId: `${itemId}:${Date.now()}` } })); onRefresh(); })
-      .catch((error) => setCreateError(message(error)))
+      .catch((error) => patchSubmit(projectId, { error: message(error) }))
       .finally(() => setUndoBusy(false));
   }, [projectId, onRefresh]);
 
   const undoArchive = useCallback((itemId: string) => {
-    setUndoBusy(true); setCreateError(null);
+    setUndoBusy(true); patchSubmit(projectId, { error: null });
     projectKnowledgeApi.restore(projectId, itemId)
       .then(() => { setArchiveReceipts((map) => { const next = { ...map }; delete next[itemId]; return next; }); onRefresh(); })
-      .catch((error) => setCreateError(message(error)))
+      .catch((error) => patchSubmit(projectId, { error: message(error) }))
       .finally(() => setUndoBusy(false));
   }, [projectId, onRefresh]);
 
