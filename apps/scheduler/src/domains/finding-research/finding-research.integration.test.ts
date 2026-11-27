@@ -177,6 +177,29 @@ if (!testDatabaseUrl) {
       assert.ok(otherView.clusters.some((cluster) => cluster.id === crossClusterId), "去重组按项目读取");
       assert.ok(!otherView.members.some((member) => member.finding_id === firstId), "A 的成员不得出现在 B 的成员列表");
       assert.equal(otherView.members.length, 1, "只返回本画布成员，不跨项目/跨画布扩散");
+      // 同项目里与本画布无关的第三个组不得出现在 B 的响应里（含 canonical 标题）。
+      const thirdCanvasId = randomUUID();
+      const thirdJobId = randomUUID();
+      const thirdId = randomUUID();
+      await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${thirdCanvasId}, ${projectId}, 'third audit', ${sql.json({})})`;
+      await sql`INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${thirdCanvasId}, 'root', 'root', 'analysis_complete', ${sql.json({})})`;
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, payload_json, agent_snapshot_json)
+        VALUES (${thirdJobId}, ${projectId}, ${thirdCanvasId}, 'audit', 'succeeded', ${sql.json({})}, ${sql.json({})})`;
+      await sql`
+        INSERT INTO findings (id, project_id, job_id, fingerprint, title, severity, location, summary, category, verify_status, created_at)
+        VALUES (${thirdId}, ${projectId}, ${thirdJobId}, 'fp-unrelated', 'Unrelated hardcoded secret in tool', 'low',
+          'tool/other.ts:7', 'unrelated to login or search', 'secret', 'pending', ${"2026-09-11T00:04:00.000Z"})`;
+      await research.runFindingResearch(sql, { canvasId: thirdCanvasId, projectId, kind: "dedupe" });
+      const afterThird = await app.inject({ method: "GET", url: `/canvases/${otherCanvasId}/finding-research` });
+      const afterThirdView = afterThird.json() as { clusters: Array<{ id: string; canonical_title: string }> };
+      assert.ok(!afterThirdView.clusters.some((cluster) => cluster.canonical_title.includes("hardcoded secret")),
+        "与本画布无关的组（含标题）不得出现");
+      const emptyCanvasId = randomUUID();
+      await sql`INSERT INTO canvases (id, project_id, title, target_json) VALUES (${emptyCanvasId}, ${projectId}, 'empty audit', ${sql.json({})})`;
+      const emptyView = await app.inject({ method: "GET", url: `/canvases/${emptyCanvasId}/finding-research` });
+      assert.equal(emptyView.statusCode, 200);
+      assert.deepEqual((emptyView.json() as { clusters: unknown[] }).clusters, [], "空画布不得返回全项目组");
 
       const lateId = randomUUID();
       await sql`

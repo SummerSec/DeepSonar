@@ -23,7 +23,13 @@ export function registerFindingResearchRoutes(app: FastifyInstance): void {
                f.title AS canonical_title, f.verify_status, f.severity
         FROM finding_dedupe_clusters c
         JOIN findings f ON f.id = c.canonical_finding_id
+        -- 只返回本画布成员真正用到的组：组由别的画布创建也要能看到（项目作用域，见 #1294），
+        -- 但本项目里与本画布无关的组不返回，避免带出别的任务的知识与标题。
         WHERE c.project_id = ${canvas.project_id}
+          AND c.id IN (
+            SELECT dedupe_cluster_id FROM finding_research
+            WHERE canvas_id = ${id} AND dedupe_cluster_id IS NOT NULL
+          )
         ORDER BY c.updated_at DESC`,
     ]);
     const members = clusters.length === 0
