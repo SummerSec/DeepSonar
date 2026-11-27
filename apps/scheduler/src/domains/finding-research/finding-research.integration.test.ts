@@ -127,6 +127,7 @@ if (!testDatabaseUrl) {
       assert.ok(crossRun.processed >= 0);
       const [crossRow] = await sql`
         SELECT canonical_finding_id, dedupe_cluster_id, is_canonical FROM finding_research WHERE finding_id = ${crossId}`;
+      const crossClusterId = String(crossRow?.dedupe_cluster_id);
       assert.equal(crossRow?.canonical_finding_id, firstId, "另一个 canvas 上的同一条漏洞必须合并到原 canonical");
       assert.equal(crossRow?.dedupe_cluster_id, byId[firstId]?.dedupe_cluster_id, "跨 canvas 必须共用同一个去重 cluster");
       assert.equal(crossRow?.is_canonical, false);
@@ -164,6 +165,18 @@ if (!testDatabaseUrl) {
       const ledger = await app.inject({ method: "GET", url: `/canvases/${canvasId}/finding-research` });
       assert.equal(ledger.statusCode, 200);
       assert.ok((ledger.json() as { runs: unknown[] }).runs.length >= 1);
+
+      // 组由 A 画布创建、成员属于 B 画布：打开 B 仍要看到 B 自己的成员，且组不因创建画布不同而消失（#1294）。
+      const otherLedger = await app.inject({ method: "GET", url: `/canvases/${otherCanvasId}/finding-research` });
+      assert.equal(otherLedger.statusCode, 200);
+      const otherView = otherLedger.json() as {
+        clusters: Array<{ id: string }>;
+        members: Array<{ finding_id: string }>;
+      };
+      assert.ok(otherView.members.some((member) => member.finding_id === crossId), "B 自己的成员必须可见");
+      assert.ok(otherView.clusters.some((cluster) => cluster.id === crossClusterId), "去重组按项目读取");
+      assert.ok(!otherView.members.some((member) => member.finding_id === firstId), "A 的成员不得出现在 B 的成员列表");
+      assert.equal(otherView.members.length, 1, "只返回本画布成员，不跨项目/跨画布扩散");
 
       const lateId = randomUUID();
       await sql`
