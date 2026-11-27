@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import postgres from "postgres";
 import { planSchemaRebuild, buildCopyInsertSql } from "../../schema-rebuild.js";
+import { seedKnowledgeJob } from "./test-support.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required for the upgrade integration test");
@@ -23,20 +24,6 @@ function legacySchemaSql(): string | undefined {
   return read();
 }
 
-type Row = Record<string, unknown>;
-
-/** 按 information_schema 生成最小可插入值：不手写 79 的形状，避免与历史列漂移。 */
-function valueFor(column: { name: string; type: string }): string {
-  if (column.name === "id") return randomUUID();
-  if (column.type === "uuid") return randomUUID();
-  if (column.type === "jsonb") return "'[]'::jsonb";
-  if (column.type.startsWith("timestamp")) return "now()";
-  if (column.type === "boolean") return "true";
-  if (column.type === "integer" || column.type === "bigint" || column.type === "smallint") return "1";
-  if (column.type === "text" || column.type.startsWith("character")) return "'fixture'";
-  return "NULL";
-}
-
 test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies only intersecting columns", async (t) => {
   const schemaSql = legacySchemaSql();
   if (!schemaSql) {
@@ -51,31 +38,17 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
     await legacy.unsafe(schemaSql);
     const metaRows = await legacy`SELECT version FROM schema_meta WHERE id='global'`;
     assert.equal(Number(metaRows[0]!.version), 79, "基线库必须声明 schema 79");
-    // 合成历史知识：只填 79 存在的列，作者是 Job/Attempt。
-    const insertMinimal = async (table: string, overrides: Row = {}): Promise<Row> => {
-      const columns = await legacy<{ column_name: string; data_type: string }[]>`
-        SELECT column_name, data_type FROM information_schema.columns
-        WHERE table_schema='public' AND table_name=${table} AND is_nullable='NO' AND column_default IS NULL
-        ORDER BY ordinal_position`;
-      const names = columns.map((column) => column.column_name);
-      const values = columns.map((column) => (column.column_name in overrides
-        ? overrides[column.column_name] : valueFor({ name: column.column_name, type: column.data_type })));
-      const placeholders = values.map((_, index) => `$${index + 1}`).join(", ");
-      const [row] = await legacy.unsafe<Row[]>(
-        `INSERT INTO public."${table}" (${names.map((name) => `"${name}"`).join(", ")}) VALUES (${placeholders}) RETURNING *`,
-        values as never[]);
-      return row!;
-    };
-    const project = await insertMinimal("projects");
-    const canvas = await insertMinimal("canvases", { project_id: project.id });
-    const job = await insertMinimal("jobs", { project_id: project.id, canvas_id: canvas.id, type: "explore" });
-    const attempt = await insertMinimal("job_attempts", { job_id: job.id });
-    const blob = await insertMinimal("shared_asset_blobs", { content_sha256: "a".repeat(64) });
-    const item = await insertMinimal("project_knowledge_items", { project_id: project.id });
-    await insertMinimal("project_knowledge_versions", {
-      project_id: project.id, item_id: item.id, content_sha256: blob.content_sha256,
-      creator_job_id: job.id, creator_attempt_id: attempt.id,
-    });
+    // 合成历史知识：项目/画布/Job/Attempt 复用现有夹具，知识行显式给 79 合法值。
+    const owner = await seedKnowledgeJob(legacy as never);
+    const hash = "b".repeat(64);
+    await legacy`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri)
+      VALUES(${hash},2,'application/json',${"test://" + hash})`;
+    const [legacyItem] = await legacy`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,keywords_json,status)
+      VALUES(${owner.projectId},'memory','upgrade-fixture','升级前的知识','[]'::jsonb,'draft') RETURNING id`;
+    const [legacyVersion] = await legacy`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,
+        creator_job_id,creator_attempt_id,sources_json,governance_hash)
+      VALUES(${owner.projectId},${String(legacyItem!.id)},1,${hash},${owner.jobId},${owner.attemptId},'[]'::jsonb,${hash}) RETURNING id`;
+    await legacy`UPDATE project_knowledge_items SET status='active',active_version_id=${String(legacyVersion!.id)} WHERE id=${String(legacyItem!.id)}`;
     // 用真实重建入口做只读计划：79 → 80。
     const plan = await planSchemaRebuild(legacy as never, { mode: "plan" });
     assert.equal(plan.currentVersion, 79);
