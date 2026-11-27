@@ -22,6 +22,14 @@ const field = "rounded-lg border border-white/10 bg-white/[.03] px-3 py-2 text-s
 const button = "rounded-lg border border-white/10 px-3 py-2 text-xs text-zinc-300 hover:bg-white/[.06] disabled:cursor-not-allowed disabled:opacity-40";
 
 const card = "rounded-xl border border-white/[.07] bg-white/[.025] p-4";
+const UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const versionAuthor = (value: KnowledgeVersion): string => {
+  if (value.created_by_type !== "human") return "Job";
+  const name = value.created_by && !UUID_LIKE.test(value.created_by) ? value.created_by : null;
+  return name ? `人工维护 ${name}` : "人工维护";
+};
+const versionLabel = (value: KnowledgeVersion): string => `作者：${versionAuthor(value)}`;
+
 const date = (value: string | null | undefined) => value ? new Date(value).toLocaleString("zh-CN") : "—";
 const short = (value: string | null | undefined) => value ? `${value.slice(0, 8)}…` : "—";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -252,7 +260,7 @@ export function ProjectKnowledgePage() {
             {versions.map((entry) => <button key={entry.id} type="button"
               onClick={() => setVersionId(entry.id)}
               className={button + " " + (versionId === entry.id ? "border-acc-400/50 text-acc-300" : "")}>
-              v{entry.version}{entry.created_by_type === "human" ? ` · 人工维护${entry.created_by ? ` ${entry.created_by}` : ""}` : " · Job"}{entry.revoked_at ? " · 已撤销" : ""}
+              v{entry.version} · {versionAuthor(entry)}{entry.revoked_at ? " · 已撤销" : ""}
             </button>)}
             {nextVersionOffset !== null && <button type="button" className={button} onClick={loadMoreVersions}>加载更多版本</button>}
             {canWrite && version && version.candidate.kind === "memory" && (!editActive || editDraft?.versionId !== version.id) &&
@@ -284,6 +292,10 @@ export function ProjectKnowledgePage() {
             </button>
           </div>}
         </div>
+          {version && <p className="px-1 text-[11px] text-zinc-500">
+            {versionLabel(version)} · {date(version.created_at)}
+            {version.revision_reason ? ` · 修订原因：${version.revision_reason}` : ""}
+          </p>}
           {version && <VersionContent value={version} />}
           <div className="grid gap-4 lg:grid-cols-2">
             <section className={card}><h3 className="mb-3 text-sm text-zinc-200">提案与审查</h3>

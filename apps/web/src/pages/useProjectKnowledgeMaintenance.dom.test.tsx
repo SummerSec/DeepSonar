@@ -26,14 +26,21 @@ test("knowledge maintenance keeps feedback visible, unique keys per draft and re
   const created: Array<{ logical_key: string; title: string }> = [];
   const mutating: string[] = [];
   const item: KnowledgeItem = { id: "item-a", project_id: "project-a", kind: "memory", logical_key: "human-note-abc123",
-    title: "中文知识条目", keywords_json: [], status: "active", active_version_id: "version-a1", version: 1,
+    title: "中文知识条目", keywords_json: [], status: "active", active_version_id: "version-a2", version: 2,
     content_sha256: null, generation: 1, updated_at: "2026-11-26T00:00:00.000Z" };
-  const version: KnowledgeVersion = { id: "version-a1", version: 1, content_sha256: "c".repeat(64),
-    creator_job_id: null, created_by_type: "human", created_by: "maintainer-a", revision_reason: null,
-    sources_json: [], revoked_at: null, revoked_reason: null, created_at: "2026-11-26T00:00:00.000Z" };
-  const detail: KnowledgeDetail = { ...item, versions: [version], versions_next_offset: null, proposals: [], evaluations: [], usages: [] };
-  const versionDetail: KnowledgeVersionDetail = { ...version, item: { id: item.id, kind: "memory", title: item.title, logical_key: item.logical_key },
-    candidate: { kind: "memory", content: "原始正文" } } as never;
+  const authorId = "3f1d2c4b-5a69-4e78-9b01-2c3d4e5f6a7b";
+  const version: KnowledgeVersion = { id: "version-a2", version: 2, content_sha256: "d".repeat(64),
+    creator_job_id: null, created_by_type: "human", created_by: authorId, revision_reason: "修正了一处错别字",
+    sources_json: [], revoked_at: null, revoked_reason: null, created_at: "2026-11-26T01:00:00.000Z" };
+  const older: KnowledgeVersion = { ...version, id: "version-a1", version: 1, content_sha256: "c".repeat(64),
+    revision_reason: null, created_at: "2026-11-26T00:00:00.000Z" };
+  const detail: KnowledgeDetail = { ...item, versions: [version, older], versions_next_offset: null, proposals: [], evaluations: [], usages: [] };
+  const versionDetails: Record<string, KnowledgeVersionDetail> = {
+    [version.id]: { ...version, item: { id: item.id, kind: "memory", title: item.title, logical_key: item.logical_key },
+      candidate: { kind: "memory", content: "第二版正文" } } as never,
+    [older.id]: { ...older, item: { id: item.id, kind: "memory", title: item.title, logical_key: item.logical_key },
+      candidate: { kind: "memory", content: "第一版正文" } } as never,
+  };
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
     getItem: (key: string) => key === "deepsonar_api_token" ? "fixture-token" : null,
     setItem: () => undefined, removeItem: () => undefined,
@@ -46,7 +53,7 @@ test("knowledge maintenance keeps feedback visible, unique keys per draft and re
   });
   Object.assign(projectKnowledgeApi, {
     list: async () => ({ items: [item], next_offset: null }),
-    detail: async () => detail, version: async () => versionDetail, grants: async () => [],
+    detail: async () => detail, version: async (_projectId: string, _itemId: string, versionId: string) => versionDetails[versionId] ?? versionDetails[version.id]!, grants: async () => [],
     activity: async () => ({ items: [], next_offset: null,
       collection: { state: "idle", pending_sources: 0, consecutive_failures: 0, next_collection_at: null },
       summary: { registered_sources: 0, collected_sources: 0, skipped_sources: 0, pending_sources: 0,
@@ -94,8 +101,13 @@ test("knowledge maintenance keeps feedback visible, unique keys per draft and re
     assert.equal(created.length, 2, "两次新建都要发出请求");
     assert.notEqual(created[0]?.logical_key, created[1]?.logical_key, "两条中文标题不能撞同一个逻辑键");
     assert.ok(created.every((entry) => /^human-[\p{L}\p{N}._/-]*$/u.test(entry.logical_key) || /^human-note-[a-z0-9]+$/u.test(entry.logical_key)));
-    // 人工维护的版本在版本按钮上标出作者，不假设一定有 Job
-    assert.ok(byText(/v1 · 人工维护 maintainer-a/u), "人工版本必须显示作者来源");
+    // 人工维护的版本按真实返回形状展示：UUID 身份只显示「人工维护」，并原位显示作者与修订原因
+    assert.ok(byText(/^v2 · 人工维护$/u), "人工版本必须显示作者来源，且不把 UUID 身份当名字");
+    assert.ok(byText(/作者：人工维护/u), "版本详情要显示作者");
+    assert.ok(byText(/修订原因：修正了一处错别字/u), "版本详情要显示可选修订原因");
+    // 切到旧版：不能显示新版的原因
+    await click(byText(/^v1 · 人工维护$/u));
+    assert.ok(!byText(/修订原因：修正了一处错别字/u), "旧版本不能显示新版本的修订原因");
     // 新建成功的提示在表单关闭后仍然可见
     assert.ok(byText(/新建知识成功/u), "新建成功提示必须对用户可见");
     // 下架 → 撤销 → 再次下架 → 再次撤销
