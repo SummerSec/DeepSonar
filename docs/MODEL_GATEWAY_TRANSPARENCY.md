@@ -29,6 +29,8 @@ scanner 正反例和真实 HTTP/PG 用量、额度读回、Pi 式完成即关闭
 
 Scheduler 侧补 `deepsonar_gateway_settlement_total{result}`（`settled`/`not_started`/`pending`/`unknown`/`not_found`），并在 `not_found` 时记 request id、job、是否仍有活动 Attempt 与 workload（不含 token/body）。
 
+**结算 404 不再是任务终态（#1262）**：Pi 侧询价探针拿到 404 时，既无法证明「这次请求没有落地」，也无法区分是 Scheduler 的 `{"status":"not_found"}` 还是代理/路由的默认 404 页面，因此按「没有证据」处理——不据此重试（避免重复外部效果），也**不把 404 变成 Job 的终态错误**；任务仍按原 SDK 结果收敛。这样一次代理侧 404 不会再让整份沙箱直接失败。
+
 **边界**：这两层各自说明「我收到了什么、我怎么回的」，但同一条请求无法跨层关联——代理日志不含 request id，Scheduler 日志不含客户端来源，Pi 侧诊断本轮未改。因此当怀疑请求没到达时，可以用两边的计数与模板判断「代理有没有收到这类请求」「Scheduler 有没有收到此类查询」，不能据此断定某个具体 Job 停在哪一层；跨层关联需要另加一个不泄露 URL/凭据/响应体的关联标识。
 
 ## Managed proxy 的逐跳连接策略（#1097）

@@ -389,3 +389,12 @@ test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平
     process.argv[1] = original;
   }
 });
+
+test("#1262 a settlement 404 never becomes the job's terminal error", () => {
+  const source = PI_MAIN_REQUEST_BUDGET_SOURCE;
+  assert.ok(source.includes("readGatewayNoStart(gateway, token, requestId, options?.signal).catch("),
+    "结算探针必须被包在兜底里，404 不能直接抛成终态错误");
+  assert.ok(source.includes("() => false)"), "兜底要把「无法证明没有落地」当成不重试，而不是失败");
+  assert.ok(!source.includes("|| !await readGatewayNoStart(gateway, token, requestId, options?.signal)) {"),
+    "旧的直接取反写法必须消失");
+});
