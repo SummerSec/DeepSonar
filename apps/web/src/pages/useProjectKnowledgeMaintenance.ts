@@ -1,6 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { projectKnowledgeApi } from "../ProjectKnowledgeApi";
 
+/** 保存成功后决定编辑草稿的去留：内容没再变就收起，变了就挪到新版本上继续写。 */
+export function rebaseEditDraft(current: EditDraft | null, snapshot: EditDraft,
+  result: { version: number; version_ref: string }): EditDraft | null {
+  if (!current || current.itemId !== snapshot.itemId) return current;
+  const untouched = current.title === snapshot.title && current.content === snapshot.content
+    && current.reason === snapshot.reason;
+  if (untouched) return null;
+  return { ...current, versionId: result.version_ref, expectedVersion: result.version };
+}
+
+/** 切条目/切版本后的草稿去留：同条目同版本保留，刚被保存挪到新版本的草稿多活一轮。 */
+export function nextEditDraft(current: EditDraft | null, context: {
+  selectedId: string | null; versionId: string | null; keepRebased: boolean;
+}): EditDraft | null {
+  if (!current || current.itemId !== context.selectedId) return null;
+  if (current.versionId === context.versionId) return current;
+  return context.keepRebased ? current : null;
+}
+
 export interface EditDraft {
   itemId: string;
   versionId: string;
@@ -66,7 +85,8 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const createNotice = submitState.notice;
   const createError = submitState.error;
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
-  const [editBusy, setEditBusy] = useState(false);
+  const keepRebasedDraft = useRef(false);
+  const [editBusy] = useState(false);
   const [editNotice, setEditNotice] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   // 一次下架对应一张可消费回执：撤销后回执消失，允许再次下架与再次撤销。
@@ -74,9 +94,17 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const [undoBusy, setUndoBusy] = useState(false);
 
   const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-  // 切条目、切版本或刷新后旧草稿一律作废：草稿只属于打开它时的「项目+条目+基准版本」。
+  // 切条目或切版本后旧草稿一律作废：草稿只属于打开它时的「项目+条目+基准版本」。
+  // 例外：保存成功后草稿已经挪到新版本上（versionId 等于当前版本），此时要保留它继续写。
+  const noticeScope = useRef({ projectId, selectedId });
   useEffect(() => {
-    setEditDraft(null); setEditNotice(null); setEditError(null);
+    if (noticeScope.current.projectId !== projectId || noticeScope.current.selectedId !== selectedId) {
+      noticeScope.current = { projectId, selectedId };
+      setEditNotice(null); setEditError(null);
+    }
+    const keepRebased = keepRebasedDraft.current;
+    keepRebasedDraft.current = false;
+    setEditDraft((current) => nextEditDraft(current, { selectedId, versionId, keepRebased }));
   }, [selectedId, versionId, projectId]);
 
   const editActive = Boolean(editDraft && editDraft.itemId === selectedId && editDraft.versionId === versionId);
@@ -124,16 +152,26 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
       .catch((error) => patchSubmit(requestProject, { busy: false, error: message(error) }));
   }, [projectId, draftTitle, draftContent, draftKey, patchSubmit, settleCreate]);
 
+  // 编辑保存后的结算抽成独立函数：内容与快照一致才收起，否则挪到新版本上继续写。
+  const settleEdit = useCallback((snapshot: EditDraft, result: { version: number; version_ref: string }): void => {
+    setEditDraft((current) => {
+      const next = rebaseEditDraft(current, snapshot, result);
+      keepRebasedDraft.current = Boolean(next && next !== current);
+      return next;
+    });
+    setEditNotice(`已生成 v${result.version}`);
+    onRefresh();
+  }, [onRefresh]);
+
   const submitEdit = useCallback(() => {
     if (!editDraft) return;
-    setEditBusy(true); setEditNotice(null); setEditError(null);
-    projectKnowledgeApi.revise(projectId, editDraft.itemId, {
-      expected_version: editDraft.expectedVersion, title: editDraft.title.trim(), content: editDraft.content,
-      ...(editDraft.reason?.trim() ? { reason: editDraft.reason.trim() } : {}),
-    }).then((result) => {
-      setEditDraft(null); setEditNotice(`已生成 v${result.version}`); onRefresh();
-    }).catch((error) => setEditError(message(error))).finally(() => setEditBusy(false));
-  }, [projectId, editDraft, onRefresh]);
+    const snapshot = editDraft;
+    projectKnowledgeApi.revise(projectId, snapshot.itemId, {
+      expected_version: snapshot.expectedVersion, title: snapshot.title.trim(), content: snapshot.content,
+      ...(snapshot.reason?.trim() ? { reason: snapshot.reason.trim() } : {}),
+    }).then((result) => settleEdit(snapshot, result))
+      .catch((error) => setEditError(message(error)));
+  }, [projectId, editDraft, settleEdit]);
 
   const archiveItem = useCallback((itemId: string) => {
     setUndoBusy(true); patchSubmit(projectId, { error: null });
@@ -141,7 +179,7 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
       .then(() => { setArchiveReceipts((map) => ({ ...map, [itemId]: { receiptId: `${itemId}:${Date.now()}` } })); onRefresh(); })
       .catch((error) => patchSubmit(projectId, { error: message(error) }))
       .finally(() => setUndoBusy(false));
-  }, [projectId, onRefresh]);
+  }, [projectId, onRefresh, patchSubmit]);
 
   const undoArchive = useCallback((itemId: string) => {
     setUndoBusy(true); patchSubmit(projectId, { error: null });
@@ -149,7 +187,7 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
       .then(() => { setArchiveReceipts((map) => { const next = { ...map }; delete next[itemId]; return next; }); onRefresh(); })
       .catch((error) => patchSubmit(projectId, { error: message(error) }))
       .finally(() => setUndoBusy(false));
-  }, [projectId, onRefresh]);
+  }, [projectId, onRefresh, patchSubmit]);
 
   const openEdit = useCallback((draft: EditDraft) => {
     setEditDraft(draft); setEditNotice(null); setEditError(null);
