@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { projectKnowledgeApi } from "../ProjectKnowledgeApi";
 
 export interface EditDraft {
@@ -32,10 +32,24 @@ export interface MaintenanceInput {
 
 export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const { projectId, selectedId, versionId, refreshKey, onSelectItem, onRefresh } = input;
-  const [draftSuffix, setDraftSuffix] = useState(() => Math.random().toString(36).slice(2, 8));
-  const [createOpen, setCreateOpen] = useState(false);
-  const [draftTitle, setDraftTitle] = useState("");
-  const [draftContent, setDraftContent] = useState("");
+  // 新建草稿按项目隔离：切到别的项目不会带着上一个项目的正文，回到原项目还能接着写。
+  interface CreateDraft { open: boolean; title: string; content: string; suffix: string }
+  const [drafts, setDrafts] = useState<Record<string, CreateDraft>>({});
+  const newSuffix = (): string => Math.random().toString(36).slice(2, 8);
+  const draft: CreateDraft = drafts[projectId] ?? { open: false, title: "", content: "", suffix: newSuffix() };
+  const updateDraft = useCallback((change: Partial<CreateDraft>) => {
+    setDrafts((map) => {
+      const current = map[projectId] ?? { open: false, title: "", content: "", suffix: newSuffix() };
+      return { ...map, [projectId]: { ...current, ...change } };
+    });
+  }, [projectId]);
+  const createOpen = draft.open;
+  const setCreateOpen = useCallback((value: boolean) => updateDraft({ open: value }), [updateDraft]);
+  const draftTitle = draft.title;
+  const setDraftTitle = useCallback((value: string) => updateDraft({ title: value }), [updateDraft]);
+  const draftContent = draft.content;
+  const setDraftContent = useCallback((value: string) => updateDraft({ content: value }), [updateDraft]);
+  const draftSuffix = draft.suffix;
   const [createBusy, setCreateBusy] = useState(false);
   const [createNotice, setCreateNotice] = useState<string | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -57,13 +71,21 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const draftKey = useMemo(() => generatedLogicalKey(draftTitle, draftSuffix), [draftTitle, draftSuffix]);
   const canUndoArchive = useCallback((itemId: string) => Boolean(archiveReceipts[itemId]), [archiveReceipts]);
 
+  const currentProject = useRef(projectId);
+  currentProject.current = projectId;
   const submitCreate = useCallback(() => {
+    // 请求与草稿都绑定打开表单时的项目；迟到的回调只更新它自己的项目。
+    const requestProject = projectId;
     setCreateBusy(true); setCreateNotice(null); setCreateError(null);
-    projectKnowledgeApi.create(projectId, {
+    projectKnowledgeApi.create(requestProject, {
       kind: "memory", logical_key: draftKey, title: draftTitle.trim(), content: draftContent,
     }).then((result) => {
-      setCreateOpen(false); setDraftTitle(""); setDraftContent("");
-      setDraftSuffix(Math.random().toString(36).slice(2, 8));
+      setDrafts((map) => {
+        const next = { ...map };
+        delete next[requestProject];
+        return next;
+      });
+      if (currentProject.current !== requestProject) { onRefresh(); return; }
       setCreateNotice("新建知识成功，已打开该条目");
       onSelectItem(result.item_ref);
       onRefresh();

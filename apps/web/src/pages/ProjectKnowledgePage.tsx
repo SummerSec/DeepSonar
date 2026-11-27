@@ -210,7 +210,7 @@ export function ProjectKnowledgePage() {
           <div className="flex flex-wrap gap-2">
             <button type="button" className={button} onClick={() => setRefresh((value) => value + 1)}>刷新</button>
             {canWrite && <button type="button" className={button} aria-expanded={createOpen}
-              onClick={() => setCreateOpen((value) => !value)}>新建知识</button>}
+              onClick={() => setCreateOpen(!createOpen)}>新建知识</button>}
           </div>
           {canWrite && createOpen && <div className="space-y-2 border-t border-white/[.06] pt-3">
             <input aria-label="知识标题" value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)}
