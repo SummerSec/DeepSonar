@@ -89,7 +89,7 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const editDraftRef = useRef<EditDraft | null>(null);
   editDraftRef.current = editDraft;
   const keepRebasedDraft = useRef(false);
-  const [editBusy, setEditBusy] = useState(false);
+  const [busyEdits, setBusyEdits] = useState<Record<string, true>>({});
   const [editNotice, setEditNotice] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   // 一次下架对应一张可消费回执：撤销后回执消失，允许再次下架与再次撤销。
@@ -111,12 +111,17 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   }, [selectedId, versionId, projectId]);
 
   const editActive = Boolean(editDraft && editDraft.itemId === selectedId && editDraft.versionId === versionId);
+  // 忙碌按「项目 + 条目」分开：A 在途不显示成 B 的保存中，也不拦 B 的保存。
+  const busyKey = (project: string, itemId: string | null | undefined) => `${project}:${itemId ?? ""}`;
+  const editBusy = Boolean(busyEdits[busyKey(projectId, editDraft?.itemId ?? selectedId)]);
   const draftKey = useMemo(() => generatedLogicalKey(draftTitle, draftSuffix), [draftTitle, draftSuffix]);
   const canUndoArchive = useCallback((itemId: string) => Boolean(archiveReceipts[itemId]), [archiveReceipts]);
 
   const currentProject = useRef(projectId);
   const requestProjectRef = useRef(projectId);
+  const selectedIdRef = useRef(selectedId);
   requestProjectRef.current = projectId;
+  selectedIdRef.current = selectedId;
   currentProject.current = projectId;
   // 提交成功后的处理抽成独立函数：判断草稿是否被继续编辑过、必要时保留草稿并换新标识。
   const settleCreate = useCallback((requestProject: string, snapshot: { title: string; content: string },
@@ -161,11 +166,13 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const editRequest = useRef<{ requestId: number; projectId: string; itemId: string } | null>(null);
   const settleEdit = useCallback((snapshot: EditDraft, requestId: number, result: { version: number; version_ref: string }): void => {
     // 回执只对「这次请求 + 当前项目与条目」生效：切到别的项目/条目后，迟到的成功或失败都不能改当前编辑。
-    if (editRequest.current?.requestId !== requestId) return;
+    const request = editRequest.current;
+    if (request?.requestId !== requestId) return;
     editRequest.current = null;
     editBusyRef.current = false;
-    setEditBusy(false);
-    if (currentProject.current !== requestProjectRef.current) return;
+    setBusyEdits((map) => { const next = { ...map }; delete next[busyKey(request.projectId, request.itemId)]; return next; });
+    // 用「提交时刻」的项目与条目判断回执归属：A 的结果不能改 B 的草稿、提示与选择。
+    if (currentProject.current !== request.projectId || selectedIdRef.current !== request.itemId) return;
     // 同步算出草稿去留：setState 的更新函数是渲染期才执行，不能在里面取结果。
     const next = rebaseEditDraft(editDraftRef.current, snapshot, result);
     const keptDraft = Boolean(next && next !== editDraftRef.current);
@@ -177,27 +184,31 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   }, [onRefresh]);
 
   const editBusyRef = useRef(false);
-  const failEdit = useCallback((requestId: number, projectIdOfRequest: string, error: unknown): void => {
-    if (editRequest.current?.requestId !== requestId) return;
+  const failEdit = useCallback((requestId: number, error: unknown): void => {
+    const request = editRequest.current;
+    if (request?.requestId !== requestId) return;
     editRequest.current = null;
     editBusyRef.current = false;
-    setEditBusy(false);
-    if (currentProject.current !== projectIdOfRequest) return;
+    setBusyEdits((map) => { const next = { ...map }; delete next[busyKey(request.projectId, request.itemId)]; return next; });
+    if (currentProject.current !== request.projectId || selectedIdRef.current !== request.itemId) return;
     setEditError(message(error));
   }, []);
   const submitEdit = useCallback(() => {
-    if (!editDraft || editBusyRef.current) return;
+    if (!editDraft) return;
+    // 在途保护只作用于「同一项目 + 同一条目」的同一份草稿；别的条目/项目可以并行保存。
+    if (editBusyRef.current && editRequest.current
+      && editRequest.current.projectId === projectId && editRequest.current.itemId === editDraft.itemId) return;
     const snapshot = editDraft;
     const requestId = Date.now() + Math.random();
     editRequest.current = { requestId, projectId, itemId: snapshot.itemId };
     editBusyRef.current = true;
-    setEditBusy(true);
+    setBusyEdits((map) => ({ ...map, [busyKey(projectId, snapshot.itemId)]: true }));
     setEditError(null);
     projectKnowledgeApi.revise(projectId, snapshot.itemId, {
       expected_version: snapshot.expectedVersion, title: snapshot.title.trim(), content: snapshot.content,
       ...(snapshot.reason?.trim() ? { reason: snapshot.reason.trim() } : {}),
     }).then((result) => settleEdit(snapshot, requestId, result))
-      .catch((error) => failEdit(requestId, projectId, error))
+      .catch((error) => failEdit(requestId, error))
       .finally(() => { editBusyRef.current = false; });
   }, [projectId, editDraft, settleEdit, failEdit]);
 

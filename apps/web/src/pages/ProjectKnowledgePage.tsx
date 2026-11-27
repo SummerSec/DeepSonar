@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { api, type Project } from "../api";
 import { useAuth } from "../auth";
@@ -88,6 +88,8 @@ export function ProjectKnowledgePage() {
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
   const [nextVersionOffset, setNextVersionOffset] = useState<number | null>(null);
   const [versionId, setVersionId] = useState<string | null>(null);
+  const versionIdRef = useRef<string | null>(null);
+  versionIdRef.current = versionId;
   const [version, setVersion] = useState<KnowledgeVersionDetail | null>(null);
   const [grants, setGrants] = useState<KnowledgeGrant[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -117,16 +119,23 @@ export function ProjectKnowledgePage() {
     setVersion(null);
     setVersions([]);
     projectKnowledgeApi.detail(projectId, selectedId)
-      .then((result) => {
+      .then(async (result) => {
         if (!active) return;
         setDetail(result);
         setVersions(result.versions);
         setNextVersionOffset(result.versions_next_offset);
-        // 刷新时保留用户正在看的历史版本与编辑基准；只有它真的消失了才回落到当前版本。
-        setVersionId((current) => (current && result.versions.some((value) => value.id === current)
-          ? current
-          : result.active_version_id ?? result.versions[0]?.id ?? null));
         setDetailLoading(false);
+        const fallback = result.active_version_id ?? result.versions[0]?.id ?? null;
+        const wanted = versionIdRef.current;
+        if (!wanted) { setVersionId(fallback); return; }
+        // 刷新时保留用户正在看的历史版本与编辑基准：按「精确版本仍可读」判定，
+        // 不能用第一页是否包含它来判断（历史版本可能在分页第二页）。
+        try {
+          await projectKnowledgeApi.version(projectId, selectedId, wanted);
+          setVersionId(wanted);
+        } catch {
+          setVersionId(fallback);
+        }
       })
       .catch((error) => { if (active) { setDetail(null); setDetailError(error instanceof Error ? error.message : String(error)); setDetailLoading(false); } });
     return () => { active = false; };
