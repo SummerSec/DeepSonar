@@ -326,7 +326,7 @@ export function registerProjectKnowledgeRoutes(
       if (!access(req, reply, projectId)) return;
       return await itemDetail(db, projectId, Id.parse(itemId), req.actor)
         ?? reply.code(404).send({ error_code: "KNOWLEDGE_ITEM_NOT_FOUND" });
-    } catch (error) { console.error("[dbg1256d]", error instanceof Error ? error.message : String(error)); return errorReply(reply, error); }
+    } catch (error) { return errorReply(reply, error); }
   });
 
   app.get("/projects/:id/knowledge/:itemId/versions", async (req, reply) => {
