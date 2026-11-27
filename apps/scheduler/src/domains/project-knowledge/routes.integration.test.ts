@@ -649,3 +649,57 @@ test("a non-uuid API token identity can read knowledge without being treated as 
     assert.deepEqual(versions.map((row) => row.created_by), ["legacy-operator"]);
   });
 });
+
+test("legacy schema-79 knowledge rows keep their job author after the schema-80 baseline", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    // 按 schema 79 的形状写入：只给 creator_job_id/creator_attempt_id，不给 80 新增的作者列。
+    const candidate = { kind: "memory", logical_key: "legacy-row", title: "升级前就存在的知识", keywords: [], content: "旧正文" };
+    const bytes = Buffer.from(JSON.stringify(candidate), "utf8");
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    blobs.set(sharedAssetBlobUri(hash), bytes);
+    await db`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri)
+      VALUES(${hash},${bytes.length},'application/json',${sharedAssetBlobUri(hash)})`;
+    const [item] = await db`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title)
+      VALUES(${owner.projectId},'memory','legacy-row','升级前就存在的知识') RETURNING id`;
+    const itemRef = String(item!.id);
+    const [version] = await db`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,
+        creator_job_id,creator_attempt_id,sources_json,governance_hash)
+      VALUES(${owner.projectId},${itemRef},1,${hash},${owner.jobId},${owner.attemptId},'[]'::jsonb,${hash}) RETURNING id`;
+    const versionRef = String(version!.id);
+    await db`UPDATE project_knowledge_items SET active_version_id=${versionRef},status='active' WHERE id=${itemRef}`;
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "5b6c7d8e-9f01-4a2b-8c3d-4e5f6a7b8c9d", name: "upgrader",
+      projectId: owner.projectId, scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    // 升级后旧版本仍按 Job 作者读出，ID/哈希/来源引用不变。
+    const exact = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions/${versionRef}` });
+    assert.equal(exact.statusCode, 200, exact.body);
+    const row = exact.json() as Record<string, unknown>;
+    assert.equal(row.id, versionRef);
+    assert.equal(row.content_sha256, hash);
+    assert.equal(row.created_by_type, "job");
+    assert.equal(row.created_by, null);
+    assert.equal(row.creator_job_id, owner.jobId);
+    // 再写一次人工修订：旧历史不变，新版本可读。
+    const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "升级前就存在的知识", content: "升级后的人工修订" } });
+    assert.equal(revised.statusCode, 201, revised.body);
+    const detail = await app.inject({ method: "GET", url: `${base}/${itemRef}` });
+    assert.equal(detail.statusCode, 200, detail.body);
+    const versions = (detail.json() as { versions: Array<Record<string, unknown>> }).versions;
+    assert.deepEqual(versions.map((value) => [value.version, value.created_by_type]), [[2, "human"], [1, "job"]]);
+    assert.equal(versions[1]?.id, versionRef);
+    assert.equal(versions[1]?.creator_job_id, owner.jobId);
+  });
+});

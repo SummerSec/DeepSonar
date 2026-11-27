@@ -189,6 +189,7 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 - 恢复：只对用户下架的条目生效；评测淘汰（`stale`/评测 `retired`）与安全撤回（`revoked`）不可通过恢复绕过，返回 `KNOWLEDGE_RESTORE_DENIED`。
 - 作者来源：人类写入的版本用 `created_by_type='human'` 与 `created_by` 记录作者，可选 `reason` 随版本保存为 `revision_reason`；条目详情、分页版本列表与精确版本三处返回同一组作者字段（Job 写入的版本仍带 `creator_job_id/creator_attempt_id`），不再伪造 Job/Attempt；Job 写入的版本仍是 `created_by_type='job'` 并保留 `creator_job_id/creator_attempt_id`（schema 80）。
 - 权限与可见性沿用既有规则：来源授权、受限版本剔除、分页前过滤都不因人类写入而放宽；Web 页面渲染是人类维护的后续切片。
+- 升级：schema 80 只把版本的 `creator_job_id/creator_attempt_id` 改为可空并新增作者与修订原因列，历史版本按默认 `created_by_type=job` 保留原 Job/Attempt 作者；非空库不会自动升级，必须按既有受控重建流程迁移。
 
 ## 验证与运维
 
