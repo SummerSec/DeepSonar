@@ -182,9 +182,9 @@ if (!testDatabaseUrl) {
       assert.equal(failed.status, "failed");
       assert.match(failed.error ?? "", /anchor compare unavailable/);
       const afterFail = await sql`SELECT id, verify_status, severity FROM findings WHERE project_id = ${projectId} ORDER BY created_at`;
-      assert.equal(afterFail.length, 4);
+      assert.equal(afterFail.length, 5);
       assert.ok(afterFail.some((row) => row.id === lateId));
-      assert.deepEqual(afterFail.map((row) => row.verify_status), ["pending", "pending", "pending", "pending"]);
+      assert.deepEqual(afterFail.map((row) => row.verify_status), ["pending", "pending", "pending", "pending", "pending"]);
       const lateResearch = await sql`SELECT finding_id FROM finding_research WHERE finding_id = ${lateId}`;
       assert.equal(lateResearch.length, 0, "failed compare must not drop or auto-cluster the candidate");
       const failedRuns = await sql`SELECT status, error FROM finding_research_runs WHERE canvas_id = ${canvasId} AND status = 'failed'`;
