@@ -6,6 +6,7 @@ import type { Actor } from "../../auth.js";
 import { setSharedAssetBlobStoreForTests, sharedAssetBlobUri, type BlobStore } from "../../blob-store/index.js";
 import { registerProjectKnowledgeRoutes } from "./routes.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./test-support.js";
+import { intersectColumns } from "../../schema-rebuild.js";
 
 if (!process.env.TEST_DATABASE_URL) throw new Error("TEST_DATABASE_URL is required for knowledge route integration");
 
@@ -367,5 +368,361 @@ test("#1286 无 tasks:read 的读者看不到受限版本的来源字段，也�
     const allowedDetail = await app.inject({ method: "GET", url: base });
     assert.equal(allowedDetail.statusCode, 200);
     assert.ok(Array.isArray((allowedDetail.json().versions[0] as Record<string, unknown>).sources_json));
+  });
+});
+
+test("human maintenance creates, revises, archives and restores knowledge with an author", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    // 人类写入也要经 CAS：给这条用例装一个内存 blob store，否则写入阶段拿不到共享资产存储。
+    const humanBlobs = new Map<string, Buffer>();
+    const humanStore: BlobStore = {
+      kind: "fs", put: async (key, value) => { humanBlobs.set(key, value); },
+      get: async (key) => { const value = humanBlobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => humanBlobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(humanStore);
+    const app = Fastify();
+    const authorId = "3f1d2c4b-5a69-4e78-9b01-2c3d4e5f6a7b";
+    const actor: Actor = { type: "api_token", id: authorId, name: "maintainer-a", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "human-hosted", title: "人类维护的知识", content: "第一条人工沉淀内容" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const duplicate = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "human-hosted", title: "人类维护的知识", content: "重复标识" } });
+    assert.equal(duplicate.statusCode, 409, duplicate.body);
+    assert.equal(duplicate.json().error_code, "KNOWLEDGE_BASE_CONFLICT");
+    const stale = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 9, title: "人类维护的知识", content: "基于过期版本编辑" } });
+    assert.equal(stale.statusCode, 409, stale.body);
+    assert.equal(stale.json().error_code, "KNOWLEDGE_VERSION_CONFLICT");
+    const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "人类维护的知识（修订）", content: "第二条人工沉淀内容（修订后）",
+      reason: "改了正文的一处错别字" } });
+    assert.equal(revised.statusCode, 201, revised.body);
+    assert.equal((revised.json() as { version: number }).version, 2);
+    const revisedVersionRef = (revised.json() as { version_ref: string }).version_ref;
+    // 三处读接口返回同一组作者字段与可选修订原因。
+    const detailRes = await app.inject({ method: "GET", url: `${base}/${itemRef}` });
+    assert.equal(detailRes.statusCode, 200, detailRes.body);
+    const detailVersions = (detailRes.json() as { versions: Array<Record<string, unknown>> }).versions;
+    assert.deepEqual(detailVersions.map((row) => [row.created_by_type, row.created_by]),
+      [["human", authorId], ["human", authorId]]);
+    assert.equal(detailVersions[0]?.revision_reason, "改了正文的一处错别字");
+    const pagedRes = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions?limit=10` });
+    assert.equal(pagedRes.statusCode, 200, pagedRes.body);
+    const paged = (pagedRes.json() as { items: Array<Record<string, unknown>> }).items;
+    assert.deepEqual(paged.map((row) => row.created_by_type), ["human", "human"]);
+    assert.equal(paged[0]?.revision_reason, "改了正文的一处错别字");
+    const exactRes = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions/${revisedVersionRef}` });
+    assert.equal(exactRes.statusCode, 200, exactRes.body);
+    const exact = exactRes.json() as Record<string, unknown>;
+    assert.equal(exact.created_by_type, "human");
+    assert.equal(exact.created_by, authorId);
+    assert.equal(exact.revision_reason, "改了正文的一处错别字");
+    const authors = await db`SELECT created_by_type, created_by FROM project_knowledge_versions
+      WHERE item_id=${itemRef} ORDER BY version`;
+    assert.deepEqual(authors.map((row) => [row.created_by_type, row.created_by]), [["human", authorId], ["human", authorId]]);
+    const archived = await app.inject({ method: "POST", url: `${base}/${itemRef}/archive`, payload: {} });
+    assert.equal(archived.statusCode, 200, archived.body);
+    const [archivedRow] = await db`SELECT status, retired_reason FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.equal(archivedRow!.status, "retired");
+    assert.equal(archivedRow!.retired_reason, "archived_by_user");
+    const restored = await app.inject({ method: "POST", url: `${base}/${itemRef}/restore`, payload: {} });
+    assert.equal(restored.statusCode, 200, restored.body);
+    const [restoredRow] = await db`SELECT status FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.equal(restoredRow!.status, "active");
+  });
+});
+
+test("editing only the body keeps the base version keywords unless an explicit empty list clears them", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>([[sharedAssetBlobUri("0".repeat(64)), Buffer.from("{}")]]);
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-2", name: "maintainer-b", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "keep-keywords", title: "带关键词的知识",
+      keywords: ["巡检", "日志"], content: "第一版正文" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "带关键词的知识", content: "只改正文的第二版" } });
+    assert.equal(revised.statusCode, 201, revised.body);
+    const [kept] = await db`SELECT keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.deepEqual(kept!.keywords_json, ["巡检", "日志"], "只改正文不得清空原有关键词");
+    const cleared = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 2, title: "带关键词的知识", keywords: [], content: "显式清空关键词" } });
+    assert.equal(cleared.statusCode, 201, cleared.body);
+    const [emptied] = await db`SELECT keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.deepEqual(emptied!.keywords_json, [], "显式空数组才清空关键词");
+  });
+});
+
+test("an unreadable base version blocks the edit instead of clearing the keywords", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-3", name: "maintainer-c", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "unreadable-base", title: "基准不可读的知识", keywords: ["巡检"], content: "第一版" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const versionRef = (created.json() as { version_ref: string }).version_ref;
+    // 让基准版本不可读：撤销版本但条目仍处于 active（真实撤销路径也会这样写 items）。
+    await db`UPDATE project_knowledge_versions SET revoked_at=now(), revoked_reason='security' WHERE id=${versionRef}`;
+    const before = await db`SELECT status, keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "基准不可读的知识", content: "不该写进去的第二版" } });
+    assert.equal(revised.statusCode, 409, revised.body);
+    assert.match(revised.json().error_code, /KNOWLEDGE_(REVOKED|SOURCE_MISSING)/u);
+    const after = await db`SELECT status, keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.deepEqual(after[0]!.keywords_json, before[0]!.keywords_json, "读取失败不得清空关键词");
+    assert.equal(after[0]!.status, before[0]!.status, "读取失败不得改动条目状态");
+    const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${itemRef}`;
+    assert.equal(versions[0]!.total, 1, "读取失败不得写入新版本");
+  });
+});
+
+test("a late edit cannot re-activate a knowledge item that was archived while its body was being stored", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const gate: { release?: () => void } = {};
+    let started: (() => void) | null = null;
+    let paused = false;
+    const store: BlobStore = {
+      kind: "fs",
+      put: async (key, value) => {
+        if (paused) { started?.(); await new Promise<void>((resolve) => { gate.release = resolve; }); }
+        blobs.set(key, value);
+      },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-4", name: "maintainer-d", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "slow-body", title: "存储很慢的知识", content: "第一版正文" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const versionRef = (created.json() as { version_ref: string }).version_ref;
+    // 让编辑卡在正文存储阶段（此时它不持有条目锁），期间把条目下架。
+    paused = true;
+    const storing = new Promise<void>((resolve) => { started = resolve; });
+    const editing = app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "存储很慢的知识", content: "迟到的第二版正文" } });
+    await storing;
+    const archived = await app.inject({ method: "POST", url: `${base}/${itemRef}/archive`, payload: {} });
+    assert.equal(archived.statusCode, 200, archived.body);
+    gate.release?.();
+    const late = await editing;
+    assert.equal(late.statusCode, 409, late.body);
+    assert.equal(late.json().error_code, "KNOWLEDGE_ITEM_ARCHIVED", "迟到的编辑必须被下架状态拒绝");
+    const [row] = await db`SELECT status, active_version_id, keywords_json FROM project_knowledge_items WHERE id=${itemRef}`;
+    assert.equal(row!.status, "retired", "迟到的编辑不得让条目重新生效");
+    assert.equal(String(row!.active_version_id), versionRef, "生效版本必须仍是下架前那一版");
+    const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${itemRef}`;
+    assert.equal(versions[0]!.total, 1, "迟到的编辑不得写入新版本");
+  });
+});
+
+test("revoke and edit are exercised in both explicit commit orders", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const gate: { release?: () => void } = {};
+    let started: (() => void) | null = null;
+    let paused = false;
+    const store: BlobStore = {
+      kind: "fs",
+      put: async (key, value) => {
+        if (paused) { started?.(); await new Promise<void>((resolve) => { gate.release = resolve; }); }
+        blobs.set(key, value);
+      },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-6", name: "maintainer-f", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const seed = async (key: string) => {
+      const created = await app.inject({ method: "POST", url: base, payload: {
+        kind: "memory", logical_key: key, title: "顺序用例知识", keywords: ["顺序"], content: "第一版正文" } });
+      assert.equal(created.statusCode, 201, created.body);
+      return created.json() as { item_ref: string; version_ref: string };
+    };
+    // 顺序 A：撤回先提交。暂停编辑的正文写入（此时编辑不持有行锁），先撤回 v1，再放行编辑。
+    const first = await seed("revoke-then-edit");
+    paused = true;
+    const storing = new Promise<void>((resolve) => { started = resolve; });
+    const editing = app.inject({ method: "POST", url: `${base}/${first.item_ref}/versions`, payload: {
+      expected_version: 1, title: "顺序用例知识", content: "撤回先提交时的编辑" } });
+    await storing;
+    const revokedFirst = await app.inject({ method: "POST", url: `${base}/${first.item_ref}/versions/${first.version_ref}/revoke`, payload: { reason: "先撤回" } });
+    assert.equal(revokedFirst.statusCode, 200, revokedFirst.body);
+    paused = false; gate.release?.();
+    const lateEdit = await editing;
+    assert.equal(lateEdit.statusCode, 409, lateEdit.body);
+    assert.equal(lateEdit.json().error_code, "KNOWLEDGE_REVOKED");
+    const afterRevoke = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${first.item_ref}`;
+    assert.equal(afterRevoke[0]!.total, 1, "撤回先提交时编辑不得发布新版本");
+    // 顺序 B：编辑先提交。编辑成功生成 v2，再撤回 v1——撤回只动 v1，不影响指向 v2 的条目。
+    const second = await seed("edit-then-revoke");
+    const editedFirst = await app.inject({ method: "POST", url: `${base}/${second.item_ref}/versions`, payload: {
+      expected_version: 1, title: "顺序用例知识", content: "编辑先提交的正文" } });
+    assert.equal(editedFirst.statusCode, 201, editedFirst.body);
+    const editedVersion = (editedFirst.json() as { version_ref: string }).version_ref;
+    const revokedSecond = await app.inject({ method: "POST", url: `${base}/${second.item_ref}/versions/${second.version_ref}/revoke`, payload: { reason: "编辑之后再撤回旧版" } });
+    assert.equal(revokedSecond.statusCode, 200, revokedSecond.body);
+    const [row] = await db`SELECT status, active_version_id FROM project_knowledge_items WHERE id=${second.item_ref}`;
+    assert.equal(String(row!.active_version_id), editedVersion, "撤回旧版不得把条目指回旧版本");
+    assert.equal(row!.status, "active", "编辑先提交时条目保持生效");
+    const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${second.item_ref}`;
+    assert.equal(versions[0]!.total, 2, "编辑先提交时两个版本都在");
+  });
+});
+
+test("a non-uuid API token identity can read knowledge without being treated as a Job", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "legacy-operator", name: "legacy", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const created = await app.inject({ method: "POST", url: base, payload: {
+      kind: "memory", logical_key: "legacy-token", title: "旧标识创建的知识", content: "正文" } });
+    assert.equal(created.statusCode, 201, created.body);
+    const itemRef = (created.json() as { item_ref: string }).item_ref;
+    const detail = await app.inject({ method: "GET", url: `${base}/${itemRef}` });
+    assert.equal(detail.statusCode, 200, detail.body);
+    const versions = (detail.json() as { versions: Array<Record<string, unknown>> }).versions;
+    assert.deepEqual(versions.map((row) => row.created_by), ["legacy-operator"]);
+  });
+});
+
+test("schema-80 defaults keep a job author for rows written without the new author columns", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    // 受控重建按列交集拷列：79 形状的版本行没有 80 新增列，拷进 80 后由默认值补成 job 作者。
+    const legacyColumns = ["id", "project_id", "item_id", "version", "content_sha256", "creator_job_id",
+      "creator_attempt_id", "sources_json", "governance_hash", "revoked_at", "revoked_reason", "created_at"];
+    const targetColumns = [...legacyColumns, "created_by_type", "created_by", "revision_reason"];
+    assert.deepEqual(intersectColumns(legacyColumns, targetColumns), [...legacyColumns].sort((a, b) => a.localeCompare(b)),
+      "重建只拷 79 已有的列，80 新增列由默认值补齐");
+    // 按 schema 79 的形状写入：只给 creator_job_id/creator_attempt_id，不给 80 新增的作者列。
+    const candidate = { kind: "memory", logical_key: "legacy-row", title: "升级前就存在的知识", keywords: [], content: "旧正文" };
+    const bytes = Buffer.from(JSON.stringify(candidate), "utf8");
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    blobs.set(sharedAssetBlobUri(hash), bytes);
+    await db`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri)
+      VALUES(${hash},${bytes.length},'application/json',${sharedAssetBlobUri(hash)})`;
+    const [item] = await db`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title)
+      VALUES(${owner.projectId},'memory','legacy-row','升级前就存在的知识') RETURNING id`;
+    const itemRef = String(item!.id);
+    const [version] = await db`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,
+        creator_job_id,creator_attempt_id,sources_json,governance_hash)
+      VALUES(${owner.projectId},${itemRef},1,${hash},${owner.jobId},${owner.attemptId},'[]'::jsonb,${hash}) RETURNING id`;
+    const versionRef = String(version!.id);
+    await db`UPDATE project_knowledge_items SET active_version_id=${versionRef},status='active' WHERE id=${itemRef}`;
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "5b6c7d8e-9f01-4a2b-8c3d-4e5f6a7b8c9d", name: "upgrader",
+      projectId: owner.projectId, scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    // 升级后旧版本仍按 Job 作者读出，ID/哈希/来源引用不变。
+    const exact = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions/${versionRef}` });
+    assert.equal(exact.statusCode, 200, exact.body);
+    const row = exact.json() as Record<string, unknown>;
+    assert.equal(row.id, versionRef);
+    assert.equal(row.content_sha256, hash);
+    assert.equal(row.created_by_type, "job");
+    assert.equal(row.created_by, null);
+    // 不持 tasks:read 的读者看不到 creator_job_id/creator_attempt_id，作者列仍可读；原值回库核对。
+    assert.equal(row.creator_job_id, undefined);
+    const [stored] = await db`SELECT creator_job_id, creator_attempt_id, created_by_type, created_by
+      FROM project_knowledge_versions WHERE id=${versionRef}`;
+    assert.equal(stored!.creator_job_id, owner.jobId);
+    assert.equal(stored!.creator_attempt_id, owner.attemptId);
+    assert.equal(stored!.created_by_type, "job");
+    assert.equal(stored!.created_by, null);
+    // 再写一次人工修订：旧历史不变，新版本可读。
+    const revised = await app.inject({ method: "POST", url: `${base}/${itemRef}/versions`, payload: {
+      expected_version: 1, title: "升级前就存在的知识", content: "升级后的人工修订" } });
+    assert.equal(revised.statusCode, 201, revised.body);
+    const detail = await app.inject({ method: "GET", url: `${base}/${itemRef}` });
+    assert.equal(detail.statusCode, 200, detail.body);
+    const versions = (detail.json() as { versions: Array<Record<string, unknown>> }).versions;
+    assert.deepEqual(versions.map((value) => [value.version, value.created_by_type]), [[2, "human"], [1, "job"]]);
+    assert.equal(versions[1]?.id, versionRef);
+    assert.equal(versions[1]?.created_by_type, "job");
+    assert.equal(versions[1]?.creator_job_id, undefined, "projects:read 身份看不到 Job 标识（既有脱敏）");
+    // 同一份数据换成带 tasks:read 的读者：能读到原 Job/Attempt 作者，且不做别的放宽。
+    actor.scopes = ["projects:read", "projects:write", "tasks:read"];
+    const privileged = await app.inject({ method: "GET", url: `${base}/${itemRef}/versions/${versionRef}` });
+    assert.equal(privileged.statusCode, 200, privileged.body);
+    const privilegedRow = privileged.json() as Record<string, unknown>;
+    assert.equal(privilegedRow.creator_job_id, owner.jobId);
+    assert.equal(privilegedRow.creator_attempt_id, owner.attemptId);
+    actor.scopes = ["projects:read", "projects:write"];
   });
 });

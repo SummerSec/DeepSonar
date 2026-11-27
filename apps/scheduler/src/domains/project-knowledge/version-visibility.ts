@@ -14,9 +14,13 @@ export async function readableVersionKeysJson(db: KnowledgeDb, actor: Actor | un
   // 能读原始资料的人沿用其既有 scope，不必再持有治理 Job 的冻结清单。
   if (actor && actorHasScope(actor, "tasks:read")) return "*";
   const keys: string[] = [];
-  if (actor) {
+  // 人类/操作员的 actor.id 不是 UUID（例如 API Token 的稳定标识），
+  // 直接绑定到 uuid 列会报 invalid input syntax；这类读者本来就没有治理 Job 清单。
+  const actorJobId = actor && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(actor.id ?? "")
+    ? actor.id : null;
+  if (actorJobId) {
     const rows = await db`SELECT stage, input_manifest_json FROM project_knowledge_job_assignments
-      WHERE job_id=${actor.id} AND project_id=${projectId}`;
+      WHERE job_id=${actorJobId} AND project_id=${projectId}`;
     for (const row of rows) {
       const stage = String(row.stage);
       const manifest = Array.isArray(row.input_manifest_json) ? row.input_manifest_json : [];

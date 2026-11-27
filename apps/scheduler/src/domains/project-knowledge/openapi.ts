@@ -35,4 +35,32 @@ export const KNOWLEDGE_MANAGEMENT_OPERATIONS: Op[] = [
   }),
   post(prefix + "/grants/{grantId}/revoke", "不可逆撤销精确授权；新授权不复活旧 Job", reason),
   post(version + "/revoke", "不可逆撤销知识版本并保留历史记录", reason),
+  post(prefix, "项目操作员新建人类维护的知识条目（记忆正文或已验证的 Skill 文件包），直接生效并记录作者", {
+    type: "object", additionalProperties: false, required: ["kind", "logical_key", "title"],
+    properties: {
+      kind: { type: "string", enum: ["memory", "skill"] },
+      logical_key: { type: "string", minLength: 1, maxLength: 160, pattern: "^[a-zA-Z0-9][a-zA-Z0-9._/-]*$" },
+      title: { type: "string", minLength: 1, maxLength: 200 },
+      keywords: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 80 } },
+      content: { type: "string", maxLength: 12288 },
+      files: { type: "object", description: "Skill 文件包；与 content 互斥" },
+    },
+  }),
+  post(prefix + "/{itemId}/versions", "按 expected_version 编辑人类维护的知识，生成新版本并保留历史", {
+    type: "object", additionalProperties: false, required: ["expected_version", "title"],
+    properties: {
+      expected_version: { type: "integer", minimum: 1 },
+      title: { type: "string", minLength: 1, maxLength: 200 },
+      keywords: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 80 } },
+      content: { type: "string", maxLength: 12288 },
+      files: { type: "object", description: "Skill 文件包；与 content 互斥" },
+      reason: { type: "string", minLength: 1, maxLength: 2000, description: "可选的修订原因；与这一版一起保留" },
+    },
+  }),
+  post(prefix + "/{itemId}/archive", "项目操作员下架知识（retired + archived_by_user），不删除历史版本", {
+    type: "object", additionalProperties: false, properties: {},
+  }),
+  post(prefix + "/{itemId}/restore", "只恢复被用户下架的条目；评测淘汰与撤回不可恢复", {
+    type: "object", additionalProperties: false, properties: {},
+  }),
 ];

@@ -1,5 +1,8 @@
 # DeepSonar 文档索引
 
+- 2026-11-26：项目知识补齐人类维护入口（#1256）——操作员可直接新建/编辑/下架/恢复条目，人类版本用 `created_by_type=human` 记录作者，评测淘汰与安全撤回不可恢复；详见 [项目知识](./PROJECT_KNOWLEDGE.md#人类维护入口12562026-11-26)。schema 80 只把版本的 `creator_job_id/creator_attempt_id` 改成可空并新增作者列，非空库仍需受控重建。
+
+
 业务 Job 终态不再自动登记知识来源（[#1219 第四阶段第二步](PROJECT_KNOWLEDGE.md#自动来源登记的退役1219-第四阶段第二步2026-11-25)）：新路径（任务收尾入库、用后必评、知识卡片与反馈明细）已经可用，旧采集链不再有新来源，采集与唤醒代码留待第三步整体删除。
 
 本轮修复 `/gateway/_allowance` 的等待放大：该端点只做额度咨询，却拿了 1–2 个 jobs 行锁并整行读取 ~440KB 冻结快照，实测 P95 23–27s，超过客户端 15s 超时，导致 30.5% 的 Job 在首个模型请求前失败。现在查询改为无锁只读，入口只投影 provider binding 与预算用到的快照键（客户端 15s 超时不变，准入仍在锁内重新核准）；`jobs` 快照瘦身与 allowance 指标是后续独立项（[预算与 OM 迁移](MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)、[安全边界](architecture/10-security-and-trust-boundaries.md)）。同步日期：2026-11-25。
