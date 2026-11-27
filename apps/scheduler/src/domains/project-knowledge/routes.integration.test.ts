@@ -407,6 +407,7 @@ test("human maintenance creates, revises, archives and restores knowledge with a
     assert.equal((revised.json() as { version: number }).version, 2);
     const revisedVersionRef = (revised.json() as { version_ref: string }).version_ref;
     // 三处读接口返回同一组作者字段与可选修订原因。
+    console.error("[dbg] create", created.statusCode, created.body, "itemRef", itemRef, "revised", revised.body);
     const detailRes = await app.inject({ method: "GET", url: `${base}/${itemRef}` });
     assert.equal(detailRes.statusCode, 200, detailRes.body);
     const detailVersions = (detailRes.json() as { versions: Array<Record<string, unknown>> }).versions;
