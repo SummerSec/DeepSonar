@@ -4,7 +4,7 @@
 > **同步日期**：2026-11-27
 > **事实入口**：本文为架构执行摘要；详细规格与专题按 [架构归属表](docs/architecture/README.md) 定位，专题状态见 [`docs/README.md`](docs/README.md)，长期 AI-native 演进方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。实现事实以代码、[`database/schema.sql`](database/schema.sql)、OpenAPI 和测试为准；规范违约记录为缺陷，不改写规范迎合 bug。
 >
-> **质量验收与范围边界（2026-11-01 范围决定）**：按 [`AGENTS.md#豁免范围`](AGENTS.md#豁免范围)，独立人工质量标注、问题家族/资产隔离调参与留出集、后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议暂缓，不作为本阶段 PR 合并、工程 Issue 收口或发布前置条件；工程验收以最终 SHA 在 GitHub Actions 的全部适用检查实际全绿为准。质量效果如实保持 `unknown` / `not_evaluated`，强关系保持 `published=false`；**工程完成不等于质量通过**。
+> **质量验收与历史范围边界**：常规开发按 [`AGENTS.md#豁免范围`](AGENTS.md#豁免范围)不要求生产部署与真实模型试验，但非模型质量验收原则上不豁免。2026-11-01/02 的独立标注、留出集、后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系暂缓决定仅限 **v0.6.3 / v0.6.4** 历史发布窗口，不作为后续 PR/发布的长期豁免。工程验收以最终 SHA 在 GitHub Actions 的全部适用检查实际全绿为准；质量效果如实保持 `unknown` / `not_evaluated`，强关系保持 `published=false`，**工程完成不等于质量通过**。
 
 ---
 
@@ -118,9 +118,9 @@ Canvas  1 ── * task reports / finding research runs / dedupe clusters
 - **Capability Pack（`deepsonar.capability-pack/v1`）**：定义于 [`packages/shared-types/src/capability-pack.ts`](packages/shared-types/src/capability-pack.ts)，声明 `id`/版本/scope/不可变 `sha256`、输入输出 schema、`platform_tools`、出网、预算、`correctable`/replay 策略与可选 evaluator。已落地只读目录投影与 Job 级发现操作（`list_capabilities` / `search_capabilities` / `describe_capability` / `validate_composition` / `preview_materialization`）；`deepsonar-management` 亦可被发现。**发现不是授权**，模型不得借 Manifest 或 `pull_skill` 扩大工具、凭据、镜像、`allow_egress` 或项目范围。task/session Pack 持久化生命周期、评估晋升与跨任务推荐尚未落地。
 - **Language Server 模块（`deepsonar.language-server-capability/v1`）**：首期登记 `language-server.clangd`，经 Hub `language_server_capability_id` 提案并由 Scheduler 校验镜像与 `compile_commands.json` 前置后冻结进快照；受控有界适配器位于 `agent-harness/language-server-adapter.mjs`。禁止 Agent 任务内安装或静默回退 raw `clangd`，不可用返回 `capability_unavailable`。
 - **General CLI 模块（`deepsonar.cli-capability/v1`，#611 / #718）**：登记 `rg`/`jq`/`git`/`file`/`sha256sum`/`timeout`/`archive.extract` 等基础工具（`fd`/`yq`/`patch.diff` 默认不可用），以及 `deepsonar-reverse` 专属的 `binary.rea.cli`（钉死 REA CLI + Ghidra，CLI-only，见 [REA 专题](docs/REA_CLI_CAPABILITIES.md)）。Hub 通过 `cli_capability_ids` 提案，Scheduler 准入冻结；CLI 输出固定 `is_finding: false`，仅作 Evidence/Fact 输入。
-- **项目知识 Memory / Skill（#752 / #777 / #778 / #903 / #1197 / ADR 0024）**：
+- **项目知识 Memory / Skill（#752 / #777 / #778 / #903 / #1197 / #1219 / #1283 / ADR 0024）**：
   - 项目 Memory 与 Skill 具有不可变版本、独立 6×2 试验/审查与持久 receipt/work；项目 Skill 默认私有，来源项目仅可授权指定精确版本（不含来源 Memory/Evidence 或未来版本）。Job 冻结目录与实时撤销取交集，禁用后重启用不恢复旧 Job 权限。
-  - **自动积累与会话收尾**：成功任务终态登记知识来源元数据，Dispatcher 按 [ADR 0024](docs/architecture/adr/0024-project-knowledge-batching-admission.md) 在项目行锁内按积累量/等待时长/冷却间隔与连续空产出停发门控触发自动整理；`record_knowledge_feedback` 仅记录持久反馈（`{usage_ref, state:"recorded"}`）。授权业务 Agent 亦可在原 Job 会话收尾提交有证据的 Memory/Skill 建议，由有写权限操作者在画布末尾节点择一送独立评测（[#1197](docs/PROJECT_KNOWLEDGE.md#任务会话收尾1197)）。
+  - **显式沉淀与旧自动登记退役（#1197 / #1219 / #1283）**：自 [#1283](https://github.com/SummerSec/DeepSonar/pull/1283)（#1219 第四阶段第二步）起，**业务 Job 终态已停止自动登记知识来源**，不再向旧采集链产生新的 `project_knowledge_work`。当前普通知识通过任务会话收尾显式沉淀（授权业务 Agent 提交有证据的 Memory/Skill 建议，Memory 直接入库供后续任务按冻结目录检索，Skill 候选留在画布末尾节点由有写权限操作者择一送独立评测，见 [#1197](docs/PROJECT_KNOWLEDGE.md#任务会话收尾1197)）与用后必评（`record_knowledge_feedback` 仅记录持久反馈 `{usage_ref, state:"recorded"}`）流转。旧的批量整理与唤醒链（[ADR 0024](docs/architecture/adr/0024-project-knowledge-batching-admission.md)）**仅继续收尾切换前已登记的存量来源与在途 work**，待确认无消费方后按 #1219 第四阶段第三步整体移除（详见[自动来源登记的退役](docs/PROJECT_KNOWLEDGE.md#自动来源登记的退役1219-第四阶段第二步2026-11-25)）。
   - **条件建议与离线工具**：`suggest_project_skills` / `record_skill_choice` 提供当前项目 Skill 精确版本条件匹配与选择声明（[Skill 建议专题](docs/SKILL_SUGGESTIONS.md)）；离线能力证据审计见 [`agent-harness/capability-evidence/README.md`](agent-harness/capability-evidence/README.md)，离线适用 preflight 见 [`agent-harness/capability-applicability/README.md`](agent-harness/capability-applicability/README.md)，独立研究协议见 [`agent-harness/knowledge-live/STUDY.md`](agent-harness/knowledge-live/STUDY.md)。真实模型知识收益仍为 `unknown` / 未实测。详见 [PROJECT_KNOWLEDGE.md](docs/PROJECT_KNOWLEDGE.md)（含 [拒绝反馈切片](docs/PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)）。
 
 ### 4.1.3 Agent Runtime Profile（#613）与 Pi 会话观测记忆（#815）
@@ -326,7 +326,7 @@ pending → claimed → provisioning → running → succeeded
 | Capability Pack（#447/#603/#611） | Manifest、Job 级发现、Skill 源候选审批、LSP/CLI 模块与快照冻结已落地 | live catalog 漂移门禁、task/session Pack 生命周期、评估晋升与推荐 |
 | Pi 会话观测记忆（#815） | 受审 wrapper、独立 workload 凭据、Gateway 归因/额度与脱敏预览已合入主线 | 真实模型质量与成本收益 `unknown` |
 | Plan v2（#443/#775） | 用户 objective CAS、lifetime 预算、多轮推进、留存输出核验与 Reaper 非成功出口已落地 | 模型规划收益 `unknown`；完成仍独立受操作员判据门控 |
-| 项目知识（#752/#1197/ADR 0024） | 不可变版本、6×2 独立试验、条件建议、自动积累门控与会话收尾沉淀已落地 | 真实模型闭环与知识复用收益未实测（`unknown`） |
+| 项目知识（#752/#1197/#1219/#1283） | 不可变版本、6×2 独立试验、条件建议、任务收尾显式沉淀（Memory 直接入库、Skill 保留送评）与用后必评已落地；#1283 已停止业务任务终态自动登记新来源，旧批量整理链仅收尾存量在途 work | 推进 #1219 第四阶段第三步移除旧采集/唤醒代码与 `backfill` 路由；真实模型闭环与知识复用收益未实测（`unknown`） |
 | Finding Research（#448/#770/#819） | 语义聚类、来源身份、项目筛选、可重建特征、词法候选与操作员身份/关系账本已落地 | 独立人工标注/留出质量门、Host 外部证据证书、CAS 晋升与公开强关系暂缓（`published=false`） |
 | Quality / Replay（#445/#580） | 只读指标与 Hub replay 基线已落地；人工标签为质量真值 | Experience、成本感知计划与冻结基线对比 |
 | 任务与报告工作台（#449/#561） | 六视图工作台、「风险与报告」统一台、恢复面板与重试前检已落地 | 研究地图增强、统一详情抽屉、服务端 overview 聚合 |
