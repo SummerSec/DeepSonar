@@ -1,8 +1,10 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；最新正式版 v0.6.27，于 2026-11-26 正式发布（release run 45882241100）；既有 tag 与镜像保持不可变**。
-> 同步日期：2026-11-26
+> 状态：**运维 as-built；最新正式版 v0.6.28，于 2026-11-27 正式发布（release run 46030174352）；既有 tag 与镜像保持不可变**。
+> 同步日期：2026-11-27
 >
+>
+> **v0.6.28 发布结果（2026-11-27）**。候选 base 为 v0.6.27 之后的 main，compare 为 `v0.6.27...v0.6.28`。注释 tag 对象解引用到提交 `42a03aee`；发布准备为纯文档 PR #1300，因此按流程在 `42a03aee` 上手动分发五条门禁并全部成功：ci `46026828198`、chrome-runtime `46026838267`、mobile-runtime `46026848472`、openharmony-runtime `46026860027`、reverse-runtime `46026870036`。Release 工作流 `46030174352` 第一次尝试在 assets-helper 镜像的「登录阿里云 ACR」步骤因 `dockerauth.cn-hangzhou.aliyuncs.com` 连接被重置而失败（同 SHA 的网络类故障，不是代码问题），`gh run rerun --failed` 启动第二次尝试后全部成功；GitHub Release 于 2026-11-27T17:47:34Z 发布，附件 5 个（management-skill、reverse-evidence、platform-signature-evidence、两份 runtime-image-registry JSON）。schema 由 79 升到 80（知识人类维护入口：`retired_reason`、作者列可空 + `created_by_type`/`created_by`/`revision_reason`），**非空库必须按 runbook 受控重建**，不会自动升级；#1292 已用 v0.6.27 的真实 schema 79 基线 + 真实 `rebuildSchemaOnReservedSession` 演练覆盖升级路径。平台 digest：scheduler `sha256:931f2bec…` 一类平台镜像与 base `sha256:1c8151cd…`、audit `sha256:c15bf34f…`、kali-minimal `sha256:ab4bad25…` 均由发布产物 `runtime-image-registry.json` 记录，三个通道 `github`/`dockerhub`/`aliyun-acr` 的 `inspect_digest` 与 manifest digest 一致（`build-push+inspect` / `cross-registry-copy+inspect`）。清单回写为 PR #1301（`bot/sync-runtime-registry-v0.6.28`），合并后 `deploy/.env.example` 与 `deploy/runtime-image-registry.json` 均为 0.6.28。
 >
 > **v0.6.27 发布结果（2026-11-26）**。候选 base 为 v0.6.26 之后的 main，compare 为 `v0.6.26...v0.6.27`。注释 tag 对象 `cadaf180` 解引用到提交 `c708e5fd`；发布准备为纯文档 PR #1289，因此按流程在 `c708e5fd` 上手动分发五条门禁并全部成功：ci `45879606944`、chrome-runtime `45879611599`、mobile-runtime `45879616401`、openharmony-runtime `45879621498`、reverse-runtime `45879625705`。Release 工作流 `45882241100` 一次成功，GitHub Release 于 2026-11-26T20:18:21Z 发布，附件 5 个（management-skill、reverse-evidence、platform-signature-evidence、两份 runtime-image-registry JSON）。schema 保持 79（与 v0.6.26 相同），属同 schema 镜像更新，无需重建。正式镜像构建日志中的只读版本打印：base/kali `{"node":"v24.22.3","undici_bundled":"7.30.2","undici_dsh":"8.12.4","undici_pi":"8.12.4","pi":"1.6.1"}`，scheduler `{"undici_bundled":"7.30.2","undici_workspace":"7.30.2","undici_opensandbox":"7.30.2"}`，web `{"undici_bundled":"7.30.2"}`。清单回写为 PR #1290（`bot/sync-runtime-registry-v0.6.27`）。
 >
