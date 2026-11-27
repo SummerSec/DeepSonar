@@ -540,50 +540,63 @@ test("a late edit cannot re-activate a knowledge item that was archived while it
   });
 });
 
-test("concurrent revoke and edit share one lock order and a revoked base blocks publishing", async () => {
+test("revoke and edit are exercised in both explicit commit orders", async () => {
   await withKnowledgeDatabase(async (db) => {
     const owner = await seedKnowledgeJob(db);
     const blobs = new Map<string, Buffer>();
+    const gate: { release?: () => void } = {};
+    let started: (() => void) | null = null;
+    let paused = false;
     const store: BlobStore = {
-      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      kind: "fs",
+      put: async (key, value) => {
+        if (paused) { started?.(); await new Promise<void>((resolve) => { gate.release = resolve; }); }
+        blobs.set(key, value);
+      },
       get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
       exists: async (key) => blobs.has(key),
       materializeLocal: async () => { throw new Error("unused"); },
     };
     setSharedAssetBlobStoreForTests(store);
     const app = Fastify();
-    const actor: Actor = { type: "api_token", id: "author-5", name: "maintainer-e", projectId: owner.projectId,
+    const actor: Actor = { type: "api_token", id: "author-6", name: "maintainer-f", projectId: owner.projectId,
       scopes: ["projects:read", "projects:write"] };
     app.addHook("onRequest", async (request) => { request.actor = actor; });
     registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
     const base = `/projects/${owner.projectId}/knowledge`;
     const seed = async (key: string) => {
       const created = await app.inject({ method: "POST", url: base, payload: {
-        kind: "memory", logical_key: key, title: "并发用例知识", keywords: ["并发"], content: "第一版正文" } });
+        kind: "memory", logical_key: key, title: "顺序用例知识", keywords: ["顺序"], content: "第一版正文" } });
       assert.equal(created.statusCode, 201, created.body);
       return created.json() as { item_ref: string; version_ref: string };
     };
-    // 并发撤回与编辑：两笔都不得 500，撤回先提交时编辑不能发布新版本。
-    const first = await seed("concurrent-revoke");
-    const [revoked, edited] = await Promise.all([
-      app.inject({ method: "POST", url: `${base}/${first.item_ref}/versions/${first.version_ref}/revoke`, payload: { reason: "并发撤回" } }),
-      app.inject({ method: "POST", url: `${base}/${first.item_ref}/versions`, payload: {
-        expected_version: 1, title: "并发用例知识", content: "并发编辑的正文" } }),
-    ]);
-    assert.ok(revoked.statusCode < 500, `撤回不得 500：${revoked.statusCode} ${revoked.body}`);
-    assert.ok(edited.statusCode < 500, `编辑不得 500：${edited.statusCode} ${edited.body}`);
-    if (revoked.statusCode === 200) {
-      assert.equal(edited.statusCode, 409, `撤回先提交后编辑必须被拒：${edited.body}`);
-      const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${first.item_ref}`;
-      assert.equal(versions[0]!.total, 1, "撤回先提交时编辑不得发布新版本");
-    }
-    // 顺序场景：先撤回再编辑，必须稳定 409 KNOWLEDGE_REVOKED。
-    const second = await seed("revoked-then-edit");
-    const revoke = await app.inject({ method: "POST", url: `${base}/${second.item_ref}/versions/${second.version_ref}/revoke`, payload: { reason: "顺序撤回" } });
-    assert.equal(revoke.statusCode, 200, revoke.body);
-    const lateEdit = await app.inject({ method: "POST", url: `${base}/${second.item_ref}/versions`, payload: {
-      expected_version: 1, title: "并发用例知识", content: "撤回后的编辑" } });
+    // 顺序 A：撤回先提交。暂停编辑的正文写入（此时编辑不持有行锁），先撤回 v1，再放行编辑。
+    const first = await seed("revoke-then-edit");
+    paused = true;
+    const storing = new Promise<void>((resolve) => { started = resolve; });
+    const editing = app.inject({ method: "POST", url: `${base}/${first.item_ref}/versions`, payload: {
+      expected_version: 1, title: "顺序用例知识", content: "撤回先提交时的编辑" } });
+    await storing;
+    const revokedFirst = await app.inject({ method: "POST", url: `${base}/${first.item_ref}/versions/${first.version_ref}/revoke`, payload: { reason: "先撤回" } });
+    assert.equal(revokedFirst.statusCode, 200, revokedFirst.body);
+    paused = false; gate.release?.();
+    const lateEdit = await editing;
     assert.equal(lateEdit.statusCode, 409, lateEdit.body);
     assert.equal(lateEdit.json().error_code, "KNOWLEDGE_REVOKED");
+    const afterRevoke = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${first.item_ref}`;
+    assert.equal(afterRevoke[0]!.total, 1, "撤回先提交时编辑不得发布新版本");
+    // 顺序 B：编辑先提交。编辑成功生成 v2，再撤回 v1——撤回只动 v1，不影响指向 v2 的条目。
+    const second = await seed("edit-then-revoke");
+    const editedFirst = await app.inject({ method: "POST", url: `${base}/${second.item_ref}/versions`, payload: {
+      expected_version: 1, title: "顺序用例知识", content: "编辑先提交的正文" } });
+    assert.equal(editedFirst.statusCode, 201, editedFirst.body);
+    const editedVersion = (editedFirst.json() as { version_ref: string }).version_ref;
+    const revokedSecond = await app.inject({ method: "POST", url: `${base}/${second.item_ref}/versions/${second.version_ref}/revoke`, payload: { reason: "编辑之后再撤回旧版" } });
+    assert.equal(revokedSecond.statusCode, 200, revokedSecond.body);
+    const [row] = await db`SELECT status, active_version_id FROM project_knowledge_items WHERE id=${second.item_ref}`;
+    assert.equal(String(row!.active_version_id), editedVersion, "撤回旧版不得把条目指回旧版本");
+    assert.equal(row!.status, "active", "编辑先提交时条目保持生效");
+    const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${second.item_ref}`;
+    assert.equal(versions[0]!.total, 2, "编辑先提交时两个版本都在");
   });
 });
