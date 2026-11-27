@@ -37,10 +37,14 @@ export const CLASSIFIER_STATUSES = Object.freeze({
 //    `agent-harness/**`, `database/README.md`, and `deploy/*.md` stay excluded.
 //  - Three reviewed single-level directories (`docs/superpowers/plans/`,
 //    `docs/superpowers/specs/`, and numbered ADRs under `docs/architecture/adr/`)
-//    have no build, packaging, or runtime consumer (verified by grep) and use
-//    strict file-name regexes below. Every non-A/M git status (delete, rename,
-//    copy, type change, unknown) and every non-100644 blob mode still fail
-//    closed before any allowlist entry is consulted.
+//    have no current build, packaging, runtime, or full-suite test consumer
+//    (verified by grep) and use strict file-name regexes below. Because these
+//    regexes also match future files with matching names, any change that adds
+//    a packaging, runtime, or non-docs-lane test consumer for a file under these
+//    directories MUST tighten this allowlist in the same PR and add a negative
+//    regression proving a pure edit to that file returns to full CI. Every
+//    non-A/M git status (delete, rename, copy, type change, unknown) and every
+//    non-100644 blob mode still fail closed before any allowlist entry is consulted.
 export const DOCS_ONLY_PATHS = Object.freeze([
   "AGENTS.md",
   "CHANGELOG.md",

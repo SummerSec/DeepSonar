@@ -338,22 +338,24 @@ test("#741 六条 ADR、开发 Skill 与双入口保持可发现", () => {
 });
 
 test("#1221 窄文档面也守卫对外文案（文档快车道会跑，不依赖重型 Web gate）", () => {
-  // 与 Web 的 accent-theme 用例共用同一实现；这里只扫 DESIGN.md 与 docs/**/*.md。
-  const documents = ["DESIGN.md", ...relativeFiles("docs", [".md"])].map((relative) => path.join(ROOT, relative));
+  // 与 Web 的 accent-theme 用例共用同一实现；覆盖所有进入文档快车道的根文档（含 AGENTS.md / README.md / DESIGN.md）与 docs/**/*.md。
+  const documents = ["AGENTS.md", "DESIGN.md", "README.md", ...relativeFiles("docs", [".md"])].map((relative) => path.join(ROOT, relative));
   assert.deepEqual(
     findBannedCopy({ files: documents, pattern: /open-kritt/i }).map((file: string) => path.relative(ROOT, file).replaceAll("\\", "/")),
     [],
     "文档里的对外文案不得出现外部主题 id",
   );
 
-  // 合成坏文档必须被拦住，证明这条守卫不是空转。
+  // 合成坏文档（模拟 AGENTS.md / README.md / docs 文档）必须被拦住，证明轻量快车道与原 Web 检查拦住同一类改动。
   const directory = mkdtempSync(path.join(tmpdir(), "docs-copy-guard-"));
   try {
-    const bad = path.join(directory, "bad.md");
-    writeFileSync(bad, "Acme open-kritt theme\n");
+    const badAgents = path.join(directory, "AGENTS.md");
+    writeFileSync(badAgents, "# AGENTS\nDo not mention open-kritt theme\n");
+    const badReadme = path.join(directory, "README.md");
+    writeFileSync(badReadme, "Open-Kritt leftover\n");
     const good = path.join(directory, "good.md");
     writeFileSync(good, "普通文档\n");
-    assert.deepEqual(findBannedCopy({ files: [good, bad], pattern: /open-kritt/i }), [bad]);
+    assert.deepEqual(findBannedCopy({ files: [good, badAgents, badReadme], pattern: /open-kritt/i }), [badAgents, badReadme]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
