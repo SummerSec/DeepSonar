@@ -49,7 +49,8 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
   const legacy = postgres(new URL(`/${database}`, databaseUrl!).toString(), { max: 1 });
   try {
     await legacy.unsafe(schemaSql);
-    assert.deepEqual(await legacy`SELECT version FROM schema_meta WHERE id='global'`, [{ version: 79 }] as never);
+    const metaRows = await legacy`SELECT version FROM schema_meta WHERE id='global'`;
+    assert.equal(Number(metaRows[0]!.version), 79, "基线库必须声明 schema 79");
     // 合成历史知识：只填 79 存在的列，作者是 Job/Attempt。
     const insertMinimal = async (table: string, overrides: Row = {}): Promise<Row> => {
       const columns = await legacy<{ column_name: string; data_type: string }[]>`
