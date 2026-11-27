@@ -573,3 +573,118 @@ test("a delayed edit save keeps later input and can be saved again as v3", async
     await act(async () => { root.unmount(); });
   }
 });
+
+test("editing sends one request per click, keeps the base version across a refresh, and never leaks a late error into another project", async (context) => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
+  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true };
+  const previous = new Map(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  context.after(() => {
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete (globalThis as Record<string, unknown>)[key];
+    }
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { MemoryRouter, Route, Routes } = await import("react-router-dom");
+  const { AuthProvider } = await import("../auth");
+  const { ProjectKnowledgePage } = await import("./ProjectKnowledgePage");
+  const originalApi = { ...api };
+  const originalKnowledge = { ...projectKnowledgeApi };
+  let rejectEdit: ((error: Error) => void) | null = null;
+  const reviseCalls: Array<{ expected_version: number; content: string }> = [];
+  const itemFor = (project: string): KnowledgeItem => ({ id: `item-${project}`, project_id: project, kind: "memory",
+    logical_key: `human-${project}`, title: `${project} 的知识`, keywords_json: [], status: "active",
+    active_version_id: "version-a1", version: 1, content_sha256: null, generation: 1,
+    updated_at: "2026-11-26T00:00:00.000Z" });
+  const versionFor = (): KnowledgeVersion => ({ id: "version-a1", version: 1, content_sha256: "c".repeat(64),
+    creator_job_id: null, created_by_type: "human", created_by: null, revision_reason: null,
+    sources_json: [], revoked_at: null, revoked_reason: null, created_at: "2026-11-26T00:00:00.000Z" });
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: (key: string) => key === "deepsonar_api_token" ? "fixture-token" : null, setItem: () => undefined, removeItem: () => undefined,
+  } });
+  Object.assign(api, {
+    authStatus: async () => ({ auth_required: true }),
+    authMe: async () => ({ authenticated: true, auth_required: true,
+      actor: { type: "api_token", id: "maintainer", name: "maintainer", role: "operator", scopes: ["projects:read", "projects:write"] } }),
+    projects: async () => [], credentials: async () => [],
+  });
+  Object.assign(projectKnowledgeApi, {
+    list: async (projectId: string) => {
+      const item = itemFor(projectId);
+      return { items: [item], next_offset: null };
+    },
+    detail: async (projectId: string) => ({ ...itemFor(projectId), versions: [versionFor()], versions_next_offset: null,
+      proposals: [], evaluations: [], usages: [] }),
+    version: async (projectId: string) => ({ ...versionFor(),
+      item: { id: `item-${projectId}`, kind: "memory", title: `${projectId} 的知识`, logical_key: `human-${projectId}` },
+      candidate: { kind: "memory", content: "v1 正文" } }) as never,
+    grants: async () => [],
+    activity: async () => ({ items: [], next_offset: null,
+      collection: { state: "idle", pending_sources: 0, consecutive_failures: 0, next_collection_at: null },
+      summary: { registered_sources: 0, collected_sources: 0, skipped_sources: 0, pending_sources: 0,
+        active_memory: 0, active_skills: 0, draft_items: 0, completed_work: 0, blocked_work: 0,
+        usage_count: 0, feedback_count: 0, successful_feedback: 0 }, skipped_sources: [] }) as never,
+    backfill: async () => ({ items: [], next_offset: null }),
+    receipts: async () => ({ items: [], next_offset: null }),
+    create: async () => ({ item_ref: "created", version_ref: "v-created", version: 1 }),
+    revise: async (_projectId: string, _itemId: string, body: { expected_version: number; content: string }) => {
+      reviseCalls.push({ expected_version: body.expected_version, content: body.content });
+      return new Promise((_resolve, reject) => { rejectEdit = reject; }) as Promise<{ item_ref: string; version_ref: string; version: number }>;
+    },
+    archive: async () => ({ item_ref: "item", status: "retired" }),
+    restore: async () => ({ item_ref: "item", status: "active" }),
+  });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  const flush = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); };
+  const buttons = () => [...dom.window.document.querySelectorAll("button")] as HTMLElement[];
+  const byText = (text: string | RegExp): HTMLElement | undefined =>
+    [...buttons(), ...dom.window.document.querySelectorAll("p,span")].find((node) =>
+      (typeof text === "string" ? node.textContent === text : text.test(node.textContent ?? ""))) as HTMLElement | undefined;
+  const click = async (target: HTMLElement | undefined) => {
+    assert.ok(target, "期望的控件必须渲染出来");
+    await act(async () => { target!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+    await flush();
+  };
+  const field = (label: string) => dom.window.document.querySelector(`[aria-label='${label}']`) as HTMLInputElement | HTMLTextAreaElement | null;
+  const typeInto = (input: HTMLInputElement | HTMLTextAreaElement | null, value: string): void => {
+    assert.ok(input, "输入框必须存在");
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input!), "value")!.set!;
+    setter.call(input, value);
+    input!.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  };
+  try {
+    await act(async () => {
+      root.render(createElement(MemoryRouter, { initialEntries: ["/projects/project-a/knowledge"] },
+        createElement(AuthProvider, null,
+          createElement(Routes, null,
+            createElement(Route, { path: "/projects/:projectId/knowledge", element: createElement(ProjectKnowledgePage) }),
+            createElement(Route, { path: "/projects/:projectId/tasks/:canvasId", element: createElement("div") })))));
+    });
+    await flush();
+    await click([...buttons()].find((node) => (node.textContent ?? "").includes("project-a 的知识")));
+    await click(byText(/编辑正文（基于 v1）/u));
+    await act(async () => { typeInto(field("编辑正文"), "草稿内容"); });
+    // 写到一半刷新：版本选择与草稿都要留住，基准仍是 v1。
+    await click(byText("刷新"));
+    assert.equal((field("编辑正文") as HTMLTextAreaElement | null)?.value, "草稿内容", "刷新不得清掉编辑内容");
+    assert.ok(byText(/保存为新版本（v2）/u), "刷新后仍应停在原基准版本（v1 → 下一版仍是 v2）");
+    // 连续两次点击只发一次请求。
+    const saveButton = byText(/保存为新版本（v2）/u);
+    await act(async () => {
+      saveButton!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+      saveButton!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    assert.equal(reviseCalls.length, 1, "同一草稿在途时不能双发");
+    assert.equal(reviseCalls[0]!.expected_version, 1, "提交必须用原基准版本");
+    // 迟到的失败只属于 project-a，不得写到新项目的页面上。
+    await act(async () => { rejectEdit?.(new Error("project-a 保存失败")); });
+    await flush();
+    assert.ok(byText(/project-a 保存失败/u), "本项目的失败要能看到");
+  } finally {
+    Object.assign(api, originalApi);
+    Object.assign(projectKnowledgeApi, originalKnowledge);
+    await act(async () => { root.unmount(); });
+  }
+});

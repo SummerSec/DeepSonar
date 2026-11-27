@@ -114,7 +114,6 @@ export function ProjectKnowledgePage() {
     let active = true;
     setDetailError(null);
     setDetailLoading(true);
-    setVersionId(null);
     setVersion(null);
     setVersions([]);
     projectKnowledgeApi.detail(projectId, selectedId)
@@ -123,7 +122,10 @@ export function ProjectKnowledgePage() {
         setDetail(result);
         setVersions(result.versions);
         setNextVersionOffset(result.versions_next_offset);
-        setVersionId(result.active_version_id ?? result.versions[0]?.id ?? null);
+        // 刷新时保留用户正在看的历史版本与编辑基准；只有它真的消失了才回落到当前版本。
+        setVersionId((current) => (current && result.versions.some((value) => value.id === current)
+          ? current
+          : result.active_version_id ?? result.versions[0]?.id ?? null));
         setDetailLoading(false);
       })
       .catch((error) => { if (active) { setDetail(null); setDetailError(error instanceof Error ? error.message : String(error)); setDetailLoading(false); } });
@@ -150,6 +152,7 @@ export function ProjectKnowledgePage() {
 
   const maintenance = useProjectKnowledgeMaintenance({
     projectId: projectId ?? "", selectedId, versionId, refreshKey: refresh,
+    onSelectVersion: (next) => setVersionId(next),
     onSelectItem: (itemId) => setParams((current) => { const next = new URLSearchParams(current); next.set("item", itemId); return next; }),
     onRefresh: () => setRefresh((value) => value + 1),
   });

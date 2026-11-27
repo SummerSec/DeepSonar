@@ -46,11 +46,12 @@ export interface MaintenanceInput {
   versionId: string | null;
   refreshKey: number;
   onSelectItem: (itemId: string) => void;
+  onSelectVersion?: (versionId: string) => void;
   onRefresh: () => void;
 }
 
 export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
-  const { projectId, selectedId, versionId, refreshKey, onSelectItem, onRefresh } = input;
+  const { projectId, selectedId, versionId, refreshKey, onSelectItem, onSelectVersion, onRefresh } = input;
   // 新建草稿按项目隔离：切到别的项目不会带着上一个项目的正文，回到原项目还能接着写。
   interface CreateDraft { open: boolean; title: string; content: string; suffix: string }
   const [drafts, setDrafts] = useState<Record<string, CreateDraft>>({});
@@ -85,8 +86,10 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const createNotice = submitState.notice;
   const createError = submitState.error;
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+  const editDraftRef = useRef<EditDraft | null>(null);
+  editDraftRef.current = editDraft;
   const keepRebasedDraft = useRef(false);
-  const [editBusy] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
   const [editNotice, setEditNotice] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   // 一次下架对应一张可消费回执：撤销后回执消失，允许再次下架与再次撤销。
@@ -112,6 +115,8 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   const canUndoArchive = useCallback((itemId: string) => Boolean(archiveReceipts[itemId]), [archiveReceipts]);
 
   const currentProject = useRef(projectId);
+  const requestProjectRef = useRef(projectId);
+  requestProjectRef.current = projectId;
   currentProject.current = projectId;
   // 提交成功后的处理抽成独立函数：判断草稿是否被继续编辑过、必要时保留草稿并换新标识。
   const settleCreate = useCallback((requestProject: string, snapshot: { title: string; content: string },
@@ -153,25 +158,48 @@ export function useProjectKnowledgeMaintenance(input: MaintenanceInput) {
   }, [projectId, draftTitle, draftContent, draftKey, patchSubmit, settleCreate]);
 
   // 编辑保存后的结算抽成独立函数：内容与快照一致才收起，否则挪到新版本上继续写。
-  const settleEdit = useCallback((snapshot: EditDraft, result: { version: number; version_ref: string }): void => {
-    setEditDraft((current) => {
-      const next = rebaseEditDraft(current, snapshot, result);
-      keepRebasedDraft.current = Boolean(next && next !== current);
-      return next;
-    });
+  const editRequest = useRef<{ requestId: number; projectId: string; itemId: string } | null>(null);
+  const settleEdit = useCallback((snapshot: EditDraft, requestId: number, result: { version: number; version_ref: string }): void => {
+    // 回执只对「这次请求 + 当前项目与条目」生效：切到别的项目/条目后，迟到的成功或失败都不能改当前编辑。
+    if (editRequest.current?.requestId !== requestId) return;
+    editRequest.current = null;
+    editBusyRef.current = false;
+    setEditBusy(false);
+    if (currentProject.current !== requestProjectRef.current) return;
+    // 同步算出草稿去留：setState 的更新函数是渲染期才执行，不能在里面取结果。
+    const next = rebaseEditDraft(editDraftRef.current, snapshot, result);
+    const keptDraft = Boolean(next && next !== editDraftRef.current);
+    keepRebasedDraft.current = keptDraft;
+    setEditDraft(next);
+    if (keptDraft) onSelectVersion?.(result.version_ref);
     setEditNotice(`已生成 v${result.version}`);
     onRefresh();
   }, [onRefresh]);
 
+  const editBusyRef = useRef(false);
+  const failEdit = useCallback((requestId: number, projectIdOfRequest: string, error: unknown): void => {
+    if (editRequest.current?.requestId !== requestId) return;
+    editRequest.current = null;
+    editBusyRef.current = false;
+    setEditBusy(false);
+    if (currentProject.current !== projectIdOfRequest) return;
+    setEditError(message(error));
+  }, []);
   const submitEdit = useCallback(() => {
-    if (!editDraft) return;
+    if (!editDraft || editBusyRef.current) return;
     const snapshot = editDraft;
+    const requestId = Date.now() + Math.random();
+    editRequest.current = { requestId, projectId, itemId: snapshot.itemId };
+    editBusyRef.current = true;
+    setEditBusy(true);
+    setEditError(null);
     projectKnowledgeApi.revise(projectId, snapshot.itemId, {
       expected_version: snapshot.expectedVersion, title: snapshot.title.trim(), content: snapshot.content,
       ...(snapshot.reason?.trim() ? { reason: snapshot.reason.trim() } : {}),
-    }).then((result) => settleEdit(snapshot, result))
-      .catch((error) => setEditError(message(error)));
-  }, [projectId, editDraft, settleEdit]);
+    }).then((result) => settleEdit(snapshot, requestId, result))
+      .catch((error) => failEdit(requestId, projectId, error))
+      .finally(() => { editBusyRef.current = false; });
+  }, [projectId, editDraft, settleEdit, failEdit]);
 
   const archiveItem = useCallback((itemId: string) => {
     setUndoBusy(true); patchSubmit(projectId, { error: null });
