@@ -10,7 +10,7 @@ import {
 export const PI_MEMORY_GOVERNED_WRAPPER_SHA256 = "4a5451eac7ab4dfbe9c00dc56bc7af04368eef3f11eefe77a3da0cce24f9b0f2";
 // OM imports this image-owned SDK context policy; bind its bytes as well as the wrapper.
 // #1262: rotated with the bodyHint diagnostic projection in pi-main-request-budget.ts.
-export const PI_MEMORY_CONTEXT_POLICY_SHA256 = "58eeb28932c62326ad043bcb21db8296a7a907555d55f8a8a72f5416d16a2c31";
+export const PI_MEMORY_CONTEXT_POLICY_SHA256 = "4656f184a427252c03371895eb8fd94d4e217c41ae74acca74cf5bf0fdd52c9a";
 
 /** Runs inside the selected image before Pi can receive a prompt. */
 export const PI_MEMORY_IMAGE_GUARD_SOURCE = `

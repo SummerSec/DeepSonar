@@ -471,11 +471,14 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
                 || thrownDiagnostic && thrownDiagnostic.category !== 'transient_retryable'
                 || failure.reason === 'aborted' || failure.error?.stopReason === 'aborted'
                 || permanentRequestDiagnostic(requestDiagnostic(failure.error, 'sdk', options?.signal), options?.signal)
-                || !await readGatewayNoStart(gateway, token, requestId, options?.signal).catch(
-                  // #1262: 结算探针拿到 404 时无法证明「这次请求没有落地」，因此既不能重试、
-                  // 也不该把 404 变成任务的终态错误（那会让整份沙箱因一次代理/路由侧 404 直接失败）。
-                  // 保守做法：按「没有证据」处理，保留原始 SDK 失败继续收敛。
-                  () => false)) {
+                || !await readGatewayNoStart(gateway, token, requestId, options?.signal).catch((error) => {
+                  // #1262: 结算探针拿到 404 时无法证明「这次请求没有落地」（Scheduler 的
+                  // not_found 与代理默认 404 页都长这样），因此既不能重试，也不该把 404
+                  // 变成任务终态错误。保守按「没有证据」处理，保留原始 SDK 失败继续收敛；
+                  // 其它状态（401/403/5xx/超时/解析失败）仍然硬失败，配置错误不会被吞。
+                  if (error && typeof error === 'object' && error.status === 404) return false;
+                  throw error;
+                })) {
                 if (pendingStart) output.push(pendingStart);
                 output.push(failure); break;
               }
