@@ -56,11 +56,6 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
     const [legacyItem] = await legacy`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,keywords_json,status)
       VALUES(${owner.projectId},'memory','upgrade-fixture','升级前的知识',${legacy.json(["升级"])},'draft') RETURNING id`;
     const legacyItemId = String(legacyItem!.id);
-    const [legacyVersion] = await legacy`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,
-        creator_job_id,creator_attempt_id,sources_json,governance_hash)
-      VALUES(${owner.projectId},${legacyItemId},1,${hash},${owner.jobId},${owner.attemptId},${legacy.json([])},${hash}) RETURNING id`;
-    const legacyVersionId = String(legacyVersion!.id);
-    await legacy`UPDATE project_knowledge_items SET status='active',active_version_id=${legacyVersionId} WHERE id=${legacyItemId}`;
     // 历史来源：一条属于治理 Job 的证据，配合冻结清单决定谁能看见正文与来源。
     const [art] = await legacy`INSERT INTO artifacts(project_id,job_id,artifact_key,kind,source_operation)
       VALUES(${owner.projectId},${owner.jobId},${"upgrade-artifact"},'fact','emit_fact') RETURNING id`;
@@ -68,8 +63,12 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
       VALUES(${String(art!.id)},'升级前的证据','observation') RETURNING id`;
     const evidenceRef = String(evidence!.id);
     const sourceHash = createHash("sha256").update("upgrade-evidence").digest("hex");
-    await legacy`UPDATE project_knowledge_versions SET sources_json=${legacy.json([{ kind: "evidence", ref: evidenceRef, content_hash: sourceHash }])}
-      WHERE id=${legacyVersionId}`;
+    const [legacyVersion] = await legacy`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,
+        creator_job_id,creator_attempt_id,sources_json,governance_hash)
+      VALUES(${owner.projectId},${legacyItemId},1,${hash},${owner.jobId},${owner.attemptId},
+        ${legacy.json([{ kind: "evidence", ref: evidenceRef, content_hash: sourceHash }])},${hash}) RETURNING id`;
+    const legacyVersionId = String(legacyVersion!.id);
+    await legacy`UPDATE project_knowledge_items SET status='active',active_version_id=${legacyVersionId} WHERE id=${legacyItemId}`;
     await legacy`INSERT INTO project_knowledge_work(project_id,trigger_key,state,stage,governance_hash)
       VALUES(${owner.projectId},${"knowledge:upgrade-fixture"},'completed','settle',${hash})`;
     const [work] = await legacy`SELECT id FROM project_knowledge_work WHERE project_id=${owner.projectId} AND trigger_key='knowledge:upgrade-fixture'`;
