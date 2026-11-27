@@ -61,6 +61,28 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
       VALUES(${owner.projectId},${legacyItemId},1,${hash},${owner.jobId},${owner.attemptId},${legacy.json([])},${hash}) RETURNING id`;
     const legacyVersionId = String(legacyVersion!.id);
     await legacy`UPDATE project_knowledge_items SET status='active',active_version_id=${legacyVersionId} WHERE id=${legacyItemId}`;
+    // 历史来源：一条属于治理 Job 的证据，配合冻结清单决定谁能看见正文与来源。
+    const [art] = await legacy`INSERT INTO artifacts(project_id,job_id,artifact_key,kind,source_operation)
+      VALUES(${owner.projectId},${owner.jobId},${"upgrade-artifact"},'fact','emit_fact') RETURNING id`;
+    const [evidence] = await legacy`INSERT INTO artifact_evidence(artifact_id,statement,kind)
+      VALUES(${String(art!.id)},'升级前的证据','observation') RETURNING id`;
+    const evidenceRef = String(evidence!.id);
+    const sourceHash = createHash("sha256").update("upgrade-evidence").digest("hex");
+    await legacy`UPDATE project_knowledge_versions SET sources_json=${legacy.json([{ kind: "evidence", ref: evidenceRef, content_hash: sourceHash }])}
+      WHERE id=${legacyVersionId}`;
+    await legacy`INSERT INTO project_knowledge_work(project_id,trigger_key,state,stage,governance_hash)
+      VALUES(${owner.projectId},${"knowledge:upgrade-fixture"},'completed','settle',${hash})`;
+    const [work] = await legacy`SELECT id FROM project_knowledge_work WHERE project_id=${owner.projectId} AND trigger_key='knowledge:upgrade-fixture'`;
+    await legacy`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage,arm,input_manifest_json)
+      VALUES(${owner.jobId},${owner.projectId},${String(work!.id)},'settle','without',
+        ${legacy.json([{ input_ref: `evidence:${evidenceRef}`, kind: "evidence", content_hash: sourceHash, audience: ["settle"] }])})`;
+    // 已有反馈：升级前就存在的使用记录，升级后必须仍指向同一版本。
+    await legacy`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,owner_project_id,version_id,feedback_json)
+      VALUES(${owner.projectId},${owner.jobId},${owner.attemptId},${"project-memory:legacy@1"},${hash},
+        ${owner.projectId},${legacyVersionId},${legacy.json({ outcome: "success", reason: "升级前的反馈" })})`;
+    // 按 runbook 正常停机：让种子 Job/Attempt 收尾，重建不再需要 force 绕过停机检查。
+    await legacy`UPDATE jobs SET status='succeeded',finished_at=now(),lease_expires_at=NULL WHERE id=${owner.jobId}`;
+    await legacy`UPDATE job_attempts SET status='succeeded',phase='terminal',finished_at=now() WHERE id=${owner.attemptId}`;
     // 用真实重建入口做只读计划：79 → 80。
     const plan = await planSchemaRebuild(legacy as never, { mode: "plan" });
     assert.equal(plan.currentVersion, 79);
@@ -84,12 +106,13 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
     assert.match(copySql, /creator_job_id/u);
     assert.doesNotMatch(copySql, /created_by_type|created_by|revision_reason/u);
     // 走真实 apply 路径：重建后仍是同一条历史知识，作者保持 job，并能继续人工修订。
-    const result = await rebuildSchemaOnReservedSession(() => legacy.reserve() as never, { dump: false, force: true });
+    const result = await rebuildSchemaOnReservedSession(() => legacy.reserve() as never, { dump: false });
     assert.equal(result.applied, true, "受控重建必须实际应用");
     const after = await legacy`SELECT version FROM schema_meta WHERE id='global'`;
     assert.equal(Number(after[0]!.version), 80, "重建后基线应为 schema 80");
     const app = Fastify();
-    const actor: Actor = { type: "api_token", id: owner.jobId, name: "upgrader", projectId: owner.projectId,
+    const operatorId = randomUUID();
+    const actor: Actor = { type: "api_token", id: operatorId, name: "maintainer-upgrade", projectId: owner.projectId,
       scopes: ["projects:read", "projects:write", "tasks:read"] };
     app.addHook("onRequest", async (request) => { request.actor = actor; });
     registerProjectKnowledgeRoutes(app, { db: legacy as never, recordAudit: (async () => {}) as never });
@@ -100,6 +123,16 @@ test("a schema-79 database plans a lossless 79→80 knowledge upgrade and copies
     assert.equal(exactRow.created_by_type, "job");
     assert.equal(exactRow.creator_job_id, owner.jobId);
     assert.equal((exactRow.candidate as Record<string, unknown>).content, "升级前正文");
+    // 升级前的反馈仍指向旧版本。
+    const [usage] = await legacy`SELECT version_id, feedback_json FROM project_knowledge_usages
+      WHERE selector='project-memory:legacy@1'`;
+    assert.equal(String(usage!.version_id), legacyVersionId);
+    assert.equal((usage!.feedback_json as Record<string, unknown>).outcome, "success");
+    // 无 tasks:read 的读者看不到这条治理来源版本（既有来源授权），有 tasks:read 的读者可以。
+    actor.scopes = ["projects:read", "projects:write"];
+    const hidden = await app.inject({ method: "GET", url: `${base}/${legacyItemId}` });
+    assert.equal(hidden.statusCode, 404, hidden.body);
+    actor.scopes = ["projects:read", "projects:write", "tasks:read"];
     const detail = await app.inject({ method: "GET", url: `${base}/${legacyItemId}` });
     assert.equal(detail.statusCode, 200, detail.body);
     const revised = await app.inject({ method: "POST", url: `${base}/${legacyItemId}/versions`, payload: {
