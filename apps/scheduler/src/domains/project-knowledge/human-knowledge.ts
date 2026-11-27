@@ -94,6 +94,9 @@ export async function reviseHumanKnowledgeItem(
   const blob = await writeKnowledgeBlob(db, candidate);
   const version = expectedVersion + 1;
   return db.begin(async (tx) => {
+    // 加锁顺序与「版本撤回」一致：先锁版本行、再锁条目行，避免撤回与编辑互等。
+    const [base] = await tx`SELECT version, revoked_at FROM project_knowledge_versions
+      WHERE project_id=${author.projectId} AND id=${String(snapshot.active_version_id)} FOR UPDATE`;
     const [locked] = await tx`SELECT kind, logical_key, status, active_version_id FROM project_knowledge_items
       WHERE project_id=${author.projectId} AND id=${itemId} FOR UPDATE`;
     if (!locked) notFound();
@@ -102,8 +105,6 @@ export async function reviseHumanKnowledgeItem(
       || locked.kind !== snapshot.kind || locked.logical_key !== snapshot.logical_key) {
       throw new KnowledgeOperationError("KNOWLEDGE_VERSION_CONFLICT", "知识已被其他修改更新，请重新读取最新版本后再提交", "model_correctable", "重新读取条目最新版本，确认差异后用新的 expected_version 重新提交。");
     }
-    const [base] = await tx`SELECT version, revoked_at FROM project_knowledge_versions
-      WHERE project_id=${author.projectId} AND id=${String(snapshot.active_version_id)} FOR UPDATE`;
     if (!base || Number(base.version) !== expectedVersion || base.revoked_at) {
       throw new KnowledgeOperationError(base?.revoked_at ? "KNOWLEDGE_REVOKED" : "KNOWLEDGE_VERSION_CONFLICT",
         base?.revoked_at ? "基准版本已被撤回，不能再基于它编辑" : "知识已被其他修改更新，请重新读取最新版本后再提交",

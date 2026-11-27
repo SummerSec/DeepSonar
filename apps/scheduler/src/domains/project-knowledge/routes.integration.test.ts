@@ -539,3 +539,51 @@ test("a late edit cannot re-activate a knowledge item that was archived while it
     assert.equal(versions[0]!.total, 1, "迟到的编辑不得写入新版本");
   });
 });
+
+test("concurrent revoke and edit share one lock order and a revoked base blocks publishing", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const owner = await seedKnowledgeJob(db);
+    const blobs = new Map<string, Buffer>();
+    const store: BlobStore = {
+      kind: "fs", put: async (key, value) => { blobs.set(key, value); },
+      get: async (key) => { const value = blobs.get(key); if (!value) throw new Error("missing"); return value; },
+      exists: async (key) => blobs.has(key),
+      materializeLocal: async () => { throw new Error("unused"); },
+    };
+    setSharedAssetBlobStoreForTests(store);
+    const app = Fastify();
+    const actor: Actor = { type: "api_token", id: "author-5", name: "maintainer-e", projectId: owner.projectId,
+      scopes: ["projects:read", "projects:write"] };
+    app.addHook("onRequest", async (request) => { request.actor = actor; });
+    registerProjectKnowledgeRoutes(app, { db: db as never, recordAudit: (async () => {}) as never });
+    const base = `/projects/${owner.projectId}/knowledge`;
+    const seed = async (key: string) => {
+      const created = await app.inject({ method: "POST", url: base, payload: {
+        kind: "memory", logical_key: key, title: "并发用例知识", keywords: ["并发"], content: "第一版正文" } });
+      assert.equal(created.statusCode, 201, created.body);
+      return created.json() as { item_ref: string; version_ref: string };
+    };
+    // 并发撤回与编辑：两笔都不得 500，撤回先提交时编辑不能发布新版本。
+    const first = await seed("concurrent-revoke");
+    const [revoked, edited] = await Promise.all([
+      app.inject({ method: "POST", url: `${base}/${first.item_ref}/versions/${first.version_ref}/revoke`, payload: { reason: "并发撤回" } }),
+      app.inject({ method: "POST", url: `${base}/${first.item_ref}/versions`, payload: {
+        expected_version: 1, title: "并发用例知识", content: "并发编辑的正文" } }),
+    ]);
+    assert.ok(revoked.statusCode < 500, `撤回不得 500：${revoked.statusCode} ${revoked.body}`);
+    assert.ok(edited.statusCode < 500, `编辑不得 500：${edited.statusCode} ${edited.body}`);
+    if (revoked.statusCode === 200) {
+      assert.equal(edited.statusCode, 409, `撤回先提交后编辑必须被拒：${edited.body}`);
+      const versions = await db`SELECT count(*)::int AS total FROM project_knowledge_versions WHERE item_id=${first.item_ref}`;
+      assert.equal(versions[0]!.total, 1, "撤回先提交时编辑不得发布新版本");
+    }
+    // 顺序场景：先撤回再编辑，必须稳定 409 KNOWLEDGE_REVOKED。
+    const second = await seed("revoked-then-edit");
+    const revoke = await app.inject({ method: "POST", url: `${base}/${second.item_ref}/versions/${second.version_ref}/revoke`, payload: { reason: "顺序撤回" } });
+    assert.equal(revoke.statusCode, 200, revoke.body);
+    const lateEdit = await app.inject({ method: "POST", url: `${base}/${second.item_ref}/versions`, payload: {
+      expected_version: 1, title: "并发用例知识", content: "撤回后的编辑" } });
+    assert.equal(lateEdit.statusCode, 409, lateEdit.body);
+    assert.equal(lateEdit.json().error_code, "KNOWLEDGE_REVOKED");
+  });
+});
