@@ -284,6 +284,8 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${relativeAtAudit}`;
       await createAttempt(sql, relativeAtAudit, { agent_cli: "claude-code" });
       const independentAudit = await insertRunning("deepsonar-audit");
+      // 普通停滞的对照行也要有 active Attempt，否则 reason 无处落库。
+      await createAttempt(sql, independentAudit, { agent_cli: "claude-code" });
       // Reaper 通过 settleAttemptTerminal 收口：必须先有 active Attempt，否则 reason 无处落库。
       await createAttempt(sql, hungToolAudit, { agent_cli: "claude-code" });
       // 评审 P1：stall_sec=0 是明确关闭；Chrome/Hub floor 不得把它重新打开。
