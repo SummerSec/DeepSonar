@@ -1,6 +1,5 @@
 import type { sql } from "./db.js";
 import { automaticPreparationPredicate } from "./domains/project-knowledge/automatic-marker.js";
-import { projectCollectionPolicyQuery } from "./domains/project-knowledge/collection-policy.js";
 
 /** Reuse the single Dispatcher timer; no polling loop or additional executor. */
 export async function readNextKnowledgeWake(db: typeof sql): Promise<Date | null> {
@@ -9,8 +8,6 @@ export async function readNextKnowledgeWake(db: typeof sql): Promise<Date | null
     WHERE w.state='pending' AND NOT ${automaticPreparationPredicate(db)}
       AND NOT EXISTS(SELECT 1 FROM project_knowledge_work active
         WHERE active.project_id=w.project_id AND active.state='running')
-    UNION ALL
-    SELECT wake_at FROM (${projectCollectionPolicyQuery(db)}) collection
   ) due`;
   return row?.wake_at ? new Date(row.wake_at as string) : null;
 }

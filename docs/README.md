@@ -1,4 +1,6 @@
 # DeepSonar 文档索引
+#1219 第四阶段第 3 步（2026-11-27）：项目批量整理整链删除——业务 Job 终态不再登记来源，`automatic` / `collector` / `collector-sources` / `collection-policy` / `source-retry` 与 `GET /projects/:id/knowledge/backfill` 一并移除，活动页 `collection` 字段下线；历史采集审计与在途 `project_knowledge_work` 仍可查、仍按既有准入推进，现存入口只有任务内 `submit_task_knowledge_suggestion` 与显式 `request_project_knowledge`。详见 [项目知识专题](PROJECT_KNOWLEDGE.md#来源登记与项目批量整理已退役)。
+
 
 - 2026-11-26：项目知识补齐人类维护入口（#1256）——操作员可直接新建/编辑/下架/恢复条目，人类版本用 `created_by_type=human` 记录作者，评测淘汰与安全撤回不可恢复；详见 [项目知识](./PROJECT_KNOWLEDGE.md#人类维护入口12562026-11-26)。schema 80 只把版本的 `creator_job_id/creator_attempt_id` 改成可空并新增作者列，非空库仍需受控重建。
 

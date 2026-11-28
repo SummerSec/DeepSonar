@@ -24,3 +24,6 @@ deploy/bootstrap-admin/
 .deepsonar-bootstrap-admin
 agent-harness/dsh-runtime/deepsonar-claude-key.mjs
 agent-harness/dsh-runtime/deepsonar-private-reader.mjs
+
+# 依赖目录；同时覆盖被误提交的 node_modules 符号链接（不带斜杠才匹配文件/链接）
+node_modules

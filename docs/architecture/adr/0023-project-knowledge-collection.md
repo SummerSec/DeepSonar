@@ -3,7 +3,7 @@
 > 状态：**已采纳**；原候选 `6d96df59` 已通过 Actions，同步 main 后的候选另验，未合并、未部署。
 > 决策日期：2026-11-11
 > 同步日期：2026-11-12
-> 来源：用户本轮明确授权自动项目整理；[collector](../../../apps/scheduler/src/domains/project-knowledge/collector.ts)、[工作链](../../../apps/scheduler/src/domains/project-knowledge/work.ts)。
+> 来源：用户本轮明确授权自动项目整理；`collector`、[工作链](../../../apps/scheduler/src/domains/project-knowledge/work.ts)。
 > 关联需求：FR-KNOW-001、FR-KNOW-002、NFR-UX-001。
 
 ## 背景

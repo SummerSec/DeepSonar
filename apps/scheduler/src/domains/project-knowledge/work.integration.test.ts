@@ -403,3 +403,51 @@ test("#1134 revise 的提示精确取自上一提案的 base_refs（不会被前
     assert.match(stalePrompt, /已不是当前 active 版本[\s\S]*本次修订不可行/);
   });
 });
+
+test("#1219 旧 project 批次：切换后明确结束，不重复派发", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    // 旧 collector 的 knowledge:project: 批次：带真实旧格式来源清单 + 采集回执。
+    const source = await seedKnowledgeJob(db);
+    const inflightSource = await seedKnowledgeJob(db);
+    const ledgerEntry = [{ input_ref: `fact:${randomUUID()}`, content_hash: "a".repeat(64), audience: ["maker"] }];
+    await db`INSERT INTO audit_logs (project_id,actor_type,actor_id,action,resource_type,resource_id,result,after_json)
+      VALUES(${source.projectId},'system','scheduler','project_knowledge.source_collected','job',${source.jobId},'ok',
+        ${db.json({ sources: ledgerEntry.length } as never)})`;
+    const pendingKey = `knowledge:project:${randomUUID()}`;
+    const inflightKey = `knowledge:project:${randomUUID()}`;
+    const [pending] = await db`INSERT INTO project_knowledge_work
+      (project_id,origin_job_id,canvas_id,trigger_key,input_manifest_json,governance_hash,reason,state,next_attempt_at)
+      VALUES(${source.projectId},${source.jobId},${source.canvasId},${pendingKey},${db.json(ledgerEntry as never)},${GOVERNANCE},
+        'fixture', 'pending', now() - interval '1 second') RETURNING id`;
+    // 在途旧批次挂在一个真实执行上：留给该执行自己收尾，不得再次派发。
+    const [liveJob] = await db`INSERT INTO jobs (project_id,canvas_id,type,status,agent_snapshot_json)
+      VALUES(${inflightSource.projectId},${inflightSource.canvasId},'explore','running','{}'::jsonb) RETURNING id`;
+    const [inflight] = await db`INSERT INTO project_knowledge_work
+      (project_id,origin_job_id,canvas_id,trigger_key,input_manifest_json,governance_hash,reason,state,active_job_id,claim_expires_at)
+      VALUES(${inflightSource.projectId},${inflightSource.jobId},${inflightSource.canvasId},${inflightKey},
+        ${db.json(ledgerEntry as never)},${GOVERNANCE},'fixture','running',${String(liveJob.id)},now() - interval '1 second') RETURNING id`;
+    const jobsBefore = Number((await db`SELECT count(*)::int AS count FROM jobs
+      WHERE project_id IN (${source.projectId},${inflightSource.projectId})`)[0]!.count);
+    const scheduler = schedulerFor(db);
+    await scheduler.tick();
+    const [pendingRow] = await db`SELECT state,reason,claim_expires_at FROM project_knowledge_work WHERE id=${String(pending!.id)}`;
+    assert.equal(pendingRow!.state, "blocked", "旧批次必须明确结束，不得永久 pending 或伪装推进");
+    assert.equal(pendingRow!.reason, "legacy_batch_retired");
+    assert.equal(pendingRow!.claim_expires_at, null);
+    const [inflightRow] = await db`SELECT state,active_job_id FROM project_knowledge_work WHERE id=${String(inflight!.id)}`;
+    assert.equal(inflightRow!.state, "running", "还有活跃执行的旧批次不得被就地结束");
+    assert.equal(String(inflightRow!.active_job_id), String(liveJob.id), "不得替换或复制在途执行");
+    await scheduler.tick();
+    const jobsAfter = Number((await db`SELECT count(*)::int AS count FROM jobs
+      WHERE project_id IN (${source.projectId},${inflightSource.projectId})`)[0]!.count);
+    assert.equal(jobsAfter, jobsBefore, "旧批次收尾不得派发新 Job");
+    const duplicates = await db`SELECT count(*)::int AS count FROM project_knowledge_work
+      WHERE project_id IN (${source.projectId}, ${inflightSource.projectId})
+        AND trigger_key IN (${pendingKey}, ${inflightKey}) GROUP BY trigger_key`;
+    assert.deepEqual(duplicates.map((row) => Number(row.count)), [1, 1], "旧批次不得被重复认领");
+    const history = await db`SELECT count(*)::int AS count FROM project_knowledge_work
+      WHERE project_id IN (${source.projectId}, ${inflightSource.projectId})
+        AND trigger_key IN (${pendingKey}, ${inflightKey})`;
+    assert.equal(Number(history[0]!.count), 2, "旧批次历史（含来源清单）必须仍可查询");
+  });
+});

@@ -103,8 +103,8 @@ test("activity separates registered sources, queued collection, active products 
       assert.deepEqual(res.json().summary, { registered_sources: 4, collected_sources: 2, skipped_sources: 2, pending_sources: 1,
         active_memory: 1, active_skills: 1, draft_items: 1, completed_work: 0, blocked_work: 1,
         usage_count: 5, feedback_count: 2, successful_feedback: 1 });
-      assert.equal(res.json().collection.state, "busy");
-      assert.equal(res.json().collection.next_collection_at, null);
+      // #1219 第四阶段第 3 步：批量整理已退役，activity 不再返回 collection 字段。
+      assert.equal(Object.hasOwn(res.json(), "collection"), false);
       assert.equal(res.json().items.length, 1);
       assert.equal(res.json().skipped_sources.length, 2, "recent skips are deduplicated by source Job");
       assert.ok(res.json().skipped_sources.some((row: { job_id: string; reason: string }) => row.job_id === skipped.jobId && row.reason === "source_input_limit"));
@@ -113,7 +113,6 @@ test("activity separates registered sources, queued collection, active products 
       assert.equal(next.json().next_offset, null);
       assert.deepEqual(next.json().summary, res.json().summary, "feedback counts are independent of work pagination");
       assert.deepEqual(await readFeedback(), originalFeedback, "repeated reads preserve explicit feedback and leave all missing feedback unknown");
-      assert.deepEqual(next.json().collection, res.json().collection, "collection status is project-level, independent of work pagination");
       const items = [...res.json().items, ...next.json().items];
       assert.equal(items.find(row => row.id === queued).state, "pending", "collection queues work; it does not activate knowledge");
       assert.equal(items.find(row => row.id === queued).source_count, 2, "batch counts source Jobs, not input records or origin fallback");
@@ -141,7 +140,6 @@ test("activity rejects unknown pagination, enforces read scope and returns 404 o
       assert.equal(empty.statusCode, 200);
       assert.deepEqual(empty.json().items, []);
       assert.ok(Object.values(empty.json().summary).every(value => value === 0));
-      assert.deepEqual(empty.json().collection, { state: "idle", pending_sources: 0, consecutive_failures: 0, next_collection_at: null });
       for (const query of ["?extra=1", "?limit=0", "?limit=51", "?limit=1.5", "?offset=-1", "?offset=bad", "?limit=1&limit=2"]) {
         assert.equal((await request(owner.projectId, query)).statusCode, 400, query);
       }
@@ -152,65 +150,6 @@ test("activity rejects unknown pagination, enforces read scope and returns 404 o
       assert.equal((await request(owner.projectId)).statusCode, 403);
       actor = { type: "api_token", id: "global", name: "global", projectId: null, scopes: ["projects:read"] };
       assert.equal((await request(randomUUID())).statusCode, 404);
-    } finally { await app.close(); }
-  });
-});
-
-test("activity projects retained sources, accumulation, cooldown and halt from project-owned durable history", async () => {
-  await withKnowledgeDatabase(async db => {
-    const owner = await seedKnowledgeJob(db), halted = await seedKnowledgeJob(db), cooling = await seedKnowledgeJob(db);
-    const aged = await seedKnowledgeJob(db);
-    await source(db, owner.projectId, owner.jobId, "source_registered", { body: "private source body" });
-    await source(db, halted.projectId, halted.jobId, "source_registered");
-    await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
-      VALUES('system','scheduler','project_knowledge.source_registered',${aged.projectId},'job',${aged.jobId},'ok',now()-interval '25 hours')`;
-    for (let index = 0; index < 4; index++) await source(db, cooling.projectId, randomUUID(), "source_registered");
-    for (const [project, count] of [[halted.projectId, 2], [cooling.projectId, 1]] as const) {
-      for (let index = 0; index < count; index++) {
-        const work = randomUUID();
-        await db`INSERT INTO project_knowledge_work(id,project_id,state,trigger_key,governance_hash,reason,created_at,updated_at)
-          VALUES(${work},${project},${index === 0 ? "completed" : "blocked"},${`knowledge:project:${work}`},${hash},
-            'private failure body',now()-interval '1 hour'+${index}*interval '1 minute',now()-interval '1 hour'+${index}*interval '1 minute')`;
-      }
-    }
-    const app = Fastify();
-    app.addHook("onRequest", async req => { req.actor = { type: "api_token", id: "global", name: "global",
-      projectId: null, scopes: ["projects:read"] }; });
-    registerKnowledgeActivityRoutes(app, { db: db as never });
-    const request = (project: string, offset = 0) => app.inject({ method: "GET",
-      url: `/projects/${project}/knowledge/activity?limit=1&offset=${offset}` });
-    try {
-      const accumulating = await request(owner.projectId);
-      assert.equal(accumulating.statusCode, 200, accumulating.body);
-      assert.equal(accumulating.json().collection.state, "accumulating");
-      assert.equal(accumulating.json().collection.pending_sources, 1);
-      assert.equal(accumulating.json().collection.consecutive_failures, 0, "other projects' failures cannot stop this project");
-      const [deadline] = await db`SELECT at+interval '24 hours' AS at FROM audit_logs
-        WHERE project_id=${owner.projectId} AND action='project_knowledge.source_registered'`;
-      assert.equal(Date.parse(accumulating.json().collection.next_collection_at), new Date(deadline!.at).getTime());
-      const stopped = await request(halted.projectId);
-      assert.equal(stopped.statusCode, 200, stopped.body);
-      assert.deepEqual(stopped.json().collection, { state: "halted", pending_sources: 1, consecutive_failures: 2, next_collection_at: null });
-      assert.equal(stopped.json().summary.pending_sources, 1, "halted sources remain registered and unconsumed");
-      assert.equal(stopped.json().next_offset, 1);
-      const stoppedNext = await request(halted.projectId, 1);
-      assert.deepEqual(stoppedNext.json().collection, stopped.json().collection);
-      assert.equal(stoppedNext.json().next_offset, null);
-      const cooldown = await request(cooling.projectId);
-      assert.equal(cooldown.statusCode, 200, cooldown.body);
-      assert.equal(cooldown.json().collection.state, "cooldown");
-      assert.equal(cooldown.json().collection.pending_sources, 4);
-      assert.equal(cooldown.json().collection.consecutive_failures, 1, "completed without an active/retired proposal is not output");
-      const [batchDeadline] = await db`SELECT created_at+interval '24 hours' AS at FROM project_knowledge_work WHERE project_id=${cooling.projectId}`;
-      assert.equal(Date.parse(cooldown.json().collection.next_collection_at), new Date(batchDeadline!.at).getTime());
-      const ready = await request(aged.projectId);
-      assert.equal(ready.json().collection.state, "ready", "one source becomes ready after 24 hours");
-      assert.equal(ready.json().collection.pending_sources, 1);
-      const again = await request(halted.projectId);
-      assert.deepEqual(again.json().collection, stopped.json().collection, "reading another project does not reset a halt");
-      assert.deepEqual(Object.keys(again.json().collection).sort(), ["consecutive_failures", "next_collection_at", "pending_sources", "state"]);
-      assert.doesNotMatch(accumulating.body + stopped.body + cooldown.body, /private|after_json|input_manifest|trigger_key|governance_hash/);
-      assert.doesNotMatch(stopped.body, new RegExp(`${owner.projectId}|${owner.jobId}|${cooling.projectId}`));
     } finally { await app.close(); }
   });
 });

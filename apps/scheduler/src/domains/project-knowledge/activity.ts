@@ -1,6 +1,5 @@
 import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
 import type { KnowledgeDb } from "./types.js";
-import { readProjectCollectionStatus } from "./collection-policy.js";
 
 // Work reasons may originate in a model request. Only scheduler-owned codes belong
 // in this metadata projection; arbitrary prompts, source text and feedback stay private.
@@ -27,6 +26,12 @@ const safeSkipReasons = new Set([
   "source_database_permission_denied",
   "source_attempt_changed", "source_governor_revoked",
 ]);
+
+// 历史跳过原因是模型/来源侧文本，只有 scheduler 自己的标准代码可以出现在响应里；
+// 旧历史入口与此共用同一套过滤（#1219 第 3 步评审）。
+export function knownSkipReasonCode(value: unknown): string | null {
+  return typeof value === "string" && safeSkipReasons.has(value) ? value : null;
+}
 
 interface ActivityWork {
   id: string;
@@ -127,7 +132,6 @@ export async function readKnowledgeActivity(db: KnowledgeDb, projectId: string, 
   const skippedSources = result.skipped_sources.map(source => ({ ...source,
     reason: safeSkipReasons.has(source.reason) ? source.reason : "details_unavailable",
   }));
-  const collection = await readProjectCollectionStatus(db, projectId);
-  return { summary: result.summary, collection, items, skipped_sources: skippedSources,
+  return { summary: result.summary, items, skipped_sources: skippedSources,
     next_offset: result.items.length > page.limit ? page.offset + page.limit : null };
 }

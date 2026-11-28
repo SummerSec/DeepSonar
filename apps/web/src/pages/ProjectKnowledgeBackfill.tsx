@@ -10,7 +10,23 @@ const reasons: Record<string, string> = {
   request_not_allowed: "当时未开放知识整理权限",
   unsettled_effects: "仍有执行结果待核实",
   no_sources: "未发现可用来源",
+  // 重试耗尽要跟「真的没有来源」分开：一个是环境/网络反复失败，一个是确实没东西可采。
+  source_collection_retry_exhausted: "采集重试耗尽（当时未整理）",
 };
+/** 只回放历史结论：旧批量整理已下线，登记过但未处理的来源不会再被整理。 */
+export function historyConclusion(row: { status: string; reason?: string; closeout_status?: string }): string {
+  // 旧 collector 在「创建待处理 work」的同一事务里写 source_collected，当时还没整理，
+  // 后续 work 也可能失败；只读历史不查 work 终态，因此只能说「已采集」（#1219 评审）。
+  if (row.status === "collected") return "已采集（当时已入队整理）";
+  if (row.status === "registered_retired") return "旧批量整理已下线：这条来源不会再被整理（历史登记仍可查）";
+  if (row.status === "no_history") return "没有历史采集记录（可能由新的任务内提交链产生）";
+  if (row.status === "skipped") {
+    // 已知原因给人话；未知原因只说「当时未整理」，绝不复述审计里的自由文本。
+    return row.reason ? reasons[row.reason] ?? "当时未整理" : "当时未整理";
+  }
+  return "历史记录";
+}
+
 const button = "rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/[.06] focus-visible:outline focus-visible:outline-acc-400";
 
 export function ProjectKnowledgeBackfill({ projectId }: { projectId: string }) {
@@ -44,7 +60,7 @@ function BackfillList({ projectId }: { projectId: string }) {
   if (!result) return <p className="mt-3 text-xs text-zinc-400">正在读取历史预览…</p>;
   if (result === "error") return <p className="mt-3 text-xs text-zinc-400">历史预览暂不可用。</p>;
   return <div className="mt-3 space-y-2 text-xs text-zinc-400">
-    <p>只读预览历史来源和已有建议。每行对应一个任务步骤。</p>
+    <p>只读历史：批量整理已下线，这里只回看每个任务步骤曾经登记/采集的来源与已有建议，不会触发任何整理。</p>
     {result.items.length === 0 && <p>这一页没有历史记录。</p>}
     <ul>
       {result.items.map(row => <li key={row.job_id} className="space-y-2 border-t border-white/[.06] py-2">
@@ -54,8 +70,7 @@ function BackfillList({ projectId }: { projectId: string }) {
           </Link>
           {row.finished_at && <time dateTime={row.finished_at}>{new Date(row.finished_at).toLocaleString("zh-CN")}</time>}
           <span>{knowledgeCloseoutStatusLabel(row.closeout_status)}</span>
-          {row.closeout_status === "legacy_preview" && <span>{row.status === "eligible" ? "有可供整理的来源"
-            : reasons[row.reason ?? ""] ?? "暂无可用来源"}</span>}
+          <span>{historyConclusion(row)}</span>
           {row.closeout_root_ref && <button type="button" className={button} aria-expanded={selectedJob === row.job_id}
             onClick={() => setSelectedJob(selectedJob === row.job_id ? null : row.job_id)}>
             {selectedJob === row.job_id ? "收起建议" : "查看建议"}

@@ -74,8 +74,8 @@ export function generateToken(): { plaintext: string; prefix: string; hash: stri
 /** 路由 → 所需 scope（§6.1 scope 表）；未列出的写操作默认 admin，读操作只需已认证 */
 const ROUTE_SCOPES: Record<string, string> = {
   "GET /projects/:id/knowledge": "projects:read",
-  "GET /projects/:id/knowledge/backfill": "projects:read",
   "GET /projects/:id/knowledge/closeout/:rootId": "projects:read",
+  "GET /projects/:id/knowledge/backfill": "projects:read",
   "POST /projects/:id/knowledge/closeout/:rootId/evaluate": "projects:write",
   "POST /projects/:id/knowledge": "projects:write",
   "POST /projects/:id/knowledge/:itemId/versions": "projects:write",

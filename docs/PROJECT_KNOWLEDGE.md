@@ -112,7 +112,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 项目“知识”页在目录前显示紧凑的积累/复用汇总与最近工作进展，工作详情和跳过原因按需展开，受阻原因使用中文并链接现有 Job/Canvas；目录、历史版本、来源、评测/审查、usage/反馈和精确授权沿用原入口。刷新复用现有页面触发，不新增定时轮询，项目与刷新身份隔离迟到响应。分页 API 以项目管理权限读取；草稿仅管理面可见，不能据此获得跨项目候选访问权。组件见 [ProjectKnowledgeActivity.tsx](../apps/web/src/pages/ProjectKnowledgeActivity.tsx)。
 
-本轮在同一页展示 `collection` 的积累、冷却、执行中或连续无产出停发及下次可准入时间；停发说明成功的显式整理可恢复，不新增恢复按钮、配置或通知。下次时间是调度资格提示，不承诺届时一定创建或执行 Job。
+活动页**不再返回** `collection` 字段（自动批量整理已下线），只显示静态说明：来源整理改为任务内显式 `request_project_knowledge`，历史采集审计仍可查。下面关于 `collection` 的小节是历史契约，保留作对照，不再生效。
 
 六张领域表为 work、items、versions、proposals、evaluations、receipts；assignments、grants、usages 是权限和执行基础记录。项目/Job/Attempt 复合外键防止伪造 provenance，receipt 和 evaluation 只追加。Skill bundle 仅允许 `SKILL.md` 与安全路径下的文本 references，总量 128 KiB / 20 文件。
 
@@ -176,7 +176,7 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 **哪些来源不再自动收集**（需要明确列举）：未显式投稿的任务，即使它有 Fact、Evidence 或已接受的用后反馈，也不再自动进入旧采集链；只有显式 Memory 投稿（`submit_task_knowledge_suggestion`）会入库，Skill 仍走显式送评。切换前已登记的来源与在途 `project_knowledge_work` 继续按原样收尾（唤醒与采集代码保留），历史审计、证据与已发布版本保持可查。
 
-因此现在没有新的来源会进入旧采集链：`project_knowledge_work` 的自动准备行不再产生，采集与唤醒代码暂时保留（等在列表与审计里确认无消费方后，再按 #1219 第四阶段第三步删除，届时会移除 `GET /projects/:id/knowledge/backfill`，属破坏性变更）。
+因此现在没有新的来源会进入旧采集链：`project_knowledge_work` 的自动准备行不再产生。第四阶段第三步已删除采集/领取链，但保留 `GET /projects/:id/knowledge/backfill` 作为**只读历史入口**（不再判定资格或触发整理），因此这里不再有「届时移除该路由」的计划。
 
 历史 `source_registered` / `source_collected` 审计与既有 `project_knowledge_work` 记录保持只读，不改写。
 ### 人类维护入口（#1256，2026-11-26）
@@ -195,7 +195,7 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。
 
-全部测试、构建、typecheck 仅在 GitHub Actions 执行。本轮静态核对 [package.json](../package.json) 与 [ci.yml](../.github/workflows/ci.yml)：`pnpm ci:unit:project-knowledge`、独立 `TEST_DATABASE_URL` 下的 `pnpm ci:integration:project-knowledge`、`pnpm ci:unit:web-facts` 已有工作流入口；新增 [collector](../apps/scheduler/src/domains/project-knowledge/collector.integration.test.ts)、[闭环合成记录](../apps/scheduler/src/domains/project-knowledge/closed-loop.integration.test.ts)、[activity](../apps/scheduler/src/domains/project-knowledge/activity.integration.test.ts)、[快照隔离](../apps/scheduler/src/job-creation.integration.test.ts)、[调度唤醒](../apps/scheduler/src/knowledge-wake.integration.test.ts) 和 [Web 交互](../apps/web/src/ProjectKnowledgeApi.test.ts) 回归已接线。[behavior-policy 独立单测](../apps/scheduler/src/domains/project-knowledge/behavior-policy.test.ts)覆盖允许 target comparator fail，以及 candidate 失败、安全任一 arm 失败、unexecuted、重复/缺项仍拒绝的边界。原候选的 Actions 证据见下文；同步 main 后的候选仍须独立验收，未合并、未部署。集成 helper 为每例创建临时数据库并套当前基线，不能指向业务默认数据库。历史记录中的通过结果不代表本轮最终 SHA 通过。
+全部测试、构建、typecheck 仅在 GitHub Actions 执行。本轮静态核对 [package.json](../package.json) 与 [ci.yml](../.github/workflows/ci.yml)：`pnpm ci:unit:project-knowledge`、独立 `TEST_DATABASE_URL` 下的 `pnpm ci:integration:project-knowledge`、`pnpm ci:unit:web-facts` 已有工作流入口；新增 `collector`、[闭环合成记录](../apps/scheduler/src/domains/project-knowledge/closed-loop.integration.test.ts)、[activity](../apps/scheduler/src/domains/project-knowledge/activity.integration.test.ts)、[快照隔离](../apps/scheduler/src/job-creation.integration.test.ts)、[调度唤醒](../apps/scheduler/src/knowledge-wake.integration.test.ts) 和 [Web 交互](../apps/web/src/ProjectKnowledgeApi.test.ts) 回归已接线。[behavior-policy 独立单测](../apps/scheduler/src/domains/project-knowledge/behavior-policy.test.ts)覆盖允许 target comparator fail，以及 candidate 失败、安全任一 arm 失败、unexecuted、重复/缺项仍拒绝的边界。原候选的 Actions 证据见下文；同步 main 后的候选仍须独立验收，未合并、未部署。集成 helper 为每例创建临时数据库并套当前基线，不能指向业务默认数据库。历史记录中的通过结果不代表本轮最终 SHA 通过。
 
 ### PR #1076 的候选验收记录（2026-11-12 核对）
 
@@ -227,27 +227,15 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 当前 Job 可在显式授权后使用 `suggest_project_skills` 查看本项目精确 Skill 的条件匹配，再用 `record_skill_choice` 记录 select/reject/none。宿主重算和撤权复查；选择回执不生成 usage 或触发 work，实际拉取/反馈仍走原链路。作者条件、调用者目标和独立效果分开，token 余额与质量未知时不伪造证据。协议、非模型验收和后续边界见[Skill 建议专题](SKILL_SUGGESTIONS.md)。
 
-## 来源登记与项目批量整理
+## 来源登记与项目批量整理（已退役）
 
-> #1219 第四阶段第二步起，业务 Job 终态不再自动登记来源；本节描述的批量整理链只继续收尾**切换前已登记**的来源与在途 work，第三步才会把 collector、collector-sources、collection-policy 与 `GET /projects/:id/knowledge/backfill` 整链移除。
+> #1219 第四阶段第 3 步（2026-11-27）：业务 Job 终态登记来源、`collector`、`collector-sources`、`collection-policy`、`source-retry` 已整链删除，活动页 `collection` 字段同步下线。`GET /projects/:id/knowledge/backfill` 保留，但语义改为**只读历史**：只回看旧的来源登记/采集/跳过审计与旧收尾状态，不判定资格、不触发整理、不写入审计；历史 `project_knowledge.source_registered` / `source_collected` / `source_collection_skipped` 审计仍可查，已建的 `project_knowledge_work` 仍按既有唤醒与准入推进；不再有新的自动来源登记，也不会再自动发起批量整理。
 
-本轮用户明确授权自动项目整理，[ADR 0023](architecture/adr/0023-project-knowledge-collection.md) 取代 [0021](architecture/adr/0021-knowledge-source-preview.md) 中项目批处理暂缓的限制；0021 的历史决定保留。成功业务 Job 的登记仍仅在原终态事务/savepoint 中向 append-only `audit_logs` 写 `project_knowledge.source_registered`（`system/scheduler`、`result=ok`），记录 Job/Attempt/Canvas 与 Fact/Evidence 或已接受反馈的存在标记；不在终态事务中复制正文或创建模型 Job。登记失败隔离并告警，不回滚业务成功。登记不保证来源正文保留，不是候选或产物。
-
-[collector.ts](../apps/scheduler/src/domains/project-knowledge/collector.ts) 由既有 Dispatcher tick 调用，[knowledge-wake.ts](../apps/scheduler/src/knowledge-wake.ts) 计算同一调度器的持久唤醒，不新增轮询执行器。数值阈值是本轮实现取舍，不追认为用户逐字指定参数。本轮 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量及自动准入规则：项目至少积累 **4 个未处理来源，或最老待处理来源等待满 24 小时**，并且距上次自动批次创建满 **24 小时**，才可准入。来源数按源 Job 去重，已 collected/skipped 的来源不再计入；retry 未到期的来源仍待处理，但不得提前准备。低于四个可准备来源时，同一来源必须同时满足满 24 小时和 retry 到期，不能由尚在退避的旧来源为新来源提前开启批次。项目已有非旧自动 `pending/running` work 时等待，不再建立并行项目批次；这不是给全部 Agent 显式请求新增数据库唯一约束。
-
-每次有界扫描最多 **32 个候选来源**，在其中继续选择本批可容纳者，合计至多 **19 个原始 inputs**（Fact、Evidence 及其授权资产），另可带一个冻结 governor 版本。4 是项目来源门槛，不是每批来源上限；满 24 小时也可整理少量来源。仅因本批剩余容量放不下的来源保留待后续批次，不记 collected/skipped，也不在首个放不下的来源处终止扫描；单个来源本身超过硬限制仍按永久拒绝处理。保留原观察的 verification_status，不把采集变为验证。
-
-自动批次指 `knowledge:project:` work；成功须 work 为 `completed`，且关联 proposal 有 `active/retired` 产出。`blocked/cancelled`，以及 completed 但无该产出的自动批次都计无产出；连续 **2 个**即停发新自动批次，保留待处理来源。失败链从持久 work/proposal 历史推导，成功自动批次或按相同口径成功的显式知识整理可截断该链；失败显式整理不计入也不清零。重启、时间流逝、治理 hash 变化均不能恢复；显式成功后仍须满足项目、来源、间隔和权限等准入条件。没有进程内计数或新增恢复开关。完成/阻断批次不重建来源来重置预算，旧 `knowledge:auto:` work 不参与新批次的成功/恢复判断，也不自动开始后续阶段；其在途执行和历史记录不被取消或改写。
-
-来源解析与 CAS 字节准备在短 SQL 事务外进行；项目行锁下以和选项目、durable wake、activity 相同的数据库准入规则重验来源门槛、24 小时间隔、持久失败链和繁忙状态，同时检查项目活动、最新成功 Attempt、冻结 `request_project_knowledge` 权限、未结算效果、当前来源/hash、既有处理、重试代次及 governor 版本，再原子建立 `knowledge:project:` work 和逐来源 `project_knowledge.source_collected` 审计链接。CAS 准备期间出现繁忙、冷却或停发，不能沿用事务前 ready 结果创建批次。wake 同时尊重积累门槛、冷却与来源 retry 的未来时间，停发或繁忙项目不生成立即过期的采集 wake；未来 retry 不得造成热循环。链接保存 `registration_id`、`work_ref`、`attempt_id`、`input_count`、`manifest_sha256`，最后一项为该来源冻结 manifest 的 canonical SHA-256，保留来源执行身份与输入摘要而不在审计中复制正文。无新 schema、迁移、持久失败计数或第二份经验账本。
-
-超大来源、失权、未知效果等永久拒绝，以及瞬态来源准备失败累计三次耗尽后写 `project_knowledge.source_collection_skipped`（`system/scheduler`、`result=error`，安全 `error_code`/`after_json.reason`）。瞬态故障按下文持久退避，不能因一次准备失败永久消费来源；登记经 collected/skipped 消费后不再被 collector 自动重建。未结算/unknown 效果仍走原对账边界，跳过不是已解决，也不授予重放权限。各项目间隔离，项目行锁和同事务链接用于并发/restart 去重；具体实现见 [collector-sources.ts](../apps/scheduler/src/domains/project-knowledge/collector-sources.ts) 与 [scheduler](../apps/scheduler/src/project-knowledge-scheduler.ts)。
-
-`GET /projects/:id/knowledge/backfill` 保留项目读权限内的历史资格只读预览；不返回正文、不登记历史来源、不启动整理，没有 POST 历史执行入口。自动 collector 只消费已经持久登记的来源，不把预览自动升级为下发授权。整链 token 预算和 schema 改动仍不在本轮范围。
+现在知识沉淀只有两条入口：任务内 `submit_task_knowledge_suggestion`（Memory 直接入库，Skill 走显式评测）与治理流程的显式 `request_project_knowledge`。ADR 0023 / 0024 记录的批量收集规则作为历史决策保留，不再生效。
 
 ## 积累与复用可见性
 
-`GET /projects/:id/knowledge/activity?limit=10&offset=0` 要求 `projects:read` 与严格项目 scope；分页默认 10、最多 50，拒绝未知字段，授权范围内项目不存在返回 404。保留 `summary`、工作 `items`、`next_offset` 和最多 10 条去重 `skipped_sources:[{job_id,reason,at}]`，新增 `collection:{state,pending_sources,consecutive_failures,next_collection_at}`。错误原因仅返回安全已知码或通用提示，不返回来源正文、manifest、模型反馈正文和跨项目信息。机器入口见 [activity-routes.ts](../apps/scheduler/src/domains/project-knowledge/activity-routes.ts)、[activity.ts](../apps/scheduler/src/domains/project-knowledge/activity.ts)、[OpenAPI](../apps/scheduler/src/domains/project-knowledge/openapi.ts)和 [Web 契约](../apps/web/src/ProjectKnowledgeApi.ts)；本轮新字段的最终 SHA Actions 待验。
+`GET /projects/:id/knowledge/activity?limit=10&offset=0` 要求 `projects:read` 与严格项目 scope；分页默认 10、最多 50，拒绝未知字段，授权范围内项目不存在返回 404。保留 `summary`、工作 `items`、`next_offset` 和最多 10 条去重 `skipped_sources:[{job_id,reason,at}]`。错误原因仅返回安全已知码或通用提示，不返回来源正文、manifest、模型反馈正文和跨项目信息。机器入口见 [activity-routes.ts](../apps/scheduler/src/domains/project-knowledge/activity-routes.ts)、[activity.ts](../apps/scheduler/src/domains/project-knowledge/activity.ts)、[OpenAPI](../apps/scheduler/src/domains/project-knowledge/openapi.ts)和 [Web 契约](../apps/web/src/ProjectKnowledgeApi.ts)；本轮新字段的最终 SHA Actions 待验。
 
 `collection` 是从项目未处理来源、work/proposal 历史及同一准入查询派生的只读投影，不新增持久状态机。`collection.pending_sources` 从可信 system/scheduler 来源登记审计按源 Job 去重并排除已处理来源，包含未来 retry 与本批放不下者；summary 的采集统计还核验关联 work 存在。两者在正常数据下口径一致，但 collection 与 summary 是两次只读查询，并发变更可能漂移，异常损坏数据也不保证同值；不得作为同一快照或强一致计数使用。`consecutive_failures` 是最近成功整理之后连续无产出的自动批次数，不是源准备 retry 次数。`next_collection_at` 为可计算的下次自动准入时间戳或 `null`，须同时考虑来源门槛、自动间隔和 retry；`ready` 表示已到资格时间，不能视作已派发。
 

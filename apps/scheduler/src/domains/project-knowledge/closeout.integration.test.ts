@@ -77,9 +77,86 @@ test("task suggestions are private, attributable, idempotent and readable withou
       assert.deepEqual(list.json().items.map((row: { result_json: unknown }) => row.result_json), [receipt]);
       assert.deepEqual(detail.json().result_json, receipt);
       scopes = ["projects:read", "tasks:read"];
-      const old = await app.inject({ url: `${path}/backfill` });
-      assert.equal(old.statusCode, 200);
-      assert.equal(old.json().items[0].closeout_status, "legacy_preview");
+      // #1219 第四阶段第 3 步后仍保留只读历史入口：批量整理已下线，但历史沉淀
+      // 必须查得到，且查询本身不得触发任何整理或写入。
+      await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id)
+        SELECT 'system', 'scheduler', 'project_knowledge.source_registered', ${owner.projectId},
+          'job', id::text FROM jobs WHERE id=${owner.jobId}`;
+      // GET 自身会写一条请求审计，所以「不产生写入」的判据是：不新增整理工作、
+      // 不新增采集/跳过审计（而不是审计总行数不变）。
+      const workBefore = (await db`SELECT count(*)::int AS count FROM project_knowledge_work`)[0]!.count;
+      const history = await app.inject({ url: `${path}/backfill` });
+      assert.equal(history.statusCode, 200, history.body);
+      const historyBody = history.json() as { items: Array<Record<string, unknown>> };
+      const historyRow = historyBody.items.find((row) => row.job_id === owner.jobId);
+      assert.ok(historyRow, "历史入口必须列出该任务步骤");
+      const historyFacts = (historyRow as { history: { registered_at: unknown; collected_at: unknown;
+        skipped_at: unknown; collection: unknown } }).history;
+      assert.equal(typeof historyFacts.registered_at, "string", "登记时间必须可查");
+      assert.equal(historyFacts.collected_at, null);
+      assert.equal(historyFacts.skipped_at, null);
+      assert.equal(historyFacts.collection, "retired");
+      assert.equal(historyRow!.status, "registered_retired",
+        "仅登记未处理的旧来源必须给出「旧批量整理已下线」的明确结论，不能永久显示待整理");
+      // 旧 source-retry 的跳过写入是 result='error'：这些记录必须照旧读出跳过状态。
+      await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id, result, after_json)
+        SELECT 'system', 'scheduler', 'project_knowledge.source_collection_skipped', ${owner.projectId},
+          'job', id::text, 'error', ${db.json({ reason: "source_collection_retry_exhausted" } as never)}
+        FROM jobs WHERE id=${owner.jobId}`;
+      const rowOf = (body: string) => (JSON.parse(body) as { items: Array<Record<string, unknown>> }).items
+        .find((row) => row.job_id === owner.jobId) as { status: string; reason?: string;
+          history: { skipped_at: unknown } } | undefined;
+      const skippedResponse = await app.inject({ url: `${path}/backfill` });
+      assert.equal(skippedResponse.statusCode, 200, skippedResponse.body);
+      const skippedRow = rowOf(skippedResponse.body)!;
+      assert.equal(skippedRow.status, "skipped", "旧 result='error' 的跳过记录必须照旧识别");
+      assert.equal(skippedRow.reason, "source_collection_retry_exhausted", "标准原因码照旧返回");
+      assert.equal(typeof skippedRow.history.skipped_at, "string", "跳过时间必须可查");
+      // 任意历史原因文本都不得从接口返回；只有标准代码可读（取最近一条，命中即过滤）。
+      await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id, result, after_json)
+        SELECT 'system', 'scheduler', 'project_knowledge.source_collection_skipped', ${owner.projectId},
+          'job', id::text, 'error', ${db.json({ reason: "prompt 里的任意文本 SYNTHETIC-LEAK" } as never)}
+        FROM jobs WHERE id=${owner.jobId}`;
+      // 快照放在写入跳过审计之后：只判定「查询本身」不再新增采集/跳过审计。
+      const collectBefore = (await db`SELECT count(*)::int AS count FROM audit_logs
+        WHERE action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`)[0]!.count;
+      const filtered = await app.inject({ url: `${path}/backfill` });
+      assert.equal(filtered.statusCode, 200, filtered.body);
+      assert.doesNotMatch(filtered.body, /SYNTHETIC-LEAK/, "原始跳过原因不得进入只读历史响应");
+      assert.equal(rowOf(filtered.body)!.status, "skipped", "跳过状态与原因过滤互不影响");
+      assert.equal((await db`SELECT count(*)::int AS count FROM project_knowledge_work`)[0]!.count, workBefore,
+        "只读历史查询不得创建整理工作");
+      assert.equal((await db`SELECT count(*)::int AS count FROM audit_logs
+        WHERE action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`)[0]!.count,
+        collectBefore, "只读历史查询不得触发采集或跳过审计");
+      // 评审 r5：三类记录必须分开——没有旧回执 / 真写过 no_sources / 重试耗尽。
+      const seedHistoryJob = async () => {
+        const [row] = await db`INSERT INTO jobs (project_id, canvas_id, type, status, finished_at, agent_snapshot_json)
+          VALUES (${owner.projectId}, ${owner.canvasId}, 'explore', 'succeeded', now(), '{}'::jsonb) RETURNING id`;
+        return String(row.id);
+      };
+      const noReceiptJob = await seedHistoryJob();
+      const noSourcesJob = await seedHistoryJob();
+      const retryExhaustedJob = await seedHistoryJob();
+      const seedSkip = async (target: string, reason: string, result: string) => {
+        await db`INSERT INTO audit_logs (project_id, actor_type, actor_id, action, resource_type, resource_id, result, after_json)
+          VALUES (${owner.projectId}, 'system', 'scheduler', 'project_knowledge.source_collection_skipped', 'job', ${target},
+            ${result}, ${db.json({ reason } as never)})`;
+      };
+      await seedSkip(noSourcesJob, "no_sources", "ok");
+      await seedSkip(retryExhaustedJob, "source_collection_retry_exhausted", "error");
+      const threeBody = await app.inject({ url: `${path}/backfill?limit=20` });
+      assert.equal(threeBody.statusCode, 200, threeBody.body);
+      type HistoryRow = { job_id: string; status: string; reason?: string; history: { collection: string } };
+      const threeRows = new Map<string, HistoryRow>(
+        threeBody.json<{ items: HistoryRow[] }>().items.map((row) => [row.job_id, row]));
+      assert.equal(threeRows.get(noReceiptJob)?.history.collection, "none",
+        "没有旧回执不得伪造成 skipped/no_sources");
+      assert.equal(threeRows.get(noReceiptJob)?.status, "no_history");
+      assert.equal(threeRows.get(noSourcesJob)?.reason, "no_sources", "真的写过 no_sources 才回该原因");
+      assert.equal(threeRows.get(retryExhaustedJob)?.reason, "source_collection_retry_exhausted",
+        "重试耗尽必须与「没有来源」分开");
+
       const [{ count }] = await db`SELECT count(*)::int AS count FROM project_knowledge_work`;
       assert.equal(count, 0);
       assert.equal((await db`SELECT id FROM canvas_nodes WHERE node_type='knowledge_closeout'`).length, 0);

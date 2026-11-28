@@ -15,13 +15,14 @@ test('stop during knowledge tick prevents normal claim stage',async()=>{
 test('active generation proceeds after knowledge tick',async()=>{
   assert.equal(await tickKnowledgeBeforeDispatch(()=>false,async()=>({tick:async()=>1})),true);
 });
+// #1219：旧 knowledge:project: 批次收尾多一次读/一条语句，停止语义不变。
 test('knowledge claim stops after pending read without starting a transaction',async()=>{
   const {createKnowledgeWorkScheduler}=await import('./domains/project-knowledge/work.js');
   let stopped=false,reads=0;
   const db=Object.assign(async(parts:TemplateStringsArray)=>{if(/^\s*COALESCE\(\(/.test(parts[0]))return [];reads++;stopped=true;return [{id:'pending'}];},{begin:async()=>{throw Error('must not begin after stop');}});
   const scheduler=createKnowledgeWorkScheduler({db:db as unknown as Parameters<typeof createKnowledgeWorkScheduler>[0]['db'],governanceHash:'a'.repeat(64),
     createJobInTransaction:async()=>{throw Error('must not create');},ensureCanvasForTaskInTransaction:async()=>{throw Error('must not create');}});
-  assert.equal(await scheduler.tick(()=>stopped),0);assert.equal(reads,1);
+  assert.equal(await scheduler.tick(()=>stopped),0);assert.equal(reads,2);
 });
 test('knowledge claim stops after locked-row read without UPDATE',async()=>{
   const {createKnowledgeWorkScheduler}=await import('./domains/project-knowledge/work.js');
@@ -30,7 +31,7 @@ test('knowledge claim stops after locked-row read without UPDATE',async()=>{
   const db=Object.assign(async(parts:TemplateStringsArray)=>{if(/^\s*COALESCE\(\(/.test(parts[0]))return [];queries++;return [{id:'pending'}];},{begin:async(fn:(value:typeof tx)=>Promise<void>)=>fn(tx)});
   const scheduler=createKnowledgeWorkScheduler({db:db as unknown as Parameters<typeof createKnowledgeWorkScheduler>[0]['db'],governanceHash:'a'.repeat(64),
     createJobInTransaction:async()=>{throw Error('must not create');},ensureCanvasForTaskInTransaction:async()=>{throw Error('must not create');}});
-  assert.equal(await scheduler.tick(()=>stopped),0);assert.equal(queries,2);
+  assert.equal(await scheduler.tick(()=>stopped),0);assert.equal(queries,3);
 });
 
 test("#1287 领取与启动先于知识推进，知识失败不影响已领取任务", async () => {

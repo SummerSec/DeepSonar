@@ -45,24 +45,10 @@ const button = "rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-
 const link = "text-acc-300 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-acc-400";
 const jobHref = (projectId: string, jobId: string) => `/jobs?${new URLSearchParams({ project: projectId, job: jobId })}`;
 
-const collectionStates: Record<KnowledgeActivity["collection"]["state"], string> = {
-  idle: "暂无待整理来源", busy: "已有知识工作待执行或整理中", accumulating: "正在积累来源",
-  cooldown: "自动整理冷却中", ready: "已达到收集条件，等待调度", halted: "自动整理已停发",
-};
-
-function CollectionStatus({ collection }: { collection: KnowledgeActivity["collection"] }) {
-  return <div role="group" aria-label="自动整理状态" className="mb-3 text-xs leading-6 text-zinc-400">
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-      <span className={collection.state === "halted" ? "font-medium text-amber-300" : "font-medium text-zinc-200"}>
-        {collectionStates[collection.state]}</span>
-      <span>待整理来源 {collection.pending_sources} · 连续无产出 {collection.consecutive_failures} 批</span>
-      {collection.next_collection_at !== null && <span>下次可收集时间 <time dateTime={collection.next_collection_at}>
-        {date(collection.next_collection_at)}</time></span>}
-    </div>
-    {collection.state === "halted" && <p className="text-amber-200/90">
-      来源已保留；需修复原因后，成功完成一次显式知识整理才会恢复自动收集。</p>}
-    <p>积累 4 个来源或最老来源等待满 24 小时后合批；自动批次至少间隔 24 小时；连续 2 个自动批次无产出即停发。</p>
-  </div>;
+function RetiredCollectionNotice() {
+  return <p aria-label="自动整理状态" className="mb-3 text-xs leading-6 text-zinc-400">
+    自动整理已下线：来源整理改为任务内显式 request_project_knowledge，历史采集审计仍可查。
+  </p>;
 }
 
 function WorkRow({ work, projectId }: { work: KnowledgeActivityWork; projectId: string }) {
@@ -114,11 +100,11 @@ export function ProjectKnowledgeActivity({ projectId, refresh, onRefresh }: {
   const loading = !current;
   return <section aria-label="知识积累与复用" aria-busy={loading} className="mb-5 rounded-xl border border-white/[.07] bg-white/[.025] px-4 py-3">
     <h2 className="mb-3 text-sm font-medium text-zinc-200">积累与复用</h2>
+    <RetiredCollectionNotice />
     {loading && <p role="status" className="text-xs text-zinc-500">正在加载积累与复用进展…</p>}
     {current?.failed && <div role="alert" className="text-xs text-red-200">加载积累与复用进展失败。
       <button type="button" className="ml-3 underline" onClick={onRefresh}>重试</button></div>}
     {data && <>
-      <CollectionStatus collection={data.collection} />
       <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs leading-6 text-zinc-400">
         <span>已登记来源 <strong className="text-zinc-200">{data.summary.registered_sources}</strong></span>
         <span>已纳入整理 <strong className="text-zinc-200">{data.summary.collected_sources}</strong></span>

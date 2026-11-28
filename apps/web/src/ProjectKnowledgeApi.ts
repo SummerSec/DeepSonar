@@ -86,15 +86,23 @@ export interface KnowledgeCloseout {
   next_offset: number | null;
 }
 
+
 export interface KnowledgeBackfillRow {
   job_id: string;
   canvas_id?: string | null;
   job_status: string;
   finished_at: string | null;
-  status: "eligible" | "skipped";
+  /** 历史结论：已采集 / 当时跳过 / 仅登记（旧批量整理已下线） / 无登记。 */
+  status: "collected" | "skipped" | "registered_retired" | "no_history";
   reason?: string;
   closeout_status: KnowledgeCloseoutStatus | "legacy_preview";
   closeout_root_ref: string | null;
+  history?: {
+    registered_at: string | null;
+    collected_at: string | null;
+    skipped_at: string | null;
+    collection: "collected" | "skipped" | "retired" | "none";
+  };
 }
 
 export interface KnowledgeActivityWork {
@@ -113,7 +121,8 @@ export interface KnowledgeActivityWork {
 }
 
 export interface KnowledgeActivity extends Page<KnowledgeActivityWork> {
-  collection: {
+  /** 旧的项目批量整理状态。#1219 第四阶段第 3 步后服务端不再返回，保留可选定义供历史读取。 */
+  collection?: {
     state: "idle" | "busy" | "accumulating" | "cooldown" | "ready" | "halted";
     pending_sources: number;
     consecutive_failures: number;
@@ -154,11 +163,11 @@ export const projectKnowledgeApi = {
   evaluateCloseout: (projectId: string, rootId: string, candidateRef: string) =>
     request<{ work_ref: string }>(`${base(projectId)}/closeout/${encodeURIComponent(rootId)}/evaluate`,
       "POST", { candidate_ref: candidateRef }),
-  closeout: (projectId: string, rootId: string, offset: number, signal?: AbortSignal) =>
-    request<KnowledgeCloseout>(`${base(projectId)}/closeout/${encodeURIComponent(rootId)}?limit=10&offset=${offset}`,
-      "GET", undefined, { cache: "no-store", signal }),
   backfill: (projectId: string, offset: number, signal?: AbortSignal) =>
     request<Page<KnowledgeBackfillRow>>(`${base(projectId)}/backfill?limit=10&offset=${offset}`,
+      "GET", undefined, { cache: "no-store", signal }),
+  closeout: (projectId: string, rootId: string, offset: number, signal?: AbortSignal) =>
+    request<KnowledgeCloseout>(`${base(projectId)}/closeout/${encodeURIComponent(rootId)}?limit=10&offset=${offset}`,
       "GET", undefined, { cache: "no-store", signal }),
   activity: (projectId: string, input: { limit?: number; offset?: number } = {}) =>
     request<KnowledgeActivity>(`${base(projectId)}/activity?limit=${input.limit ?? 10}&offset=${input.offset ?? 0}`),

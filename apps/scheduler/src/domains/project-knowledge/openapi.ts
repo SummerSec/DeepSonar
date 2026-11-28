@@ -11,8 +11,8 @@ export const KNOWLEDGE_MANAGEMENT_OPERATIONS: Op[] = [
   get(prefix + "/activity", "项目知识来源、积累、复用/反馈摘要及分页整理工作；反馈不是质量认证", {
     limit: { type: "integer", minimum: 1, maximum: 50, default: 10 }, offset: page.offset,
   }),
-  get(prefix + "/backfill", "只读预览历史任务来源登记、当前补做资格与已有整理记录；不启动整理", {
-    limit: { type: "integer", minimum: 1, maximum: 20, default: 10 }, offset: page.offset,
+  get(prefix + "/backfill", "只读查询历史任务沉淀：来源登记/采集/跳过审计与旧收尾状态；不判定资格、不触发整理", {
+    ...page,
   }),
   get(prefix + "/closeout/{rootId}", "按原任务轮次只读查看知识沉淀，建议正文按来源和目标权限显示", {
     limit: { type: "integer", minimum: 1, maximum: 20, default: 10 }, offset: page.offset,
