@@ -257,12 +257,16 @@ if (!testDatabaseUrl) {
         payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
       });
       const silentChromeNoTool = await insertRunning("deepsonar-chrome-audit");
+      // #1306 评审 r4：延长等待需要可信时间。这条要证明「预算内仍在飞」，
+      // 因此必须带新鲜可信 at；缺 at 的行不再享有延长（见后面 1000s 对照）。
       const longToolAudit = await insertRunning("deepsonar-audit", {
-        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: new Date(Date.now() - 5 * 60_000).toISOString() } },
       });
       // #1086/#1304：in-flight 豁免有上限，且信号自身超过预算即失效；把 started_at 推到 1h 预算之外。
+      // #1306 评审：工具超时「原因归类」必须由可信标记时间证明，坏值/缺时间不能写成
+      // 已确认的工具超时；这条有效租约的行虽然有可信但早已过预算的标记，仍然属于在飞。
       const hungToolAudit = await insertRunning("deepsonar-audit", {
-        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: new Date(Date.now() - 3900_000).toISOString() } },
       });
       await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${hungToolAudit}`;
       // #1304 评审：历史脏数据里的 runtime_activity.at 可能是不可解析的值。它只能让
@@ -284,6 +288,8 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${relativeAtAudit}`;
       await createAttempt(sql, relativeAtAudit, { agent_cli: "claude-code" });
       const independentAudit = await insertRunning("deepsonar-audit");
+      // 普通停滞的对照行也要有 active Attempt，否则 reason 无处落库。
+      await createAttempt(sql, independentAudit, { agent_cli: "claude-code" });
       // Reaper 通过 settleAttemptTerminal 收口：必须先有 active Attempt，否则 reason 无处落库。
       await createAttempt(sql, hungToolAudit, { agent_cli: "claude-code" });
       // 评审 P1：stall_sec=0 是明确关闭；Chrome/Hub floor 不得把它重新打开。
@@ -303,20 +309,129 @@ if (!testDatabaseUrl) {
       // 脏 at 值：不抛错，退回 started_at 判定，同期独立任务照常收口。
       assert.equal(stalledIds.has(independentAudit), true,
         "脏 runtime_activity.at 不得让整批清理事务回滚（独立应收口任务必须被收口）");
-      const [dirtyRow] = await sql`SELECT status FROM jobs WHERE id = ${dirtyAtAudit}`;
-      assert.equal(dirtyRow.status, "failed", "脏 at 值按无可信信号处理，走普通停滞收口");
-      const specialRows = await sql`SELECT id, status FROM jobs WHERE id IN (${infinityAtAudit}, ${relativeAtAudit})`;
-      assert.deepEqual(specialRows.map((row) => row.status), ["failed", "failed"],
-        "infinity / now 等非有限或相对时间不得让陈旧信号无限豁免");
+      // 有工具信号但时间不可信：仍然属于「工具有始无终」，必须记成工具超时，
+      // 不能和真的没有产出的 Job 混成一个原因（#1304 follow-up）。
+      const oddAtReasons = await sql`SELECT a.outcome_json->>'reason' AS reason, count(*)::int AS count
+        FROM jobs JOIN job_attempts a ON a.job_id = jobs.id
+        WHERE jobs.id IN (${dirtyAtAudit}, ${infinityAtAudit}, ${relativeAtAudit}) AND a.status = 'failed'
+        GROUP BY 1`;
+      // #1306 评审：能否确认是工具超时要求「可信标记时间」；这三条 bad marker
+      // （not-a-timestamp / infinity / now）都不延长等待，也不写成工具超时。
+      assert.deepEqual(oddAtReasons.map((row) => [row.reason, Number(row.count)]),
+        [["reaper_stall", 3]],
+        "坏标记（脏值/特殊值）必须落到普通停滞原因，不写成已确认的工具超时");
+      // 评审要求：租约过期/为空但留下旧信号的 Job 必须由普通停滞兜底，不能因为
+      // 「有工具标记」就永远没人清理；同时它不算已确认的工具超时。
+      const expiredLeaseSignal = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "2026-01-01T00:00:00.000Z" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds',
+          lease_expires_at = now() - interval '10 seconds' WHERE id = ${expiredLeaseSignal}`;
+      await createAttempt(sql, expiredLeaseSignal, { agent_cli: "claude-code" });
+      const leaseGone = await app.reapStalledExecution(900);
+      assert.equal(new Set(leaseGone.map((row) => row.id)).has(expiredLeaseSignal), true,
+        "租约失效但留下旧工具信号的 Job 仍必须被普通停滞清理");
+      const [leaseGoneAttempt] = await sql`SELECT outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${expiredLeaseSignal} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.equal(leaseGoneAttempt.reason, "reaper_stall",
+        "没有有效租约时不得把旧信号记成已确认的工具超时");
+      // 评审反例：有效租约 + 已静默 1000s + 标记时间是 2 小时前。旧标记不是「工具在飞」，
+      // 不能把等待延长到 3600s；按主线 900s 阈值走普通停滞收口。
+      const staleMarkerLiveLease = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "2026-01-01T00:00:00.000Z" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '1000 seconds' WHERE id = ${staleMarkerLiveLease}`;
+      await createAttempt(sql, staleMarkerLiveLease, { agent_cli: "claude-code" });
+      const staleReaped = await app.reapStalledExecution(900);
+      assert.equal(new Set(staleReaped.map((row) => row.id)).has(staleMarkerLiveLease), true,
+        "旧标记不得让有效租约的行多等 in-flight 预算");
+      const [staleMarkerAttempt] = await sql`SELECT outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${staleMarkerLiveLease} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.equal(staleMarkerAttempt.reason, "reaper_stall",
+        "失效标记不得写成已确认的工具超时");
+      // 评审 r4/1000s 静默 + 坏值/缺失时间：三条都不能「延长等待」也已经不能冒充
+      // 「已确认工具超时」；必须在 900s 普通阈值上被普通停滞收口。
+      const badNowMarker = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "now" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '1000 seconds' WHERE id = ${badNowMarker}`;
+      await createAttempt(sql, badNowMarker, { agent_cli: "claude-code" });
+      const missingTimeMarker = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '1000 seconds' WHERE id = ${missingTimeMarker}`;
+      await createAttempt(sql, missingTimeMarker, { agent_cli: "claude-code" });
+      const bad1000Reaped = await app.reapStalledExecution(900);
+      const bad1000Ids = new Set(bad1000Reaped.map((row) => row.id));
+      assert.ok(bad1000Ids.has(badNowMarker) && bad1000Ids.has(missingTimeMarker),
+        "1000s 静默 + 坏值/缺失时间必须按普通阈值收口，不能多等预算");
+      for (const jobId of [badNowMarker, missingTimeMarker]) {
+        const [attempt] = await sql`SELECT outcome_json->>'reason' AS reason
+          FROM job_attempts WHERE job_id = ${jobId} ORDER BY attempt_no DESC LIMIT 1`;
+        assert.equal(attempt.reason, "reaper_stall",
+          "超过工具预算的坏值/缺失时间也不得被写成已确认的工具超时");
+      }
+      // 评审 r6：标记刚写入（at≈now）但 Job 已沉默 1000s，说明工具刚启动而任务暂无产出；
+      // 不能把它立刻记成「已确认工具超时」，也不该在 900s 就收口。
+      const freshMarkerOldSilence = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: new Date().toISOString() } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '1000 seconds' WHERE id = ${freshMarkerOldSilence}`;
+      await createAttempt(sql, freshMarkerOldSilence, { agent_cli: "claude-code" });
+      const freshReaped = await app.reapStalledExecution(900);
+      assert.equal(new Set(freshReaped.map((row) => row.id)).has(freshMarkerOldSilence), false,
+        "刚写入的工具标记不能立刻算成超时，保持等待");
+      const [freshRow] = await sql`SELECT status FROM jobs WHERE id = ${freshMarkerOldSilence}`;
+      assert.equal(freshRow.status, "running", "标记新鲜时不得被普通停滞或工具超时收口");
+      // 结构化坏值（数字而不是时间字符串）：只影响该行判定，不得抛错拖垮整批清理。
+      const structuredBadAt = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: 12345 } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${structuredBadAt}`;
+      await createAttempt(sql, structuredBadAt, { agent_cli: "claude-code" });
+      const structuredReaped = await app.reapStalledExecution(900);
+      assert.equal(new Set(structuredReaped.map((row) => row.id)).has(structuredBadAt), true,
+        "坏时间值不得让整批清理失败，也不得挡住宿主行收口");
+      const [structuredAttempt] = await sql`SELECT outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${structuredBadAt} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.equal(structuredAttempt.reason, "reaper_stall",
+        "结构化坏值只能落普通停滞，不能冒充已确认工具超时");
+      // 评审 r5：标记必须可归属本次执行。启动前的旧标记与未来时间都不能证明本次工具在跑，
+      // 也不得阻止普通清理，更不能写成「已确认工具超时」。
+      const preStartMarker = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "2026-01-01T00:00:00.000Z" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${preStartMarker}`;
+      await createAttempt(sql, preStartMarker, { agent_cli: "claude-code" });
+      const futureMarker = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: new Date(Date.now() + 3600_000).toISOString() } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${futureMarker}`;
+      await createAttempt(sql, futureMarker, { agent_cli: "claude-code" });
+      const unattributable = await app.reapStalledExecution(900);
+      const unattributableIds = new Set(unattributable.map((row) => row.id));
+      assert.ok(unattributableIds.has(preStartMarker) && unattributableIds.has(futureMarker),
+        "启动前 / 未来时间的标记必须按普通停滞收口，不能挡住清理");
+      for (const jobId of [preStartMarker, futureMarker]) {
+        const [attempt] = await sql`SELECT outcome_json->>'reason' AS reason
+          FROM job_attempts WHERE job_id = ${jobId} ORDER BY attempt_no DESC LIMIT 1`;
+        assert.equal(attempt.reason, "reaper_stall",
+          "不可归属本次执行的标记不得写成已确认的工具超时");
+      }
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");
-      // #1304：in-flight 信号自带年龄上限。信号（用 started_at 兜底）已超预算就不再
-      // 豁免，退化到普通停滞收口——比无限豁免更保守，也避免事件被吞后永久挂住。
-      assert.match(String(hungRow.error), /产出停滞/);
+      // 工具超时与普通停滞必须是两个可区分的原因：这条有信号，落工具超时。
+      assert.match(String(hungRow.error), /in-flight tool 超出预算/);
+      assert.match(String(hungRow.error), /tool=Bash/);
       const [hungAttempt] = await sql`SELECT status, outcome_json->>'reason' AS reason
         FROM job_attempts WHERE job_id = ${hungToolAudit} ORDER BY attempt_no DESC LIMIT 1`;
       assert.deepEqual({ status: hungAttempt.status, reason: hungAttempt.reason },
-        { status: "failed", reason: "reaper_stall" });
+        { status: "failed", reason: "reaper_inflight_tool_stalled" });
+      // 真的没有工具信号的 Job 才是普通停滞。
+      const [independentAttempt] = await sql`SELECT outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${independentAudit} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.equal(independentAttempt.reason, "reaper_stall",
+        "没有任何工具信号的 Job 才能记成普通停滞");
 
       assert.equal(stalledIds.has(disabledChrome), false,
         "runtime_knobs.stall_sec=0 的 chrome Job 保持关闭，不被 per-image floor 重新启用");

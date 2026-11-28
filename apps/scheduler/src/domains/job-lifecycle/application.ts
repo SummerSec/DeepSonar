@@ -349,26 +349,38 @@ export function createSqlJobLifecycleApplication(
         // #1304：只认权威信号。payload 的 runtime_activity 由两相无节流写入，而
         // 「最后一条 tool.call.* 事件是否 started」是派生信号：completed 曾被 20s
         // 节流吞掉，97.7% 的 Job 因此被永久判成「有工具在飞」，普通停滞收口 14 天 0 次。
-        // 同时要求信号自身未超预算：进程消失导致 completed 永远不来时，过期信号不再
-        // 豁免，Job 退化到普通停滞收口（更保守）。
+        // 清理资格与原因归类分开（#1306 评审）：工具超时分支要求有效租约 + 存在工具信号
+        // + 信号自身已超预算；不满足时由普通停滞兜底，旧信号不会让任务永久无人清理。
         // 时间字段可能来自历史脏数据：用 pg_input_is_valid 校验后再转换，坏值视为
         // 「没有可信时间」退回 started_at，绝不让整个清理事务因一条坏行回滚。
-        const inflightTool = tx`(
+        // 信号是否存在（不看年龄）：用于把「工具一直没结束」与「完全没产出」分开计数。
+        const inflightSignal = tx`(
                 NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
-                AND COALESCE(
-                  CASE
-                    -- 只接受绝对 ISO 时间：infinity/-infinity/now 之类特殊值能通过
-                    -- pg_input_is_valid，但都不是「写入当时的固定时间」，会让同一条旧
-                    -- 信号在有效租约下无限豁免（#1304 评审）。
-                    WHEN payload_json #>> '{runtime_activity,at}' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]'
-                      AND pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
-                      THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
-                  END,
-                  started_at
-                ) + ${inflightBudget} > now()
               )`;
-        // 先收口超出 in-flight 预算的挂死工具（独立稳定原因），再走普通停滞判定；
-        // 已 failed 的行不会在第二条 UPDATE 里再次匹配 status='running'。
+        // 可信标记时间：只认绝对 ISO 时间并校验；坏值（缺失、'now'、'infinity'）算
+        // 「没有可信时间」，不退回 started_at，也不得把工具挂死当成「已在飞」。
+        // 可信 = 可解析 + 可归属本次执行：必须落在 [started_at, now()] 之间。
+        // 任务启动前的旧标记不能证明本次工具在跑；未来时间也不得阻止普通清理。
+        const trustedMarkerAt = tx`(
+                CASE
+                  WHEN payload_json #>> '{runtime_activity,at}' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]'
+                    AND pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
+                    AND (payload_json #>> '{runtime_activity,at}')::timestamptz >= started_at
+                    AND (payload_json #>> '{runtime_activity,at}')::timestamptz <= now()
+                    THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
+                END
+              )`;
+        // 「是否延长等待」：只有 marker 存在 + 可信时间且该时间仍在 in-flight 预算内的行，
+        // 才准许比普通停滞阈值再多等一轮。旧标记（可信但已过预算）或坏值/缺时间一律不延长。
+        const inflightSignalFresh = tx`(
+                ${inflightSignal}
+                AND ${trustedMarkerAt} IS NOT NULL
+                AND ${trustedMarkerAt} + ${inflightBudget} > now()
+              )`;
+        // 先收口挂死工具（独立稳定原因），再走普通停滞判定；已 failed 的行不会在
+        // 第二条 UPDATE 里再次匹配 status='running'。
+        // #1304 跟进：判据从「信号未过预算」改成「信号存在」。信号过期或不可信只说明
+        // 我们不知道它何时停止，仍然是「工具有始无终」，不能被记成普通停滞。
         const inflightStalled = await tx`
           UPDATE jobs SET status = 'failed', finished_at = now(),
                           error = COALESCE(NULLIF(error, ''), '')
@@ -380,7 +392,13 @@ export function createSqlJobLifecycleApplication(
             AND started_at IS NOT NULL
             AND ${configuredSec}::int > 0
             AND ${leaseLive}
-            AND ${inflightTool}
+            AND ${inflightSignal}
+            -- 「能否确认是工具超时」必须由可信标记时间证明；坏值/缺时间不得写成
+            -- 「已确认工具超时」（#1306 评审）。
+            AND ${trustedMarkerAt} IS NOT NULL
+            -- 刚写入的标记不能立刻算成「工具超时」：标记自身也要超过预算，
+            -- 否则一次心跳/新工具启动就会被误记成确认超时（评审 r6）。
+            AND ${trustedMarkerAt} + ${inflightBudget} < now()
             AND ${lastActivity} + ${inflightBudget} < now()
           RETURNING id, sandbox_id`;
         for (const row of inflightStalled) {
@@ -394,7 +412,10 @@ export function createSqlJobLifecycleApplication(
             AND started_at IS NOT NULL
             AND ${configuredSec}::int > 0
             AND ${lastActivity} + ${floorSec}::int * interval '1 second' < now()
-            AND NOT (${leaseLive} AND ${inflightTool})
+            -- #1304 评审：清理资格与原因归类分开。有效租约 + 有工具信号的行属于「工具在飞」：
+            -- 未超预算由上面的分支继续等，超预算由上一段记成工具超时；租约过期/为空但留下
+            -- 旧信号的行没有 owner 可等，必须由普通停滞兜底，否则永远没人清理。
+            AND NOT (${leaseLive} AND ${inflightSignalFresh})
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
