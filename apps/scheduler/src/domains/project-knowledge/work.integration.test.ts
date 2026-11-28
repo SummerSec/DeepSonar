@@ -406,7 +406,10 @@ test("#1134 revise 的提示精确取自上一提案的 base_refs（不会被前
 
 test("#1219 旧 project 批次（knowledge:project:）仍会被推进或按既有规则结束", async () => {
   await withKnowledgeDatabase(async (db) => {
+    // 同一项目里只要有一条 running 的知识工作就会挡住 pending 认领，所以两条旧批次
+    // 分别落在各自项目，才能分别观察「认领推进」与「在途结束」。
     const source = await seedKnowledgeJob(db);
+    const inflightSource = await seedKnowledgeJob(db);
     const pendingKey = `knowledge:project:${randomUUID()}`;
     const inflightKey = `knowledge:project:${randomUUID()}`;
     const [pending] = await db`INSERT INTO project_knowledge_work
@@ -415,7 +418,7 @@ test("#1219 旧 project 批次（knowledge:project:）仍会被推进或按既�
         'fixture', 'pending', now() - interval '1 second') RETURNING id`;
     const [inflight] = await db`INSERT INTO project_knowledge_work
       (project_id,origin_job_id,canvas_id,trigger_key,input_manifest_json,governance_hash,reason,state,claim_expires_at)
-      VALUES(${source.projectId},${source.jobId},${source.canvasId},${inflightKey},${db.json([])},${GOVERNANCE},
+      VALUES(${inflightSource.projectId},${inflightSource.jobId},${inflightSource.canvasId},${inflightKey},${db.json([])},${GOVERNANCE},
         'fixture', 'running', now() - interval '1 second') RETURNING id`;
     const scheduler = schedulerFor(db);
     await scheduler.tick();
@@ -427,11 +430,13 @@ test("#1219 旧 project 批次（knowledge:project:）仍会被推进或按既�
     if (inflightRow!.state === "blocked") assert.equal(typeof inflightRow!.reason, "string", "结束必须留下原因");
     // 同一 trigger_key 不得被重复认领成第二条工作。
     const duplicates = await db`SELECT trigger_key, count(*)::int AS count FROM project_knowledge_work
-      WHERE project_id=${source.projectId} AND trigger_key IN (${pendingKey}, ${inflightKey}) GROUP BY 1`;
+      WHERE project_id IN (${source.projectId}, ${inflightSource.projectId})
+        AND trigger_key IN (${pendingKey}, ${inflightKey}) GROUP BY 1`;
     assert.deepEqual(duplicates.map((row) => Number(row.count)), [1, 1], "旧批次不得被重复认领");
     // 历史仍可查：行本身与 trigger_key 保留，归档的 knowledge:auto: 准备行不会被重新激活。
     const history = await db`SELECT count(*)::int AS count FROM project_knowledge_work
-      WHERE project_id=${source.projectId} AND trigger_key IN (${pendingKey}, ${inflightKey})`;
+      WHERE project_id IN (${source.projectId}, ${inflightSource.projectId})
+        AND trigger_key IN (${pendingKey}, ${inflightKey})`;
     assert.equal(Number(history[0]!.count), 2, "旧批次历史必须仍可查询");
   });
 });
