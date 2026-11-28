@@ -314,6 +314,21 @@ if (!testDatabaseUrl) {
       assert.deepEqual(oddAtReasons.map((row) => [row.reason, Number(row.count)]),
         [["reaper_inflight_tool_stalled", 3]],
         "脏/特殊 at 值时仍必须落到工具超时原因，而不是普通停滞");
+      // 评审要求：租约过期/为空但留下旧信号的 Job 必须由普通停滞兜底，不能因为
+      // 「有工具标记」就永远没人清理；同时它不算已确认的工具超时。
+      const expiredLeaseSignal = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "2026-01-01T00:00:00.000Z" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds',
+          lease_expires_at = now() - interval '10 seconds' WHERE id = ${expiredLeaseSignal}`;
+      await createAttempt(sql, expiredLeaseSignal, { agent_cli: "claude-code" });
+      const leaseGone = await app.reapStalledExecution(900);
+      assert.equal(new Set(leaseGone.map((row) => row.id)).has(expiredLeaseSignal), true,
+        "租约失效但留下旧工具信号的 Job 仍必须被普通停滞清理");
+      const [leaseGoneAttempt] = await sql`SELECT outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${expiredLeaseSignal} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.equal(leaseGoneAttempt.reason, "reaper_stall",
+        "没有有效租约时不得把旧信号记成已确认的工具超时");
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");
       // 工具超时与普通停滞必须是两个可区分的原因：这条有信号，落工具超时。

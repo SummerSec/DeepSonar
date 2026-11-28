@@ -349,24 +349,10 @@ export function createSqlJobLifecycleApplication(
         // #1304：只认权威信号。payload 的 runtime_activity 由两相无节流写入，而
         // 「最后一条 tool.call.* 事件是否 started」是派生信号：completed 曾被 20s
         // 节流吞掉，97.7% 的 Job 因此被永久判成「有工具在飞」，普通停滞收口 14 天 0 次。
-        // 同时要求信号自身未超预算：进程消失导致 completed 永远不来时，过期信号不再
-        // 豁免，Job 退化到普通停滞收口（更保守）。
+        // 清理资格与原因归类分开（#1306 评审）：工具超时分支要求有效租约 + 存在工具信号
+        // + 信号自身已超预算；不满足时由普通停滞兜底，旧信号不会让任务永久无人清理。
         // 时间字段可能来自历史脏数据：用 pg_input_is_valid 校验后再转换，坏值视为
         // 「没有可信时间」退回 started_at，绝不让整个清理事务因一条坏行回滚。
-        const inflightTool = tx`(
-                NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
-                AND COALESCE(
-                  CASE
-                    -- 只接受绝对 ISO 时间：infinity/-infinity/now 之类特殊值能通过
-                    -- pg_input_is_valid，但都不是「写入当时的固定时间」，会让同一条旧
-                    -- 信号在有效租约下无限豁免（#1304 评审）。
-                    WHEN payload_json #>> '{runtime_activity,at}' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]'
-                      AND pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
-                      THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
-                  END,
-                  started_at
-                ) + ${inflightBudget} > now()
-              )`;
         // 信号是否存在（不看年龄）：用于把「工具一直没结束」与「完全没产出」分开计数。
         const inflightSignal = tx`(
                 NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
@@ -400,9 +386,10 @@ export function createSqlJobLifecycleApplication(
             AND started_at IS NOT NULL
             AND ${configuredSec}::int > 0
             AND ${lastActivity} + ${floorSec}::int * interval '1 second' < now()
-            AND NOT (${leaseLive} AND ${inflightTool})
-            -- 有工具信号的 Job 只走上面的工具超时收口，不允许被记成「产出停滞」。
-            AND NOT ${inflightSignal}
+            -- #1304 评审：清理资格与原因归类分开。只有当「工具超时收口确实会接管」
+            -- 时才排除在普通停滞之外（有效租约 + 有工具信号 + 信号自身已超预算）；
+            -- 租约过期/为空但留下旧信号的行仍必须由普通停滞兜底，否则永远没人清理。
+            AND NOT (${leaseLive} AND ${inflightSignal} AND ${lastActivity} + ${inflightBudget} < now())
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
