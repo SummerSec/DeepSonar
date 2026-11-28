@@ -386,10 +386,10 @@ export function createSqlJobLifecycleApplication(
             AND started_at IS NOT NULL
             AND ${configuredSec}::int > 0
             AND ${lastActivity} + ${floorSec}::int * interval '1 second' < now()
-            -- #1304 评审：清理资格与原因归类分开。只有当「工具超时收口确实会接管」
-            -- 时才排除在普通停滞之外（有效租约 + 有工具信号 + 信号自身已超预算）；
-            -- 租约过期/为空但留下旧信号的行仍必须由普通停滞兜底，否则永远没人清理。
-            AND NOT (${leaseLive} AND ${inflightSignal} AND ${lastActivity} + ${inflightBudget} < now())
+            -- #1304 评审：清理资格与原因归类分开。有效租约 + 有工具信号的行属于「工具在飞」：
+            -- 未超预算由上面的分支继续等，超预算由上一段记成工具超时；租约过期/为空但留下
+            -- 旧信号的行没有 owner 可等，必须由普通停滞兜底，否则永远没人清理。
+            AND NOT (${leaseLive} AND ${inflightSignal})
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
