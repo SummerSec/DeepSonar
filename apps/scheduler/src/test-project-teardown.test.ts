@@ -29,3 +29,16 @@ test("integration tests do not hard-delete projects that audit_logs may referenc
   });
   assert.deepEqual(offenders, []);
 });
+
+// jobs.agent_snapshot_json 是 NOT NULL 且无默认值：任何夹具的最小插入都必须显式给值，
+// 否则只有真实 PostgreSQL 才会报 23502（本机没有库，本地永远绿）。
+test("integration tests always provide jobs.agent_snapshot_json when inserting jobs", () => {
+  const offenders: string[] = [];
+  for (const path of [...collectTs(here), ...collectTs(harnessRoot)]) {
+    const source = readFileSync(path, "utf8");
+    for (const match of source.matchAll(/INSERT INTO jobs\s*\(([^)]*)\)/gi)) {
+      if (!/agent_snapshot_json/i.test(match[1])) offenders.push(`${path.split("/apps/scheduler/src/").pop()}: ${match[1].replace(/\s+/g, " ").trim()}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
