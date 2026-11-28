@@ -133,7 +133,12 @@ async function readOnly(db: KnowledgeDb, actor: KnowledgeActor, operation: Knowl
     // 只能覆盖版本，不能凭空造出软件标识（避免自己声明「适用」）。
     const environment = snapshotEnvironment(actor.snapshot);
     const requested = typeof input.software_version === "string" ? input.software_version.trim() : "";
-    const context: ApplicabilityContext = { ...environment, ...(requested ? { version: requested } : {}) };
+    // 冻结快照里的版本是当前执行环境的真相，不能被调用方参数覆盖（否则快照是
+    // Android 16.0、传 15.0 就把 15.0 当当前适用）。参数只在没有可信版本时兜底。
+    const context: ApplicabilityContext = {
+      ...environment,
+      ...(!environment.version && requested ? { version: requested } : {}),
+    };
     const applicabilityOf = (entry: CatalogEntry) => evaluateApplicability(entry.keywords, context);
     const appliesTo = (entry: CatalogEntry): boolean => applicabilityOf(entry) !== "inapplicable";
     const filtered = visible.filter((entry) => (!input.kind || entry.kind === input.kind) && appliesTo(entry)

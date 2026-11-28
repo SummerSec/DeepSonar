@@ -20,9 +20,12 @@ test("#1219 有版本约束但上下文未知时是 applicability=unknown，不�
   assert.equal(evaluateApplicability(["sw:openharmony:16.0"], { software: "openharmony" }), "unknown");
 });
 
-test("#1219 历史写法 sw:<version> 只约束版本，不限软件", () => {
+test("#1219 历史写法 sw:<version> 只约束版本，但仍需软件上下文才算命中", () => {
   assert.equal(evaluateApplicability(["sw:16.0"], { software: "android", version: "16.0" }), "applicable");
   assert.equal(evaluateApplicability(["sw:16.0"], { software: "android", version: "15.0" }), "inapplicable");
+  // 评审反例：只有版本、没有软件标识时不能当通配——Android 16 与 OpenHarmony 16
+  // 都会命中，等于什么都没区分。
+  assert.equal(evaluateApplicability(["sw:16.0"], { version: "16.0" }), "unknown");
 });
 
 test("#1219 只变模型不改变适用性（模型不在匹配键里）", () => {

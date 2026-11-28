@@ -38,9 +38,16 @@ export function evaluateApplicability(
   const software = (context.software ?? "").trim();
   const version = (context.version ?? "").trim();
   if (!version) return "unknown";
-  const matched = declared.some((entry) => entry.version === version
-    && (!entry.software || !software || entry.software === software));
-  return matched ? "applicable" : "inapplicable";
+  // 逐条声明判定，再按「任一适用→适用；否则任一无从判断→未知；否则不适用」聚合，
+  // 这样「版本对了但不知道软件」不会被误当成不适用。
+  const verdicts = declared.map((entry): Applicability => {
+    if (entry.version !== version) return "inapplicable";
+    if (!entry.software || !software) return software ? "applicable" : "unknown";
+    return entry.software === software ? "applicable" : "inapplicable";
+  });
+  if (verdicts.includes("applicable")) return "applicable";
+  if (verdicts.includes("unknown")) return "unknown";
+  return "inapplicable";
 }
 
 /** 只有「显式声明且与可信上下文一致」才算已验证适用；未知不冒充适用。 */

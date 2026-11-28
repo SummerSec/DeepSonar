@@ -536,6 +536,10 @@ test("#1219 知识按适用软件版本过滤：有可信环境时自动匹配�
       await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "android", version: "16.0" })} WHERE id=${reader.jobId}`;
       assert.deepEqual((await search({})).map((row) => row.item_id).sort(), [android.item_id, generic.item_id].sort(),
         "不同软件的同版本号必须靠软件标识区分");
+      // 2b) 调用方参数不得覆盖冻结快照里的版本：快照是 16.0 时传 15.0 仍按 16.0 判定。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony", version: "16.0" })} WHERE id=${reader.jobId}`;
+      assert.deepEqual((await search({ software_version: "15.0" })).map((row) => row.item_id).sort(),
+        [oh.item_id, generic.item_id].sort(), "冻结版本优先，调用方参数不能把当前环境改写成 15.0");
       // 3) 没有可信环境时间：有版本约束的条目仍可查，但必须标成 applicability=unknown。
       await db`UPDATE jobs SET agent_snapshot_json=${snapshot()} WHERE id=${reader.jobId}`;
       const unknown = await search({});

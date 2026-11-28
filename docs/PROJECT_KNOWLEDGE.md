@@ -32,11 +32,13 @@ Job 创建时冻结两类目录：
 
 知识条目可以用关键字声明适用范围，两种写法都接受：`sw:<software>:<version>`（推荐，同一项目里两个同名版本也能区分）与历史写法 `sw:<version>`（只约束版本）。
 
-检索的可信上下文来自本 Job 冻结快照的 `environment` / `target_environment`（`{software, version}`），`search_project_knowledge` 的 `software_version` 只能覆盖版本、不能凭空造出软件标识。判定三态：
+检索的可信上下文来自本 Job 冻结快照的 `environment` / `target_environment`（`{software, version}`）。冻结版本是当前执行环境的真相：`search_project_knowledge` 的 `software_version` 只在快照没有可信版本时兜底，不能覆盖当前判断；没有软件标识时，`sw:<version>` 这类无标识条目算「未知」而不是「适用」。判定三态：
 
 - **适用**：条目没有声明，或声明的软件与版本和可信上下文一致；默认推荐里正常返回。
 - **不适用**：声明与可信上下文冲突（含另一软件的同版本号），默认推荐必须排除。
-- **未知**：条目有版本约束但当前没有可信上下文；仍然可查，但返回时带 `applicability: "unknown"`，由 Agent 自己判断要不要按历史参考，平台不冒充「已验证适用」。
+- **未知**：条目有版本约束但当前没有可信上下文（或只有版本、缺软件标识）；仍然可查，但返回时带 `applicability: "unknown"`，由 Agent 自己判断要不要按历史参考，平台不冒充「已验证适用」。
+
+注意：当前 Job 创建链路还没有把目标环境冻结进快照（`environment` / `target_environment` 需由创建侧写入），因此现阶段多数任务会得到「未知」；把创建侧冻结补上属于创建契约变更，另行立项。
 
 只更换模型不改变适用性：模型不在匹配键里。游标绑定把上下文计入，避免跨环境复用游标。
 
