@@ -34,6 +34,10 @@ export type {
   JobTransitionRow,
   ProvisionReconcileResult,
 } from "./ports.js";
+import { hashJobSnapshot } from "../platform-api/tokens.js";
+
+/** #1260：Job 到这些状态时冻结快照已不可变，可安全另存一份。 */
+const TERMINAL_JOB_STATUSES = new Set(["succeeded", "failed", "timeout", "cancelled", "orphan"]);
 
 /**
  * Application 方法保持为窄 CAS 操作。事务由调用方拥有并把标记客户端传入，
