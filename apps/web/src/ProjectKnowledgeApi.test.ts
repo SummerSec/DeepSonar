@@ -210,3 +210,83 @@ test("#1256 人类维护请求打到项目知识入口，编辑带 expected_vers
     if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
   }
 });
+
+test("history preview reads on demand, drops closed responses, and renders suggestions as plain text", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { act, createElement: h } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { MemoryRouter } = await import("react-router-dom");
+  const { ProjectKnowledgeBackfill } = await import("./pages/ProjectKnowledgeBackfill");
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
+  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true,
+    localStorage: { getItem: (key: string) => key === "deepsonar_api_token" ? "fixture-token" : null } };
+  const oldGlobals = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ path: string; init?: RequestInit; respond: (data: unknown) => void }> = [];
+  globalThis.fetch = (input, init) => new Promise(resolve => {
+    calls.push({ path: String(input), init, respond: data => resolve(new Response(JSON.stringify(data))) });
+  });
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  const render = (projectId: string) => act(async () => root.render(h(MemoryRouter, null,
+    h(ProjectKnowledgeBackfill, { key: projectId, projectId }))));
+  const click = async (label: string) => {
+    const control = [...container.querySelectorAll("button")].find(button => button.textContent === label);
+    assert.ok(control, label);
+    await act(async () => control.click());
+  };
+  const candidate = { kind: "skill", title: "示例建议", scope: "同项目", content: '<img src="/external" />',
+    evidence_refs: [{ kind: "fact", ref: "fact-1" }] };
+  try {
+    await render("project/a");
+    assert.equal(calls.length, 0);
+    await click("查看历史任务沉淀");
+    assert.equal(calls[0].path, "/api/projects/project%2Fa/knowledge/backfill?limit=10&offset=0");
+    await act(async () => calls[0].respond({ next_offset: 10, items: [
+      { job_id: "legacy", closeout_status: "legacy_preview", closeout_root_ref: null, status: "eligible" },
+      { job_id: "job", closeout_status: "suggestions_available", closeout_root_ref: "root/a", status: "eligible" },
+    ] }));
+    assert.match(container.textContent!, /只有历史来源预览.*有可供整理的来源/);
+    assert.equal(calls.length, 1);
+    await click("查看建议");
+    assert.equal(calls[1].path, "/api/projects/project%2Fa/knowledge/closeout/root%2Fa?limit=10&offset=0");
+    await click("收起建议");
+    assert.equal(calls[1].init?.signal?.aborted, true);
+    await act(async () => calls[1].respond({ status: "suggestions_available", next_offset: null, items: [candidate] }));
+    assert.doesNotMatch(container.textContent!, /示例建议/);
+    await click("查看建议");
+    await act(async () => calls[2].respond({ status: "restricted", next_offset: null, items: [candidate],
+      evaluation_source_unavailable: true }));
+    assert.match(container.textContent!, /当前无法查看建议内容/);
+    assert.match(container.textContent!, /已有建议送评，原证据或修订版本已不可用/);
+    assert.doesNotMatch(container.textContent!, /示例建议|fact-1/);
+    await click("收起建议");
+    await click("查看建议");
+    await act(async () => calls[3].respond({ status: "suggestions_available", next_offset: null, items: [candidate] }));
+    assert.match(container.textContent!, /示例建议/);
+    assert.doesNotMatch(container.textContent!, /已有建议送评，原证据或修订版本已不可用/);
+    assert.ok(container.textContent!.includes(candidate.content));
+    assert.equal(container.querySelector("img"), null);
+    await click("下一页历史");
+    assert.equal(calls[4].path, "/api/projects/project%2Fa/knowledge/backfill?limit=10&offset=10");
+    await render("project-b");
+    assert.equal(calls[4].init?.signal?.aborted, true);
+    assert.doesNotMatch(container.textContent!, /示例建议|只有历史来源预览/);
+    for (const { init } of calls) {
+      assert.equal(init?.method, "GET");
+      assert.equal(init?.cache, "no-store");
+      assert.equal(init?.body, undefined);
+      assert.deepEqual(init?.headers, { Authorization: "Bearer fixture-token" });
+    }
+  } finally {
+    await act(async () => root.unmount());
+    globalThis.fetch = originalFetch;
+    for (const [key, descriptor] of oldGlobals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+    dom.window.close();
+  }
+});

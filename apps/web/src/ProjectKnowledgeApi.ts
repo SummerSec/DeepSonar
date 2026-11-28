@@ -87,6 +87,23 @@ export interface KnowledgeCloseout {
 }
 
 
+export interface KnowledgeBackfillRow {
+  job_id: string;
+  canvas_id?: string | null;
+  job_status: string;
+  finished_at: string | null;
+  status: "eligible" | "skipped";
+  reason?: string;
+  closeout_status: KnowledgeCloseoutStatus | "legacy_preview";
+  closeout_root_ref: string | null;
+  history?: {
+    registered_at: string | null;
+    collected_at: string | null;
+    skipped_at: string | null;
+    collection: "collected" | "skipped" | "registered" | "none";
+  };
+}
+
 export interface KnowledgeActivityWork {
   id: string;
   state: string;
@@ -145,6 +162,9 @@ export const projectKnowledgeApi = {
   evaluateCloseout: (projectId: string, rootId: string, candidateRef: string) =>
     request<{ work_ref: string }>(`${base(projectId)}/closeout/${encodeURIComponent(rootId)}/evaluate`,
       "POST", { candidate_ref: candidateRef }),
+  backfill: (projectId: string, offset: number, signal?: AbortSignal) =>
+    request<Page<KnowledgeBackfillRow>>(`${base(projectId)}/backfill?limit=10&offset=${offset}`,
+      "GET", undefined, { cache: "no-store", signal }),
   closeout: (projectId: string, rootId: string, offset: number, signal?: AbortSignal) =>
     request<KnowledgeCloseout>(`${base(projectId)}/closeout/${encodeURIComponent(rootId)}?limit=10&offset=${offset}`,
       "GET", undefined, { cache: "no-store", signal }),

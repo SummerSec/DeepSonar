@@ -77,11 +77,25 @@ test("task suggestions are private, attributable, idempotent and readable withou
       assert.deepEqual(list.json().items.map((row: { result_json: unknown }) => row.result_json), [receipt]);
       assert.deepEqual(detail.json().result_json, receipt);
       scopes = ["projects:read", "tasks:read"];
-      // #1219 第四阶段第 3 步：/knowledge/backfill 已删除；该路径现在落在
-      // 版本详情路由（:itemId 需要 uuid），因此按参数校验返回 400，且不再有旧预览体。
-      const old = await app.inject({ url: `${path}/backfill` });
-      assert.equal(old.statusCode, 400, old.body);
-      assert.equal(Object.hasOwn(old.json(), "items"), false);
+      // #1219 第四阶段第 3 步后仍保留只读历史入口：批量整理已下线，但历史沉淀
+      // 必须查得到，且查询本身不得触发任何整理或写入。
+      await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id)
+        SELECT 'system', 'scheduler', 'project_knowledge.source_registered', ${owner.projectId},
+          'job', id::text FROM jobs WHERE id=${owner.jobId}`;
+      const auditBefore = (await db`SELECT count(*)::int AS count FROM audit_logs`)[0]!.count;
+      const history = await app.inject({ url: `${path}/backfill` });
+      assert.equal(history.statusCode, 200, history.body);
+      const historyBody = history.json() as { items: Array<Record<string, unknown>> };
+      const historyRow = historyBody.items.find((row) => row.job_id === owner.jobId);
+      assert.ok(historyRow, "历史入口必须列出该任务步骤");
+      const historyFacts = (historyRow as { history: { registered_at: unknown; collected_at: unknown;
+        skipped_at: unknown; collection: unknown } }).history;
+      assert.equal(typeof historyFacts.registered_at, "string", "登记时间必须可查");
+      assert.equal(historyFacts.collected_at, null);
+      assert.equal(historyFacts.skipped_at, null);
+      assert.equal(historyFacts.collection, "registered");
+      assert.equal((await db`SELECT count(*)::int AS count FROM audit_logs`)[0]!.count, auditBefore,
+        "只读历史查询不得写入审计或触发整理");
       const [{ count }] = await db`SELECT count(*)::int AS count FROM project_knowledge_work`;
       assert.equal(count, 0);
       assert.equal((await db`SELECT id FROM canvas_nodes WHERE node_type='knowledge_closeout'`).length, 0);
