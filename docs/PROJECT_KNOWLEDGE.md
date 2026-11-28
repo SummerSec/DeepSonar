@@ -28,6 +28,10 @@ Job 创建时冻结两类目录：
 
 ## Agent 操作
 
+### 按适用软件版本检索（#1219）
+
+`search_project_knowledge` 接受可选参数 `software_version`：条目可以用 `sw:<version>` 关键字声明适用范围（例如 `sw:16.0`），声明了的条目只在版本匹配时返回，未声明的条目对所有版本通用；省略 `software_version` 时不按版本过滤，保持旧调用方行为不变。Agent 在已知目标环境版本时应当传该参数，避免把只在别的版本成立的结论当成当前结论。
+
 既有 `list_available_skills` / `search_skills` / `pull_skill` 返回当前 Job 可读 Skill；拉取返回稳定 `usage_ref`，不安装代码或扩大权限。项目 selector 为 `project:<item UUID>@<version>`。
 
 | 操作 | 用途 |

@@ -1,3 +1,4 @@
+import { appliesToSoftwareVersion } from "./software-version.js";
 import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
 import { actorMayReadGovernanceSources, resolveSourceOwners } from "./source-scope.js";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -109,10 +110,14 @@ async function readOnly(db: KnowledgeDb, actor: KnowledgeActor, operation: Knowl
     for (const entry of catalog.entries) if (await visibleEntry(db, actor, entry)) visible.push(entry);
     const query = String(input.query ?? "").toLocaleLowerCase();
     const keywords = (input.keywords ?? []) as string[];
-    const filtered = visible.filter((entry) => (!input.kind || entry.kind === input.kind)
+    // #1219：按适用软件版本过滤。条目用 `sw:<version>` 关键字声明适用范围；声明了的
+    // 只在版本匹配时返回，未声明的对所有版本通用。省略 software_version 时不筛版本。
+    const softwareVersion = typeof input.software_version === "string" ? input.software_version.trim() : "";
+    const appliesTo = (entry: CatalogEntry): boolean => appliesToSoftwareVersion(entry.keywords, softwareVersion);
+    const filtered = visible.filter((entry) => (!input.kind || entry.kind === input.kind) && appliesTo(entry)
       && (!query || `${entry.title ?? ""} ${entry.logical_key ?? ""} ${(entry.keywords ?? []).join(" ")}`.toLocaleLowerCase().includes(query))
       && keywords.every((term) => (entry.keywords ?? []).includes(term)));
-    const binding = sha256(canonical({ job: actor.jobId, catalog: catalog.hash, query, kind: input.kind ?? null, keywords }));
+    const binding = sha256(canonical({ job: actor.jobId, catalog: catalog.hash, query, kind: input.kind ?? null, keywords, softwareVersion }));
     const sign = (offset: number) => createHmac("sha256", cursorSecret).update(`${binding}:${offset}`).digest("hex");
     let start = 0;
     if (input.cursor) {

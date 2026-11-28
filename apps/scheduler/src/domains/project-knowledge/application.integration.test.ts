@@ -493,3 +493,43 @@ test("merge checks every base generation before changing either identity", async
     } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
   });
 });
+
+test("#1219 知识按适用软件版本过滤：声明 sw:<version> 的只在该版本命中", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const folder = await mkdtemp(join(tmpdir(), "knowledge-software-version-"));
+    setSharedAssetBlobStoreForTests(new LocalBlobStore(folder));
+    try {
+      const maker = await seedKnowledgeJob(db, undefined, []);
+      const reader = await seedKnowledgeJob(db, maker.projectId, ["search_project_knowledge"]);
+      const seed = async (key: string, title: string, keywords: string[], body: string) => {
+        const content = { kind: "memory", logical_key: key, title, keywords, content: body };
+        const blob = await writeKnowledgeBlob(db as never, content);
+        await registerKnowledgeBlob(db as never, blob.hash, blob.bytes);
+        const [item] = await db`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,keywords_json)
+          VALUES(${maker.projectId},'memory',${key},${title},${db.json(keywords)}) RETURNING id`;
+        const [version] = await db`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
+          VALUES(${maker.projectId},${item!.id},1,${blob.hash},${maker.jobId},${maker.attemptId},'[]'::jsonb,${H}) RETURNING id`;
+        await db`UPDATE project_knowledge_items SET status='active',active_version_id=${version!.id},generation=1 WHERE id=${item!.id}`;
+        return { item_id: String(item!.id), owner_project_id: maker.projectId, version_id: String(version!.id),
+          version: 1, kind: "memory" as const, hash: blob.hash, title, logical_key: key, keywords };
+      };
+      const scoped = await seed("fixture/scoped", "Android 16 巡检经验", ["巡检", "sw:16.0"], "只在 16.0 适用");
+      const generic = await seed("fixture/generic", "通用巡检经验", ["巡检"], "所有版本通用");
+      const entries = [scoped, generic];
+      await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge"],
+        project_knowledge_catalog: { entries, hash: sha256(canonical(entries)) } })} WHERE id=${reader.jobId}`;
+      const app = createProjectKnowledgeApplication({ db, governanceHash: H });
+      const context = { jobId: reader.jobId, projectId: reader.projectId, canvasId: reader.canvasId,
+        operationId: "search_project_knowledge", input: { query: "巡检", software_version: "16.0" },
+        eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null };
+      const matched = await app.invoke(context);
+      assert.deepEqual((matched.items as Array<{ item_id: string }>).map((row) => row.item_id).sort(),
+        [scoped.item_id, generic.item_id].sort(), "版本匹配时两条都应返回");
+      const other = await app.invoke({ ...context, input: { query: "巡检", software_version: "15.0" } });
+      assert.deepEqual((other.items as Array<{ item_id: string }>).map((row) => row.item_id), [generic.item_id],
+        "声明了 sw:16.0 的条目不得在 15.0 下返回");
+      const noVersion = await app.invoke({ ...context, input: { query: "巡检" } });
+      assert.equal((noVersion.items as unknown[]).length, 2, "未指定版本时保持旧行为，不按版本过滤");
+    } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
+  });
+});
