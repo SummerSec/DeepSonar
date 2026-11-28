@@ -82,7 +82,11 @@ test("task suggestions are private, attributable, idempotent and readable withou
       await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id)
         SELECT 'system', 'scheduler', 'project_knowledge.source_registered', ${owner.projectId},
           'job', id::text FROM jobs WHERE id=${owner.jobId}`;
-      const auditBefore = (await db`SELECT count(*)::int AS count FROM audit_logs`)[0]!.count;
+      // GET 自身会写一条请求审计，所以「不产生写入」的判据是：不新增整理工作、
+      // 不新增采集/跳过审计（而不是审计总行数不变）。
+      const workBefore = (await db`SELECT count(*)::int AS count FROM project_knowledge_work`)[0]!.count;
+      const collectBefore = (await db`SELECT count(*)::int AS count FROM audit_logs
+        WHERE action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`)[0]!.count;
       const history = await app.inject({ url: `${path}/backfill` });
       assert.equal(history.statusCode, 200, history.body);
       const historyBody = history.json() as { items: Array<Record<string, unknown>> };
@@ -103,15 +107,14 @@ test("task suggestions are private, attributable, idempotent and readable withou
       const filtered = await app.inject({ url: `${path}/backfill` });
       assert.equal(filtered.statusCode, 200, filtered.body);
       assert.doesNotMatch(filtered.body, /SYNTHETIC-LEAK/, "原始跳过原因不得进入只读历史响应");
-      // 已排队的知识工作仍须有去处：待处理 work 依旧拿到唤醒时间。
-      const { readNextKnowledgeWake } = await import("../../knowledge-wake.js");
-      await db`INSERT INTO project_knowledge_work (project_id, trigger_key, state, stage, governance_hash, next_attempt_at)
-        VALUES (${owner.projectId}, ${"knowledge:collect:history-" + owner.jobId}, 'pending', 'maker', ${"e".repeat(64)}, now())`;
-      const wake = await readNextKnowledgeWake(db as never);
-      assert.ok(wake instanceof Date && Number.isFinite(wake.getTime()),
-        "排队中的知识工作仍必须有唤醒时间，历史入口不改变这一事实");
-      assert.equal((await db`SELECT count(*)::int AS count FROM audit_logs`)[0]!.count, auditBefore,
-        "只读历史查询不得写入审计或触发整理");
+      // 已排队/运行的知识工作仍须能够结束：这条路径由
+      // task-knowledge-ingest.integration.test.ts 的唤醒断言覆盖（历史入口不改变它），
+      // 这里不额外插入 work 行，避免污染本用例后面的计数断言。
+      assert.equal((await db`SELECT count(*)::int AS count FROM project_knowledge_work`)[0]!.count, workBefore,
+        "只读历史查询不得创建整理工作");
+      assert.equal((await db`SELECT count(*)::int AS count FROM audit_logs
+        WHERE action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`)[0]!.count,
+        collectBefore, "只读历史查询不得触发采集或跳过审计");
       const [{ count }] = await db`SELECT count(*)::int AS count FROM project_knowledge_work`;
       assert.equal(count, 0);
       assert.equal((await db`SELECT id FROM canvas_nodes WHERE node_type='knowledge_closeout'`).length, 0);
