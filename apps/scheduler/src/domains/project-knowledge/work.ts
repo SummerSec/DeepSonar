@@ -484,9 +484,25 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     });
   }
 
+  /**
+   * 旧 collector 的 `knowledge:project:` 批次：采集链已退役，没人再推进它们，也不能
+   * 让它们永远占着「运行中」。没有活跃执行的就地收尾为 blocked/legacy_batch_retired；
+   * 还有活 Job 的留给该 Job 正常收尾，不重复派发（#1219 评审 r5）。
+   */
+  async function retireLegacyBatches(stopped: () => boolean): Promise<number> {
+    if (stopped()) return 0;
+    const retired = await db`UPDATE project_knowledge_work
+      SET state='blocked', reason='legacy_batch_retired', claim_expires_at=NULL, updated_at=now()
+      WHERE trigger_key LIKE ${PROJECT_COLLECTION_PREFIX + "%"}
+        AND state IN ('pending','running') AND active_job_id IS NULL
+      RETURNING id`;
+    return retired.length;
+  }
+
   async function claimPending(stopped: () => boolean): Promise<void> {
     const candidates = await db`SELECT id FROM project_knowledge_work w
       WHERE state='pending' AND next_attempt_at<=now()
+        AND trigger_key NOT LIKE ${PROJECT_COLLECTION_PREFIX + "%"}
         AND NOT ${automaticPreparationPredicate(db)}
         AND NOT EXISTS(SELECT 1 FROM project_knowledge_work r WHERE r.project_id=w.project_id AND r.state='running')
       ORDER BY next_attempt_at,id LIMIT 8`;
@@ -515,11 +531,12 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
 
   async function tick(stopped: () => boolean = () => false): Promise<number> {
     if (stopped()) return 0;
+    const retired = await retireLegacyBatches(stopped);
     await claimPending(stopped);
     if (stopped()) return 0;
     const rows = await db`SELECT id,trigger_key,origin_job_id,stage,active_job_id FROM project_knowledge_work WHERE state='running'
       ORDER BY (active_job_id IS NULL) DESC,updated_at,id LIMIT 16`;
-    let progressed = 0;
+    let progressed = retired;
     for (const row of rows) {
       if (stopped()) break;
       try {
