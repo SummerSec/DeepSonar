@@ -148,8 +148,9 @@ def main():
 try:
     os.umask(0o077)
     main()
-except Exception:
-    print("PRIVATE_JOB_FILES_REJECTED", file=sys.stderr)
+except Exception as error:
+    # 只写异常类型与消息，绝不打印任何文件内容（#1311）。
+    print(f"PRIVATE_JOB_FILES_REJECTED {type(error).__name__}: {error}", file=sys.stderr)
     sys.exit(1)
 `;
 
@@ -177,6 +178,16 @@ export function privateCredentialEnvironment(
   return result;
 }
 
+/** 私有文件协议的稳定错误码；后缀区分 5 种互不相同的失败（#1311）。 */
+function privateFilesRejected(
+  reason: "exit_nonzero" | "stdout_too_long" | "protocol_unexpected" | "timeout" | "invalid_names",
+  operation: "create" | "check" | "cleanup" | "pi-auth",
+  detail?: Record<string, unknown>,
+): Error {
+  const suffix = detail ? ` detail=${JSON.stringify(detail).slice(0, 200)}` : "";
+  return new Error(`PRIVATE_JOB_FILES_REJECTED reason=${reason} operation=${operation}${suffix}`);
+}
+
 async function runPrivateFileProtocol(
   host: RuntimeHost,
   operation: "create" | "check" | "cleanup" | "pi-auth",
@@ -185,32 +196,53 @@ async function runPrivateFileProtocol(
 ): Promise<void> {
   const command = `python3 -c ${shellQuote(PRIVATE_JOB_FILES_SCRIPT)} /workspace ${operation} ${identity}`;
   const process = await host.runAsync(command, { pty: false, diagnosticSecrets: Object.values(files) });
+  const secrets = Object.values(files).filter(value => value.length > 0);
+  // stderr 可能带上文件内容或凭据，先脱敏再截断，绝不原样透出（#1311）。
+  const scrub = (text: string): string => {
+    let value = text;
+    for (const secret of secrets) value = value.split(secret).join("[redacted]");
+    return value.replace(/\s+/gu, " ").trim().slice(0, 200);
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const completion = (async () => {
       let output = "";
+      let stderrTail = "";
       let exited = false;
       const consume = (async () => {
         for await (const chunk of process) {
           if (chunk.type === "exit") {
             exited = true;
-            if (chunk.exitCode !== 0) throw new Error("PRIVATE_JOB_FILES_REJECTED");
+            if (chunk.exitCode !== 0) {
+              throw privateFilesRejected("exit_nonzero", operation,
+                { exit: chunk.exitCode, stderr: scrub(stderrTail) });
+            }
           } else if (chunk.type === "stdout") {
             output += chunk.chunk;
-            if (output.length > 128) throw new Error("PRIVATE_JOB_FILES_REJECTED");
+            if (output.length > 128) {
+              throw privateFilesRejected("stdout_too_long", operation, { length: output.length });
+            }
+          } else if (chunk.type === "stderr") {
+            stderrTail = (stderrTail + chunk.chunk).slice(-512);
           }
         }
-        if (!exited || output !== "ok\n") throw new Error("PRIVATE_JOB_FILES_REJECTED");
+        if (!exited || output !== "ok\n") {
+          throw privateFilesRejected("protocol_unexpected", operation,
+            { exited, stderr: scrub(stderrTail) });
+        }
       })();
       await Promise.all([consume, process.write(`${JSON.stringify(files)}\n`)]);
     })();
     const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("PRIVATE_JOB_FILES_REJECTED")), 15_000);
+      timer = setTimeout(() => reject(privateFilesRejected("timeout", operation, { timeout_ms: 15_000 })), 15_000);
     });
     await Promise.race([completion, deadline]);
-  } catch {
+  } catch (error) {
     await process.kill().catch(() => {});
-    throw new Error("PRIVATE_JOB_FILES_REJECTED");
+    // 已带 reason 的直接上抛（保留分支归因），其余兜底为协议异常。
+    if (error instanceof Error && error.message.startsWith("PRIVATE_JOB_FILES_REJECTED reason=")) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw privateFilesRejected("protocol_unexpected", operation, { exited: false, stderr: scrub(message) });
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -218,7 +250,10 @@ async function runPrivateFileProtocol(
 
 export async function materializePrivateJobFiles(host: RuntimeHost, files: Record<string, string>): Promise<PrivateJobFiles> {
   const names = Object.keys(files);
-  if (!names.length || names.some(name => !PRIVATE_FILE_NAMES.has(name))) throw new Error("PRIVATE_JOB_FILES_REJECTED");
+  if (!names.length || names.some(name => !PRIVATE_FILE_NAMES.has(name))) {
+    // 只报个数：文件名本身可能携带信息，不进错误文本（#1311）。
+    throw privateFilesRejected("invalid_names", "create", { count: names.length });
+  }
   const identity = randomUUID();
   const directory = `/workspace/.deepsonar-credentials-${identity}`;
   await runPrivateFileProtocol(host, "create", identity, files);

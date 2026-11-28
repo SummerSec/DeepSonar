@@ -278,3 +278,39 @@ test("#1032 trusted readers reject arbitrary paths and missing file sources", as
   assert.equal(reader.readPrivateCredential(undefined, true), undefined);
   assert.throws(() => reader.readPrivateCredential("", true), /PRIVATE_CREDENTIAL_REJECTED/u);
 });
+
+/** #1311：私有文件协议的 5 种失败必须各自可辨识，且不泄漏文件名与凭据。 */
+function fakeHost(chunks: Array<Record<string, unknown>>): RuntimeHost {
+  const process = {
+    async *[Symbol.asyncIterator]() { for (const chunk of chunks) yield chunk; },
+    write: async () => {},
+    kill: async () => {},
+  };
+  // SAFETY: 只用到 runAsync 一个方法，测试替身无需实现 RuntimeHost 的其余能力。
+  return { runAsync: async () => process } as unknown as RuntimeHost;
+}
+
+test("#1311 exit 非零失败带 reason 与退出码", async () => {
+  const host = fakeHost([{ type: "exit", exitCode: 3 }, { type: "stderr", chunk: "Traceback: boom" }]);
+  await assert.rejects(materializePrivateJobFiles(host, { "control-token": "synthetic-control-token" }),
+    (error: Error) => /^PRIVATE_JOB_FILES_REJECTED reason=exit_nonzero operation=create/u.test(error.message)
+      && /"exit":3/u.test(error.message));
+});
+
+test("#1311 输出协议不符带 reason 且 stderr 尾部已脱敏", async () => {
+  const host = fakeHost([
+    { type: "stderr", chunk: "PRIVATE_JOB_FILES_REJECTED ValueError: synthetic-control-token 不可写" },
+    { type: "stdout", chunk: "nope\n" },
+    { type: "exit", exitCode: 0 },
+  ]);
+  await assert.rejects(materializePrivateJobFiles(host, { "control-token": "synthetic-control-token" }),
+    (error: Error) => /reason=protocol_unexpected operation=create/u.test(error.message)
+      && !error.message.includes("synthetic-control-token")
+      && error.message.includes("[redacted]"));
+});
+
+test("#1311 非法文件名只报个数，不把名字写进错误", async () => {
+  await assert.rejects(materializePrivateJobFiles(fakeHost([]), { "secret-name-xyz": "value" }),
+    (error: Error) => /reason=invalid_names operation=create/u.test(error.message)
+      && !error.message.includes("secret-name-xyz"));
+});
