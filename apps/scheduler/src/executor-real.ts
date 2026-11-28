@@ -126,11 +126,7 @@ import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
 } from "./domains/role-runtime-snapshot/index.js";
-import {
-  toolCallActivityPatch,
-  toolCallProgressMessage,
-  type ToolCallPhase,
-} from "./domains/job-lifecycle/stall-policy.js";
+import { createToolCallActivityRecorder } from "./domains/job-lifecycle/tool-call-activity.js";
 import {
   CONTROL_INPUT_ERROR_CODES,
   ControlInputError,
@@ -1587,17 +1583,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
   // 「当前动作」直接更新节点显示态（throttle 1.5s）；tool.call 另写 runtime_activity 刷新 stall。
   let lastActionPush = 0;
-  let lastToolProgressEmit = 0;
-  const recordToolCallActivity = (phase: ToolCallPhase, toolName: string) => {
-    void sql`
-      UPDATE jobs SET payload_json = payload_json || ${sql.json(toolCallActivityPatch(phase, scrubCliText(toolName)) as never)}
-      WHERE id = ${jobId} AND status = 'running'`.catch(() => {});
-    const now = Date.now();
-    if (phase === "started" || now - lastToolProgressEmit > 20_000) {
-      lastToolProgressEmit = now;
-      void emit("progress", { message: toolCallProgressMessage(phase, toolName) }).catch(() => {});
-    }
-  };
+  // #1304：started/completed 成对投递；节流只压同 callId 的重复事件。
+  const recordToolCallActivity = createToolCallActivityRecorder({
+    db: sql, jobId, emit: (type, payload) => emit(type, payload), scrub: scrubCliText });
   const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(attemptId ?? job.sandbox_id ?? job.id ?? "unknown"));
   const evidenceAttemptId = evidenceWriter.attemptId;
   const completionDiagnostics = createCompletionFailureDiagnostics({ jobId, attemptId: evidenceAttemptId, snapshot: job.agent_snapshot_json, writer: evidenceWriter, database: sql });
@@ -1889,7 +1877,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             callId: typeof e.callId === "string" ? e.callId : undefined,
             input: e.input,
           }, evidenceAttemptId, evidenceSeq);
-          recordToolCallActivity("started", toolName);
+          recordToolCallActivity("started", toolName, typeof e.callId === "string" ? e.callId : null);
           const now = Date.now();
           if (now - lastActionPush > 1500) {
             lastActionPush = now;
@@ -1906,7 +1894,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             error: e.error,
             exit: e.exit,
           }, evidenceAttemptId, evidenceSeq);
-          recordToolCallActivity("completed", toolName);
+          recordToolCallActivity("completed", toolName, typeof e.callId === "string" ? e.callId : null);
         } else if (type === "text.delta" || type === "reasoning.delta") {
           publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) }, evidenceAttemptId, evidenceSeq);
         } else if (type.startsWith("run.") || type.startsWith("message.")) {

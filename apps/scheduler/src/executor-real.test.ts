@@ -891,10 +891,13 @@ test("late sub-agent completion keeps the first accepted mark_job_done proposal"
 
 test("tool.call.started/completed are mapped into stall-visible progress activity", () => {
   const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  // #1304：started/completed 成对与 payload 投影收敛到 recorder 模块。
+  const recorder = readFileSync(new URL("./domains/job-lifecycle/tool-call-activity.ts", import.meta.url), "utf8");
   assert.match(source, /recordToolCallActivity\("started"/);
   assert.match(source, /recordToolCallActivity\("completed"/);
-  assert.match(source, /toolCallProgressMessage/);
-  assert.match(source, /payload_json = payload_json \|\| \$\{sql\.json\(toolCallActivityPatch/);
+  assert.match(source, /createToolCallActivityRecorder/);
+  assert.match(recorder, /toolCallProgressMessage/);
+  assert.match(recorder, /payload_json = payload_json \|\| \$\{options\.db\.json\(toolCallActivityPatch/);
   assert.match(source, /dispatched_prompt: dispatchedPrompt/);
   assert.match(source, /operatorVisibleDispatchPrompt\(initialInput, graph\?\.yaml/);
 });
