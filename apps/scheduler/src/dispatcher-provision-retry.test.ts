@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { classifyDispatcherFailure, formatDispatcherFailureMessage, isDefiniteSandboxStartFailure, isRetryableProvisionFailure } from "./dispatcher.js";
+import { classifyDispatcherFailure, formatDispatcherFailureMessage, isRetryableProvisionFailure } from "./dispatcher.js";
 import { countConsumedProvisionRetries, planAutomaticProvisionRetry } from "./provision-retry-budget.js";
 import { cleanupDispatcherSandbox } from "./dispatcher-human-wait.js";
 
@@ -76,8 +76,8 @@ test("dispatcher provision retry budget is counted attempts, not attempt_no", ()
 test("source contract: opaque started failure stays unknown; retry requires current owner and explicit no-create evidence", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   const failure = source.slice(source.indexOf("// Once runner.provision was invoked"), source.indexOf("// Job → Attempt: settlement"));
-  // #1309：明确的启动失败结算成 never_started，其余（含超时/断开）仍 unknown。
-  assert.match(failure, /lateProvisionExternalUncertain\s*\|\| \(provisionAttempted && !isDefiniteSandboxStartFailure\(error\)\)/);
+  // #1309 评审：已发起创建后的失败一律 unknown，错误文本/错误码不得改判 never_started。
+  assert.match(failure, /if \(provisionAttempted \|\| lateProvisionExternalUncertain\)\s*\{\s*await markEffectUnknown/);
   assert.match(failure, /else\s*\{\s*await settleUnstartedProvisionEffect/);
   assert.match(failure, /await lockCurrentProvisioningAttempt/);
   assert.match(failure, /throw new AggregateError\(\[error, settlementError\]/);
@@ -85,9 +85,8 @@ test("source contract: opaque started failure stays unknown; retry requires curr
   const retry = source.slice(source.indexOf("export async function retryProvisioningJob"), source.indexOf("async function retryTruncatedExecutionJob"));
   assert.match(retry, /owner\.latest_attempt_id !== attempt\.id/);
   assert.match(retry, /typeof current\.id !== "string" \|\| current\.id !== attempt\.id/);
-  assert.match(retry, /settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb/);
-  assert.match(retry, /settlement_json @> '\{"outcome":"not_applied"\}'::jsonb/);
-  assert.match(source, /if \(!handle && attemptId && activeAttempt &&\s*\(isRetryableProvisionFailure\(e\) \|\| e instanceof OpenSandboxCreateAdmissionExpiredError\)\)/);
+  assert.match(retry, /COALESCE\(settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb, false\)/);
+  assert.match(source, /if \(!provisionAttempted && !handle && attemptId && activeAttempt &&\s*\(isRetryableProvisionFailure\(e\) \|\| e instanceof OpenSandboxCreateAdmissionExpiredError\)\)/);
   const outboundFence = source.indexOf('if (provider === "opensandbox") assertOpenSandboxCreateAdmission(createProbe)');
   assert.ok(outboundFence > source.indexOf("await sharedAssetsPreparation?.assertCurrent()"));
   assert.ok(outboundFence < source.indexOf("provisionAttempted = true"));
@@ -170,24 +169,16 @@ test("directory create 500 is circuit evidence without enlarging automatic repla
     "Failed to create directory /opt/opensandbox in sandbox: 500 Server Error")), false);
 });
 
-test("#1309 只有明确的沙箱启动失败才算「确定未落地」", () => {
-  assert.equal(isDefiniteSandboxStartFailure(new Error("Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)")), true);
-  assert.equal(isDefiniteSandboxStartFailure(Object.assign(new Error("start failed"), { code: "SANDBOX_START_FAILED" })), true);
-  // 超时、断开、无响应都不能证明没有创建，必须继续按 unknown 处理。
-  assert.equal(isDefiniteSandboxStartFailure(new Error("provision 超时（1800s）")), false);
-  assert.equal(isDefiniteSandboxStartFailure(new Error("Server disconnected without sending a response")), false);
-  assert.equal(isDefiniteSandboxStartFailure(undefined), false);
-});
-
-test("#1309 source contract: reconcile 已证 not_applied 的效果也是可重试前置", () => {
+test("#1309 边界回归：本地 not_applied 与错误文本都不得触发自动重跑", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
-  // 闸 2：准入同时接受 never_started 与 reconcile 的 not_applied，未知效果仍被拒。
-  assert.match(source, /settlement_json @> '\{"outcome":"not_applied"\}'::jsonb/);
+  // 1) reconcile 的 outcome=not_applied 只证明本地没记沙箱，不得替代宿主端确认进入授权。
+  assert.doesNotMatch(source, /settlement_json @> '\{"outcome":"not_applied"\}'::jsonb/);
+  // 2) 不得用错误文本/错误码把「已发出创建请求的失败」改记为 never_started。
+  assert.doesNotMatch(source, /isDefiniteSandboxStartFailure/);
+  assert.doesNotMatch(source, /provisionAttempted && !isDefiniteSandboxStartFailure\(error\)/);
+  // 3) 闸 1 必须继续要求「provision 已发起就不进重试分支」。
+  assert.match(source, /if \(!provisionAttempted && !handle && attemptId && activeAttempt &&\s*\(isRetryableProvisionFailure\(e\) \|\| e instanceof OpenSandboxCreateAdmissionExpiredError\)\)/);
+  // 4) 唯一准入仍是宿主端 never_started；拒绝时留下可检索日志。
   assert.match(source, /settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb/);
-  // 拒绝时必须留下可检索原因。
   assert.match(source, /provision_retry_denied reason=state_not_admissible/);
-  // 闸 1：provision 已发起但已证未落地时也要能进重试分支。
-  assert.doesNotMatch(source, /if \(!provisionAttempted && !handle/);
-  // P1：确定的启动失败结算成 never_started，其余仍 unknown。
-  assert.match(source, /provisionAttempted && !isDefiniteSandboxStartFailure\(error\)/);
 });
