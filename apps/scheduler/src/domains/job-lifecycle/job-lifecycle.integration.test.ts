@@ -329,6 +329,20 @@ if (!testDatabaseUrl) {
         FROM job_attempts WHERE job_id = ${expiredLeaseSignal} ORDER BY attempt_no DESC LIMIT 1`;
       assert.equal(leaseGoneAttempt.reason, "reaper_stall",
         "没有有效租约时不得把旧信号记成已确认的工具超时");
+      // 评审反例：有效租约 + 已静默 1000s + 标记时间是 2 小时前。旧标记不是「工具在飞」，
+      // 不能把等待延长到 3600s；按主线 900s 阈值走普通停滞收口。
+      const staleMarkerLiveLease = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "2026-01-01T00:00:00.000Z" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '1000 seconds' WHERE id = ${staleMarkerLiveLease}`;
+      await createAttempt(sql, staleMarkerLiveLease, { agent_cli: "claude-code" });
+      const staleReaped = await app.reapStalledExecution(900);
+      assert.equal(new Set(staleReaped.map((row) => row.id)).has(staleMarkerLiveLease), true,
+        "旧标记不得让有效租约的行多等 in-flight 预算");
+      const [staleMarkerAttempt] = await sql`SELECT outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${staleMarkerLiveLease} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.equal(staleMarkerAttempt.reason, "reaper_stall",
+        "失效标记不得写成已确认的工具超时");
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");
       // 工具超时与普通停滞必须是两个可区分的原因：这条有信号，落工具超时。

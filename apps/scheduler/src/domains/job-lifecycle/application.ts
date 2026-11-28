@@ -357,6 +357,20 @@ export function createSqlJobLifecycleApplication(
         const inflightSignal = tx`(
                 NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
               )`;
+        // 信号是否「可信且新鲜」：只有带可信 ISO 时间、且信号本身还在 in-flight 预算内的
+        // 标记才算「工具确实在飞」。仅有旧标记或坏时间不能自动延长等待（评审反例：
+        // 有效租约 + 静默 1000s + 标记时间在 2 小时前，应按 900s 普通停滞收口）。
+        const inflightSignalFresh = tx`(
+                ${inflightSignal}
+                AND COALESCE(
+                  CASE
+                    WHEN payload_json #>> '{runtime_activity,at}' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]'
+                      AND pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
+                      THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
+                  END,
+                  started_at
+                ) + ${inflightBudget} > now()
+              )`;
         // 先收口挂死工具（独立稳定原因），再走普通停滞判定；已 failed 的行不会在
         // 第二条 UPDATE 里再次匹配 status='running'。
         // #1304 跟进：判据从「信号未过预算」改成「信号存在」。信号过期或不可信只说明
@@ -389,7 +403,7 @@ export function createSqlJobLifecycleApplication(
             -- #1304 评审：清理资格与原因归类分开。有效租约 + 有工具信号的行属于「工具在飞」：
             -- 未超预算由上面的分支继续等，超预算由上一段记成工具超时；租约过期/为空但留下
             -- 旧信号的行没有 owner 可等，必须由普通停滞兜底，否则永远没人清理。
-            AND NOT (${leaseLive} AND ${inflightSignal})
+            AND NOT (${leaseLive} AND ${inflightSignalFresh})
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
