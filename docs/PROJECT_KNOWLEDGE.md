@@ -28,27 +28,19 @@ Job 创建时冻结两类目录：
 
 ## Agent 操作
 
-既有 `list_available_skills` / `search_skills` / `pull_skill` 返回当前 Job 可读 Skill；拉取返回稳定 `usage_ref`，不安装代码或扩大权限。项目 selector 为 `project:<item UUID>@<version>`。
+### 按适用软件版本检索（#1219）
 
-| 操作 | 用途 |
-| --- | --- |
-| `request_project_knowledge` | 普通 Job 用真实可读来源启动第一次整理，无需已有 work |
-| `search_project_knowledge` | 查询冻结目录的有界 metadata |
-| `read_project_knowledge` | 本项目精确版本及 hash 的 Memory 正文（旧名 `read_project_memory` 仅在迁移窗口内、且只对冻结快照本来就允许旧名的在途 Job 生效；两者执行同一实现与同一项目/版本/撤权检查） |
-| `read_knowledge_input` | 当前 Scheduler 分配的 work/stage/audience 输入 |
-| `propose_project_knowledge` | maker 提出 reuse/revise/create/merge/retire |
-| `submit_knowledge_evaluation` | evaluator 提交独立 trial 的结构化结果 |
-| `review_project_knowledge` | 独立 reviewer 审查并原子结算 |
-| `record_knowledge_feedback` | 仅持久反馈，结果为 `{usage_ref,state:"recorded"}`；不返回 work_ref、不创建 work，自动整理经来源登记和项目 collector |
-| `get_knowledge_receipt` | 查询当前 Job 的持久操作回执 |
+知识条目可以用关键字声明适用范围，两种写法都接受：`sw:<software>:<version>`（推荐，同一项目里两个同名版本也能区分）与历史写法 `sw:<version>`（只约束版本）。
 
-`record_knowledge_feedback` 仅持久化已接受的 usage 反馈，操作结果为 `{usage_ref,state:"recorded"}`，不返回 `work_ref`，也不入队或启动知识 work。成功业务 Job 的已接受反馈经普通来源登记进入项目 collector，冻结精确 usage/反馈、target 版本/hash 基线及 evidence refs；同样受 4 来源或等待 24 小时、自动批次间隔 24 小时和连续两批无产出停发约束。原 Job 没有冻结 `request_project_knowledge` 权限时，不因提交反馈获得自动整理权限。显式 `request_project_knowledge` 仍按原有授权、来源、预算与幂等约束请求整理，不被自动策略替代；不得把仅反馈记录当作显式整理。
+检索的可信上下文**只**来自本 Job 冻结快照的 `environment` / `target_environment`（`{software, version}`）。`search_project_knowledge` 的 `software_version` 不参与适用性判定：快照只有软件、没有版本时，版本声明条目仍是「未知」，参数不能把它升级成「已验证适用」；没有软件标识时，`sw:<version>` 这类无标识条目算「未知」而不是「适用」。判定三态：
 
-project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请求自行声明。契约拒绝未知字段。变更经 shared Zod、宿主 handler 和 event-ingestion/application transaction 三层校验，领域写入、事件和 receipt 同事务提交。相同 key + 相同输入返回原结果；变更操作或输入返回冲突。候选 CAS 写入在短事务外完成，失败后的无引用字节保守保留。
+- **适用**：条目没有声明，或声明的软件与版本和可信上下文一致；默认推荐里正常返回。
+- **不适用**：声明与可信上下文冲突（含另一软件的同版本号），默认推荐必须排除。
+- **未知**：条目有版本约束但当前没有可信上下文（或只有版本、缺软件标识）；仍然可查，但返回时带 `applicability: "unknown"`，由 Agent 自己判断要不要按历史参考，平台不冒充「已验证适用」。
 
-`read_knowledge_input` 每页最多 12 KiB UTF-8，返回 `content_fragment`、`encoding=json-utf8` 与 `next_cursor`。保持相同 work/input/hash 读取后续页，拼接后解析 JSON；每页仍重新检查 assignment、audience 和版本撤销。大输入在读取 CAS 前按元数据拒绝，不能用 cursor 读取其他工作或版本。
+注意：当前 Job 创建链路还没有把目标环境冻结进快照（`environment` / `target_environment` 需由创建侧写入），因此现阶段多数任务会得到「未知」；把创建侧冻结补上属于创建契约变更，另行立项。
 
-控制 token 终态失效。历史回执通过 `GET /projects/:id/knowledge/receipts?job_id=...` 或 receipt 详情，以项目管理身份读取；不会为查回执延长执行 token。动态目录读取不使用进程内结果缓存，避免旧成功响应绕过撤销。
+只更换模型不改变适用性：模型不在匹配键里。游标绑定把上下文计入，避免跨环境复用游标。
 
 ## Knowledge/Skill 拒绝反馈（#903 切片）
 

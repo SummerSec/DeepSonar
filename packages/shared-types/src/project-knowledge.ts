@@ -83,6 +83,12 @@ export type KnowledgeCaseResult = z.infer<typeof KnowledgeCaseResult>;
 export const RequestProjectKnowledgePayload = z.object({ source_refs: z.array(KnowledgeSourceRef).min(1).max(20), reason: text(2000) }).strict();
 export const SearchProjectKnowledgePayload = z.object({
   kind: ProjectKnowledgeKind.optional(), query: z.string().max(200).optional(), keywords: z.array(text(80)).max(10).optional(),
+  /**
+   * #1219：调用方当前的目标软件版本（例如 "16.0"）。条目可以用 `sw:<version>` 关键字
+   * 声明适用范围；声明了适用版本的条目只在版本匹配时返回，未声明的条目对所有版本通用。
+   * 省略时不按版本过滤（旧调用方保持原行为）。
+   */
+  software_version: text(80).optional(),
   cursor: text(1000).optional(), limit: z.number().int().min(1).max(KNOWLEDGE_LIMITS.page).default(10),
 }).strict();
 export const ReadProjectKnowledgePayload = z.object({ item_ref: uuid, version: z.number().int().positive(), expected_hash: hash }).strict();

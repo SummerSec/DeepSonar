@@ -493,3 +493,75 @@ test("merge checks every base generation before changing either identity", async
     } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
   });
 });
+
+test("#1219 知识按适用软件版本过滤：有可信环境时自动匹配，未知时不冒充适用", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const folder = await mkdtemp(join(tmpdir(), "knowledge-software-version-"));
+    setSharedAssetBlobStoreForTests(new LocalBlobStore(folder));
+    try {
+      const maker = await seedKnowledgeJob(db, undefined, []);
+      const seed = async (key: string, title: string, keywords: string[], body: string) => {
+        const content = { kind: "memory", logical_key: key, title, keywords, content: body };
+        const blob = await writeKnowledgeBlob(db as never, content);
+        await registerKnowledgeBlob(db as never, blob.hash, blob.bytes);
+        const [item] = await db`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,keywords_json)
+          VALUES(${maker.projectId},'memory',${key},${title},${db.json(keywords)}) RETURNING id`;
+        const [version] = await db`INSERT INTO project_knowledge_versions(project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
+          VALUES(${maker.projectId},${item!.id},1,${blob.hash},${maker.jobId},${maker.attemptId},'[]'::jsonb,${H}) RETURNING id`;
+        await db`UPDATE project_knowledge_items SET status='active',active_version_id=${version!.id},generation=1 WHERE id=${item!.id}`;
+        return { item_id: String(item!.id), owner_project_id: maker.projectId, version_id: String(version!.id),
+          version: 1, kind: "memory" as const, hash: blob.hash, title, logical_key: key, keywords };
+      };
+      const oh = await seed("fixture/oh", "OpenHarmony 16 巡检经验", ["巡检", "sw:openharmony:16.0"], "只在 OpenHarmony 16.0 适用");
+      const android = await seed("fixture/android", "Android 16 巡检经验", ["巡检", "sw:android:16.0"], "只在 Android 16.0 适用");
+      const generic = await seed("fixture/generic", "通用巡检经验", ["巡检"], "所有环境通用");
+      const entries = [oh, android, generic];
+      const reader = await seedKnowledgeJob(db, maker.projectId, ["search_project_knowledge"]);
+      const snapshot = (environment?: Record<string, string>) => db.json({ platform_tools: ["search_project_knowledge"],
+        project_knowledge_catalog: { entries, hash: sha256(canonical(entries)) },
+        ...(environment ? { environment } : {}) });
+      const app = createProjectKnowledgeApplication({ db, governanceHash: H });
+      const search = async (input: Record<string, unknown>) => {
+        const [job] = await db`SELECT canvas_id FROM jobs WHERE id=${reader.jobId}`;
+        const result = await app.invoke({ jobId: reader.jobId, projectId: reader.projectId, canvasId: String(job!.canvas_id),
+          operationId: "search_project_knowledge", input: { query: "巡检", ...input },
+          eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
+        return result.items as Array<{ item_id: string; applicability?: string }>;
+      };
+      // 1) 冻结了可信环境（OpenHarmony 16.0）：只返回该软件该版本 + 通用，另一个软件同版本必须排除。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony", version: "16.0" })} WHERE id=${reader.jobId}`;
+      assert.deepEqual((await search({})).map((row) => row.item_id).sort(), [oh.item_id, generic.item_id].sort(),
+        "有可信环境时默认搜索必须自动匹配，且不得推荐另一软件的同版本条目");
+      // 2) 同一项目里两个都叫 16.0 的软件能区分开。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "android", version: "16.0" })} WHERE id=${reader.jobId}`;
+      assert.deepEqual((await search({})).map((row) => row.item_id).sort(), [android.item_id, generic.item_id].sort(),
+        "不同软件的同版本号必须靠软件标识区分");
+      // 2b) 调用方参数不得覆盖冻结快照里的版本：快照是 16.0 时传 15.0 仍按 16.0 判定。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony", version: "16.0" })} WHERE id=${reader.jobId}`;
+      assert.deepEqual((await search({ software_version: "15.0" })).map((row) => row.item_id).sort(),
+        [oh.item_id, generic.item_id].sort(), "冻结版本优先，调用方参数不能把当前环境改写成 15.0");
+      // 2c) 只冻结软件、不冻结版本：调用方传 16.0 不能把「未知」升级成「适用」。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony" })} WHERE id=${reader.jobId}`;
+      const partial = await search({ software_version: "16.0" });
+      const partialById = new Map(partial.map((row) => [row.item_id, row.applicability]));
+      assert.equal(partialById.get(oh.item_id), "unknown",
+        "只有软件、没有可信版本时，版本声明条目必须仍是未知，不能被调用参数确认");
+      assert.equal(partialById.get(android.item_id), "unknown",
+        "没有可信版本时，其它软件的版本声明同样只能是未知，不能判成不适用");
+      assert.equal(partialById.get(generic.item_id), undefined,
+        "通用条目正常返回（不标 unknown）");
+      // 3) 没有可信环境时间：有版本约束的条目仍可查，但必须标成 applicability=unknown。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot()} WHERE id=${reader.jobId}`;
+      const unknown = await search({});
+      assert.deepEqual(unknown.map((row) => row.item_id).sort(), [oh.item_id, android.item_id, generic.item_id].sort(),
+        "未知环境时不得静默隐藏，必须仍可查");
+      assert.deepEqual(unknown.filter((row) => row.applicability === "unknown").map((row) => row.item_id).sort(),
+        [oh.item_id, android.item_id].sort(), "有版本约束的条目在未知环境下必须标成 applicability=unknown");
+      // 4) 只变模型不改变适用性（模型不在匹配键里）。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony", version: "16.0" })}
+        || ${db.json({ model: "another-model" })} WHERE id=${reader.jobId}`;
+      assert.deepEqual((await search({})).map((row) => row.item_id).sort(), [oh.item_id, generic.item_id].sort(),
+        "换模型不得改变知识适用性");
+    } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
+  });
+});
