@@ -54,7 +54,10 @@ export function registerKnowledgeHistoryRoutes(app: FastifyInstance, deps: { db?
           ORDER BY a.at DESC, a.id DESC LIMIT 1) collected ON true
         LEFT JOIN LATERAL (SELECT a.at, a.after_json->>'reason' AS reason FROM audit_logs a
           WHERE a.project_id=${projectId} AND a.resource_id=jobs.id::text AND a.action=${SOURCE_SKIPPED_ACTION}
-            AND a.resource_type='job' AND a.result='ok' AND a.actor_type='system' AND a.actor_id='scheduler'
+            -- 旧 source-retry 写永久失败/重试耗尽时用的是 result='error'，这些才是真正
+            -- 跳过的记录，必须照旧读取；登记与采集仍只认成功写入。
+            AND a.resource_type='job' AND a.result IN ('ok','error')
+            AND a.actor_type='system' AND a.actor_id='scheduler'
           ORDER BY a.at DESC, a.id DESC LIMIT 1) skipped ON true
         WHERE jobs.project_id=${projectId}
         AND jobs.status IN ('succeeded','failed','timeout','cancelled','orphan','waiting_human')

@@ -98,16 +98,27 @@ test("task suggestions are private, attributable, idempotent and readable withou
       assert.equal(historyFacts.collection, "retired");
       assert.equal(historyRow!.status, "registered_retired",
         "仅登记未处理的旧来源必须给出「旧批量整理已下线」的明确结论，不能永久显示待整理");
-      // 任意历史原因文本都不得从接口返回；只有标准代码可读。
-      await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id, after_json)
+      // 旧 source-retry 的跳过写入是 result='error'：这些记录必须照旧读出跳过状态。
+      await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id, result, after_json)
         SELECT 'system', 'scheduler', 'project_knowledge.source_collection_skipped', ${owner.projectId},
-          'job', id::text, ${db.json({ reason: "prompt 里的任意文本 SYNTHETIC-LEAK" } as never)} FROM jobs WHERE id=${owner.jobId}`;
+          'job', id::text, 'error', ${db.json({ reason: "source_collection_retry_exhausted" } as never)}
+        FROM jobs WHERE id=${owner.jobId}`;
+      // 任意历史原因文本都不得从接口返回；只有标准代码可读。
+      await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id, result, after_json)
+        SELECT 'system', 'scheduler', 'project_knowledge.source_collection_skipped', ${owner.projectId},
+          'job', id::text, 'error', ${db.json({ reason: "prompt 里的任意文本 SYNTHETIC-LEAK" } as never)}
+        FROM jobs WHERE id=${owner.jobId}`;
       // 快照放在写入这条跳过审计之后：只判定「查询本身」不再新增采集/跳过审计。
       const collectBefore = (await db`SELECT count(*)::int AS count FROM audit_logs
         WHERE action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`)[0]!.count;
       const filtered = await app.inject({ url: `${path}/backfill` });
       assert.equal(filtered.statusCode, 200, filtered.body);
       assert.doesNotMatch(filtered.body, /SYNTHETIC-LEAK/, "原始跳过原因不得进入只读历史响应");
+      const skippedRow = (filtered.json() as { items: Array<Record<string, unknown>> }).items
+        .find((row) => row.job_id === owner.jobId) as { status: string; reason?: string; history: { skipped_at: unknown } };
+      assert.equal(skippedRow.status, "skipped", "旧 result='error' 的跳过记录必须照旧识别");
+      assert.equal(skippedRow.reason, "source_collection_retry_exhausted", "标准原因码照旧返回");
+      assert.equal(typeof skippedRow.history.skipped_at, "string", "跳过时间必须可查");
       // 已排队/运行的知识工作仍须能够结束：这条路径由
       // task-knowledge-ingest.integration.test.ts 的唤醒断言覆盖（历史入口不改变它），
       // 这里不额外插入 work 行，避免污染本用例后面的计数断言。
