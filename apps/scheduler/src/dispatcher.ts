@@ -860,10 +860,15 @@ export async function retryProvisioningJob(
       || !current || typeof current.id !== "string" || current.id !== attempt.id || current.cancel_requested !== false) return false;
     // Error text/missing handle cannot authorize replay. Only no effect or an
     // explicit host never_started settlement is admissible under this owner lock.
+    // #1309 评审：reconcile 的 outcome=not_applied 只证明「本地没记沙箱」，不足以
+    // 证明宿主端没有遗留资源，不得作为自动重跑授权；保持本边界的拒绝路径并留日志。
     const [blocked] = await tx`SELECT id FROM job_attempt_effects WHERE attempt_id = ${current.id}
       AND NOT (effect_kind = 'provision' AND status = 'settled'
          AND COALESCE(settlement_json @> '{"result":"never_started","external_effect":false}'::jsonb, false)) LIMIT 1`;
-    if (blocked) return false;
+    if (blocked) {
+      console.warn(`[dispatcher] provision_retry_denied reason=state_not_admissible job=${jobId}`);
+      return false;
+    }
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
@@ -1216,6 +1221,12 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         await sql.begin(async (txRaw) => {
           const tx = txRaw as unknown as typeof sql;
           await lockCurrentProvisioningAttempt(tx, jobId, attemptId!, "provision.effect_pending");
+          // #1309：已发起创建后的失败要留一条可检索日志（只写代码定义的布尔/枚举，
+          // 不写原始错误文本），让 sidecar 启动失败这类现场能被直接定位。
+          const sidecarStartFailure = /SANDBOX_START_FAILED|CONTAINER_START_FAILED|Egress sidecar/u.test(
+            String((error as { message?: unknown } | null)?.message ?? error));
+          console.warn(`[dispatcher] provision_failed job=${jobId} sidecar_start=${sidecarStartFailure}`
+            + ` settled=${provisionAttempted || lateProvisionExternalUncertain ? "unknown" : "never_started"}`);
           if (provisionAttempted || lateProvisionExternalUncertain) {
             await markEffectUnknown(tx, attemptId!, provisionEffectId!, error);
           } else {

@@ -90,6 +90,7 @@ test("source contract: calling runner.provision is uncertain even when no late h
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   assert.match(source, /provisionAttempted = true;\s*handle = await withProvisionTimeout\(\s*runner\.provision\(provisionInput\)/);
   assert.match(source, /lateProvisionExternalUncertain = true/);
+  // #1309 评审：not_applied 与错误文本都不是宿主端确认，本边界保持拒绝自动重跑。
   assert.match(source, /if \(provisionAttempted \|\| lateProvisionExternalUncertain\)\s*\{\s*await markEffectUnknown/);
   assert.match(source, /else\s*\{\s*await settleUnstartedProvisionEffect/);
 });

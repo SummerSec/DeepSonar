@@ -76,6 +76,7 @@ test("dispatcher provision retry budget is counted attempts, not attempt_no", ()
 test("source contract: opaque started failure stays unknown; retry requires current owner and explicit no-create evidence", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   const failure = source.slice(source.indexOf("// Once runner.provision was invoked"), source.indexOf("// Job → Attempt: settlement"));
+  // #1309 评审：已发起创建后的失败一律 unknown，错误文本/错误码不得改判 never_started。
   assert.match(failure, /if \(provisionAttempted \|\| lateProvisionExternalUncertain\)\s*\{\s*await markEffectUnknown/);
   assert.match(failure, /else\s*\{\s*await settleUnstartedProvisionEffect/);
   assert.match(failure, /await lockCurrentProvisioningAttempt/);
@@ -166,4 +167,21 @@ test("dispatcher failure messages scrub NUL before classification", () => {
 test("directory create 500 is circuit evidence without enlarging automatic replay candidacy", () => {
   assert.equal(isRetryableProvisionFailure(new Error(
     "Failed to create directory /opt/opensandbox in sandbox: 500 Server Error")), false);
+});
+
+test("#1309 边界回归：本地 not_applied 与错误文本都不得触发自动重跑", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  // 1) reconcile 的 outcome=not_applied 只证明本地没记沙箱，不得替代宿主端确认进入授权。
+  assert.doesNotMatch(source, /settlement_json @> '\{"outcome":"not_applied"\}'::jsonb/);
+  // 2) 不得用错误文本/错误码把「已发出创建请求的失败」改记为 never_started。
+  assert.doesNotMatch(source, /isDefiniteSandboxStartFailure/);
+  assert.doesNotMatch(source, /provisionAttempted && !isDefiniteSandboxStartFailure\(error\)/);
+  // 3) 闸 1 必须继续要求「provision 已发起就不进重试分支」。
+  assert.match(source, /if \(!provisionAttempted && !handle && attemptId && activeAttempt &&\s*\(isRetryableProvisionFailure\(e\) \|\| e instanceof OpenSandboxCreateAdmissionExpiredError\)\)/);
+  // 4) 唯一准入仍是宿主端 never_started；拒绝时留下可检索日志。
+  assert.match(source, /settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb/);
+  assert.match(source, /provision_retry_denied reason=state_not_admissible/);
+  // #1309：sidecar 启动失败要有可检索日志，且不得把原始错误文本写进日志行。
+  assert.match(source, /provision_failed job=\$\{jobId\} sidecar_start=/);
+  assert.doesNotMatch(source, /provision_failed[^`]*\$\{error/);
 });
