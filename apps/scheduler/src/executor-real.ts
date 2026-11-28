@@ -1588,15 +1588,22 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   // 「当前动作」直接更新节点显示态（throttle 1.5s）；tool.call 另写 runtime_activity 刷新 stall。
   let lastActionPush = 0;
   let lastToolProgressEmit = 0;
-  const recordToolCallActivity = (phase: ToolCallPhase, toolName: string) => {
+  // #1304：事件流必须成对。started 无条件发出，对应的 completed 也一定要发，
+  // 否则最后一条 tool.call.* 永远停在 started（旧实现里 completed 被 20s 节流吞掉，
+  // 实测投递率 0.39%，Reaper 的事件侧派生信号因此对 97.7% 的 Job 永久点亮）。
+  // 节流只压「同一 callId 的重复事件」，不再按相位压制。
+  const startedCalls = new Set<string>();
+  const recordToolCallActivity = (phase: ToolCallPhase, toolName: string, callId?: string | null) => {
     void sql`
       UPDATE jobs SET payload_json = payload_json || ${sql.json(toolCallActivityPatch(phase, scrubCliText(toolName)) as never)}
       WHERE id = ${jobId} AND status = 'running'`.catch(() => {});
+    const key = callId && callId.trim() ? callId : toolName;
     const now = Date.now();
-    if (phase === "started" || now - lastToolProgressEmit > 20_000) {
-      lastToolProgressEmit = now;
-      void emit("progress", { message: toolCallProgressMessage(phase, toolName) }).catch(() => {});
-    }
+    const mustEmit = phase === "started" || startedCalls.has(key) || now - lastToolProgressEmit > 20_000;
+    if (!mustEmit) return;
+    lastToolProgressEmit = now;
+    if (phase === "started") startedCalls.add(key); else startedCalls.delete(key);
+    void emit("progress", { message: toolCallProgressMessage(phase, toolName) }).catch(() => {});
   };
   const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(attemptId ?? job.sandbox_id ?? job.id ?? "unknown"));
   const evidenceAttemptId = evidenceWriter.attemptId;
@@ -1889,7 +1896,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             callId: typeof e.callId === "string" ? e.callId : undefined,
             input: e.input,
           }, evidenceAttemptId, evidenceSeq);
-          recordToolCallActivity("started", toolName);
+          recordToolCallActivity("started", toolName, typeof e.callId === "string" ? e.callId : null);
           const now = Date.now();
           if (now - lastActionPush > 1500) {
             lastActionPush = now;
@@ -1906,7 +1913,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             error: e.error,
             exit: e.exit,
           }, evidenceAttemptId, evidenceSeq);
-          recordToolCallActivity("completed", toolName);
+          recordToolCallActivity("completed", toolName, typeof e.callId === "string" ? e.callId : null);
         } else if (type === "text.delta" || type === "reasoning.delta") {
           publishStream(jobId, { type, delta: String(e.delta ?? "").slice(0, 500) }, evidenceAttemptId, evidenceSeq);
         } else if (type.startsWith("run.") || type.startsWith("message.")) {

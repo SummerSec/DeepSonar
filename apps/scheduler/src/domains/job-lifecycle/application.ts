@@ -23,7 +23,6 @@ import {
   INFLIGHT_TOOL_BUDGET_MULTIPLIER,
   INFLIGHT_TOOL_STALL_ERROR,
   INFLIGHT_TOOL_STALL_REASON,
-  TOOL_CALL_STARTED_PREFIX,
 } from "./stall-policy.js";
 
 export type {
@@ -343,30 +342,29 @@ export function createSqlJobLifecycleApplication(
               lease_expires_at IS NOT NULL
               AND lease_expires_at > now()
             )`;
-        const inflightTool = tx`(
-                NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
-                OR COALESCE(
-                  (
-                    SELECT e.payload_json->>'message'
-                      FROM events e
-                     WHERE e.job_id = jobs.id
-                       AND e.type = 'progress'
-                       AND e.payload_json->>'message' LIKE 'tool.call.%'
-                     ORDER BY e.created_at DESC, e.id DESC
-                     LIMIT 1
-                  ),
-                  ''
-                ) LIKE ${`${TOOL_CALL_STARTED_PREFIX}%`}
-              )`;
         const inflightBudget = tx`GREATEST(
               ${floorSec}::int * ${inflightMultiplier}::int,
               ${inflightMin}::int
             )::int * interval '1 second'`;
+        // #1304：只认权威信号。payload 的 runtime_activity 由两相无节流写入，而
+        // 「最后一条 tool.call.* 事件是否 started」是派生信号：completed 曾被 20s
+        // 节流吞掉，97.7% 的 Job 因此被永久判成「有工具在飞」，普通停滞收口 14 天 0 次。
+        // 同时要求信号自身未超预算：进程消失导致 completed 永远不来时，过期信号不再
+        // 豁免，Job 退化到普通停滞收口（更保守）。
+        const inflightTool = tx`(
+                NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
+                AND COALESCE((payload_json #>> '{runtime_activity,at}')::timestamptz, started_at)
+                  + ${inflightBudget} > now()
+              )`;
         // 先收口超出 in-flight 预算的挂死工具（独立稳定原因），再走普通停滞判定；
         // 已 failed 的行不会在第二条 UPDATE 里再次匹配 status='running'。
         const inflightStalled = await tx`
           UPDATE jobs SET status = 'failed', finished_at = now(),
-                          error = COALESCE(error, '') || ${INFLIGHT_TOOL_STALL_ERROR}
+                          error = COALESCE(NULLIF(error, ''), '')
+                            || CASE WHEN COALESCE(NULLIF(error, ''), '') = '' THEN '' ELSE E'\n' END
+                            || ${INFLIGHT_TOOL_STALL_ERROR}
+                            || '；tool=' || COALESCE(NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', ''), 'unknown')
+                            || '；signal_at=' || COALESCE(payload_json #>> '{runtime_activity,at}', 'unknown')
           WHERE status = 'running'
             AND started_at IS NOT NULL
             AND ${configuredSec}::int > 0
