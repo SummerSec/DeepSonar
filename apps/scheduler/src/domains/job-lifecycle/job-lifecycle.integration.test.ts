@@ -371,6 +371,31 @@ if (!testDatabaseUrl) {
         assert.equal(attempt.reason, "reaper_stall",
           "超过工具预算的坏值/缺失时间也不得被写成已确认的工具超时");
       }
+      // 评审 r6：标记刚写入（at≈now）但 Job 已沉默 1000s，说明工具刚启动而任务暂无产出；
+      // 不能把它立刻记成「已确认工具超时」，也不该在 900s 就收口。
+      const freshMarkerOldSilence = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: new Date().toISOString() } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '1000 seconds' WHERE id = ${freshMarkerOldSilence}`;
+      await createAttempt(sql, freshMarkerOldSilence, { agent_cli: "claude-code" });
+      const freshReaped = await app.reapStalledExecution(900);
+      assert.equal(new Set(freshReaped.map((row) => row.id)).has(freshMarkerOldSilence), false,
+        "刚写入的工具标记不能立刻算成超时，保持等待");
+      const [freshRow] = await sql`SELECT status FROM jobs WHERE id = ${freshMarkerOldSilence}`;
+      assert.equal(freshRow.status, "running", "标记新鲜时不得被普通停滞或工具超时收口");
+      // 结构化坏值（数字而不是时间字符串）：只影响该行判定，不得抛错拖垮整批清理。
+      const structuredBadAt = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: 12345 } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${structuredBadAt}`;
+      await createAttempt(sql, structuredBadAt, { agent_cli: "claude-code" });
+      const structuredReaped = await app.reapStalledExecution(900);
+      assert.equal(new Set(structuredReaped.map((row) => row.id)).has(structuredBadAt), true,
+        "坏时间值不得让整批清理失败，也不得挡住宿主行收口");
+      const [structuredAttempt] = await sql`SELECT outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${structuredBadAt} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.equal(structuredAttempt.reason, "reaper_stall",
+        "结构化坏值只能落普通停滞，不能冒充已确认工具超时");
       // 评审 r5：标记必须可归属本次执行。启动前的旧标记与未来时间都不能证明本次工具在跑，
       // 也不得阻止普通清理，更不能写成「已确认工具超时」。
       const preStartMarker = await insertRunning("deepsonar-audit", {
