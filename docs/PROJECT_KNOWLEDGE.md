@@ -32,7 +32,7 @@ Job 创建时冻结两类目录：
 
 知识条目可以用关键字声明适用范围，两种写法都接受：`sw:<software>:<version>`（推荐，同一项目里两个同名版本也能区分）与历史写法 `sw:<version>`（只约束版本）。
 
-检索的可信上下文来自本 Job 冻结快照的 `environment` / `target_environment`（`{software, version}`）。冻结版本是当前执行环境的真相：`search_project_knowledge` 的 `software_version` 只在快照没有可信版本时兜底，不能覆盖当前判断；没有软件标识时，`sw:<version>` 这类无标识条目算「未知」而不是「适用」。判定三态：
+检索的可信上下文**只**来自本 Job 冻结快照的 `environment` / `target_environment`（`{software, version}`）。`search_project_knowledge` 的 `software_version` 不参与适用性判定：快照只有软件、没有版本时，版本声明条目仍是「未知」，参数不能把它升级成「已验证适用」；没有软件标识时，`sw:<version>` 这类无标识条目算「未知」而不是「适用」。判定三态：
 
 - **适用**：条目没有声明，或声明的软件与版本和可信上下文一致；默认推荐里正常返回。
 - **不适用**：声明与可信上下文冲突（含另一软件的同版本号），默认推荐必须排除。

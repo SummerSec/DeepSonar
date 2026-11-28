@@ -540,6 +540,16 @@ test("#1219 知识按适用软件版本过滤：有可信环境时自动匹配�
       await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony", version: "16.0" })} WHERE id=${reader.jobId}`;
       assert.deepEqual((await search({ software_version: "15.0" })).map((row) => row.item_id).sort(),
         [oh.item_id, generic.item_id].sort(), "冻结版本优先，调用方参数不能把当前环境改写成 15.0");
+      // 2c) 只冻结软件、不冻结版本：调用方传 16.0 不能把「未知」升级成「适用」。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony" })} WHERE id=${reader.jobId}`;
+      const partial = await search({ software_version: "16.0" });
+      const partialById = new Map(partial.map((row) => [row.item_id, row.applicability]));
+      assert.equal(partialById.get(oh.item_id), "unknown",
+        "只有软件、没有可信版本时，版本声明条目必须仍是未知，不能被调用参数确认");
+      assert.equal(partialById.get(android.item_id), undefined,
+        "另一软件的声明与可信软件冲突，默认推荐必须排除");
+      assert.equal(partialById.get(generic.item_id), undefined,
+        "通用条目正常返回（不标 unknown）");
       // 3) 没有可信环境时间：有版本约束的条目仍可查，但必须标成 applicability=unknown。
       await db`UPDATE jobs SET agent_snapshot_json=${snapshot()} WHERE id=${reader.jobId}`;
       const unknown = await search({});
