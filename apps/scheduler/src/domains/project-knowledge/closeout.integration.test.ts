@@ -85,8 +85,6 @@ test("task suggestions are private, attributable, idempotent and readable withou
       // GET 自身会写一条请求审计，所以「不产生写入」的判据是：不新增整理工作、
       // 不新增采集/跳过审计（而不是审计总行数不变）。
       const workBefore = (await db`SELECT count(*)::int AS count FROM project_knowledge_work`)[0]!.count;
-      const collectBefore = (await db`SELECT count(*)::int AS count FROM audit_logs
-        WHERE action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`)[0]!.count;
       const history = await app.inject({ url: `${path}/backfill` });
       assert.equal(history.statusCode, 200, history.body);
       const historyBody = history.json() as { items: Array<Record<string, unknown>> };
@@ -104,6 +102,9 @@ test("task suggestions are private, attributable, idempotent and readable withou
       await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id, after_json)
         SELECT 'system', 'scheduler', 'project_knowledge.source_collection_skipped', ${owner.projectId},
           'job', id::text, ${db.json({ reason: "prompt 里的任意文本 SYNTHETIC-LEAK" } as never)} FROM jobs WHERE id=${owner.jobId}`;
+      // 快照放在写入这条跳过审计之后：只判定「查询本身」不再新增采集/跳过审计。
+      const collectBefore = (await db`SELECT count(*)::int AS count FROM audit_logs
+        WHERE action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`)[0]!.count;
       const filtered = await app.inject({ url: `${path}/backfill` });
       assert.equal(filtered.statusCode, 200, filtered.body);
       assert.doesNotMatch(filtered.body, /SYNTHETIC-LEAK/, "原始跳过原因不得进入只读历史响应");
