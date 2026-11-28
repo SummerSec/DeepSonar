@@ -90,6 +90,7 @@ test("source contract: calling runner.provision is uncertain even when no late h
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   assert.match(source, /provisionAttempted = true;\s*handle = await withProvisionTimeout\(\s*runner\.provision\(provisionInput\)/);
   assert.match(source, /lateProvisionExternalUncertain = true/);
-  assert.match(source, /if \(provisionAttempted \|\| lateProvisionExternalUncertain\)\s*\{\s*await markEffectUnknown/);
+  // #1309：明确的沙箱启动失败结算成 never_started，其余（超时/断开/无响应）仍 unknown。
+  assert.match(source, /lateProvisionExternalUncertain\s*\|\| \(provisionAttempted && !isDefiniteSandboxStartFailure\(error\)\)\)\s*\{\s*await markEffectUnknown/);
   assert.match(source, /else\s*\{\s*await settleUnstartedProvisionEffect/);
 });
