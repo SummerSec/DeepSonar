@@ -357,19 +357,21 @@ export function createSqlJobLifecycleApplication(
         const inflightSignal = tx`(
                 NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
               )`;
-        // 信号是否「可信且新鲜」：只有带可信 ISO 时间、且信号本身还在 in-flight 预算内的
-        // 标记才算「工具确实在飞」。仅有旧标记或坏时间不能自动延长等待（评审反例：
-        // 有效租约 + 静默 1000s + 标记时间在 2 小时前，应按 900s 普通停滞收口）。
+        // 可信标记时间：只认绝对 ISO 时间并校验；坏值（缺失、'now'、'infinity'）算
+        // 「没有可信时间」，不退回 started_at，也不得把工具挂死当成「已在飞」。
+        const trustedMarkerAt = tx`(
+                CASE
+                  WHEN payload_json #>> '{runtime_activity,at}' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]'
+                    AND pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
+                    THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
+                END
+              )`;
+        // 「是否延长等待」：只有 marker 存在 + 可信时间且该时间仍在 in-flight 预算内的行，
+        // 才准许比普通停滞阈值再多等一轮。旧标记（可信但已过预算）或坏值/缺时间一律不延长。
         const inflightSignalFresh = tx`(
                 ${inflightSignal}
-                AND COALESCE(
-                  CASE
-                    WHEN payload_json #>> '{runtime_activity,at}' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]'
-                      AND pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
-                      THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
-                  END,
-                  started_at
-                ) + ${inflightBudget} > now()
+                AND ${trustedMarkerAt} IS NOT NULL
+                AND ${trustedMarkerAt} + ${inflightBudget} > now()
               )`;
         // 先收口挂死工具（独立稳定原因），再走普通停滞判定；已 failed 的行不会在
         // 第二条 UPDATE 里再次匹配 status='running'。
@@ -387,6 +389,9 @@ export function createSqlJobLifecycleApplication(
             AND ${configuredSec}::int > 0
             AND ${leaseLive}
             AND ${inflightSignal}
+            -- 「能否确认是工具超时」必须由可信标记时间证明；坏值/缺时间不得写成
+            -- 「已确认工具超时」（#1306 评审）。
+            AND ${trustedMarkerAt} IS NOT NULL
             AND ${lastActivity} + ${inflightBudget} < now()
           RETURNING id, sandbox_id`;
         for (const row of inflightStalled) {

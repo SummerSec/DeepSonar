@@ -261,8 +261,10 @@ if (!testDatabaseUrl) {
         payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
       });
       // #1086/#1304：in-flight 豁免有上限，且信号自身超过预算即失效；把 started_at 推到 1h 预算之外。
+      // #1306 评审：工具超时「原因归类」必须由可信标记时间证明，坏值/缺时间不能写成
+      // 已确认的工具超时；这条有效租约的行虽然有可信但早已过预算的标记，仍然属于在飞。
       const hungToolAudit = await insertRunning("deepsonar-audit", {
-        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "2026-01-01T00:00:00.000Z" } },
       });
       await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${hungToolAudit}`;
       // #1304 评审：历史脏数据里的 runtime_activity.at 可能是不可解析的值。它只能让
@@ -311,9 +313,11 @@ if (!testDatabaseUrl) {
         FROM jobs JOIN job_attempts a ON a.job_id = jobs.id
         WHERE jobs.id IN (${dirtyAtAudit}, ${infinityAtAudit}, ${relativeAtAudit}) AND a.status = 'failed'
         GROUP BY 1`;
+      // #1306 评审：能否确认是工具超时要求「可信标记时间」；这三条 bad marker
+      // （not-a-timestamp / infinity / now）都不延长等待，也不写成工具超时。
       assert.deepEqual(oddAtReasons.map((row) => [row.reason, Number(row.count)]),
-        [["reaper_inflight_tool_stalled", 3]],
-        "脏/特殊 at 值时仍必须落到工具超时原因，而不是普通停滞");
+        [["reaper_stall", 3]],
+        "坏标记（脏值/特殊值）必须落到普通停滞原因，不写成已确认的工具超时");
       // 评审要求：租约过期/为空但留下旧信号的 Job 必须由普通停滞兜底，不能因为
       // 「有工具标记」就永远没人清理；同时它不算已确认的工具超时。
       const expiredLeaseSignal = await insertRunning("deepsonar-audit", {
@@ -343,6 +347,28 @@ if (!testDatabaseUrl) {
         FROM job_attempts WHERE job_id = ${staleMarkerLiveLease} ORDER BY attempt_no DESC LIMIT 1`;
       assert.equal(staleMarkerAttempt.reason, "reaper_stall",
         "失效标记不得写成已确认的工具超时");
+      // 评审 r4/1000s 静默 + 坏值/缺失时间：三条都不能「延长等待」也已经不能冒充
+      // 「已确认工具超时」；必须在 900s 普通阈值上被普通停滞收口。
+      const badNowMarker = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "now" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '1000 seconds' WHERE id = ${badNowMarker}`;
+      await createAttempt(sql, badNowMarker, { agent_cli: "claude-code" });
+      const missingTimeMarker = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '1000 seconds' WHERE id = ${missingTimeMarker}`;
+      await createAttempt(sql, missingTimeMarker, { agent_cli: "claude-code" });
+      const bad1000Reaped = await app.reapStalledExecution(900);
+      const bad1000Ids = new Set(bad1000Reaped.map((row) => row.id));
+      assert.ok(bad1000Ids.has(badNowMarker) && bad1000Ids.has(missingTimeMarker),
+        "1000s 静默 + 坏值/缺失时间必须按普通阈值收口，不能多等预算");
+      for (const jobId of [badNowMarker, missingTimeMarker]) {
+        const [attempt] = await sql`SELECT outcome_json->>'reason' AS reason
+          FROM job_attempts WHERE job_id = ${jobId} ORDER BY attempt_no DESC LIMIT 1`;
+        assert.equal(attempt.reason, "reaper_stall",
+          "超过工具预算的坏值/缺失时间也不得被写成已确认的工具超时");
+      }
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");
       // 工具超时与普通停滞必须是两个可区分的原因：这条有信号，落工具超时。
