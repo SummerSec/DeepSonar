@@ -8,7 +8,6 @@ import { useProjectKnowledgeMaintenance } from "./useProjectKnowledgeMaintenance
 import { PageHeader } from "../ui";
 import { feedbackLine } from "../project-knowledge-card.js";
 import { ProjectKnowledgeActivity } from "./ProjectKnowledgeActivity";
-import { ProjectKnowledgeBackfill } from "./ProjectKnowledgeBackfill";
 import {
   projectKnowledgeApi,
   type KnowledgeDetail,
@@ -206,7 +205,6 @@ export function ProjectKnowledgePage() {
     <p className="mb-6 text-sm text-zinc-500">只读查看 Agent 沉淀的记忆与 Skill。版本晋升由受治理的评测和审查流程完成。</p>
     <ProjectKnowledgeActivity key={projectId} projectId={projectId} refresh={refresh}
       onRefresh={() => setRefresh((value) => value + 1)} />
-    <ProjectKnowledgeBackfill key={projectId} projectId={projectId} />
     <div className="grid gap-5 xl:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
       <section className="space-y-3" aria-label="知识目录">
         <div className={card + " space-y-3"}>

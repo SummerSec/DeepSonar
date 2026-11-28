@@ -3,7 +3,7 @@ import { KnowledgeCandidate } from "@deepsonar/shared-types";
 import { recordDurableAudit, recordSystemAudit } from "../../audit.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { CLOSEOUT_EVALUATION_PREFIX, closeoutDraftRef, closeoutEvaluationKey } from "./closeout-evaluation-key.js";
-import { SOURCE_COLLECTED_ACTION, SOURCE_SKIPPED_ACTION } from "./collector-sources.js";
+import { SOURCE_COLLECTED_ACTION, SOURCE_SKIPPED_ACTION } from "./knowledge-actions.js";
 import { findTaskKnowledgeCandidate } from "./closeout-preview.js";
 import { resolveKnowledgeSource, recheckKnowledgeSources } from "./inputs.js";
 import { PROJECT_KNOWLEDGE_GOVERNANCE_HASH } from "./platform-skills.js";

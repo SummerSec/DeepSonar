@@ -8,7 +8,7 @@ import { onKnowledgeJobTerminal } from "./recovery.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, sha256 } from "./types.js";
 import { automaticPreparationPredicate, isAutomaticWork } from "./automatic-marker.js";
-import { PROJECT_COLLECTION_PREFIX } from "./collector-sources.js";
+import { PROJECT_COLLECTION_PREFIX } from "./knowledge-actions.js";
 import { COEXISTENCE_INPUT_REF, prepareTrialSupport } from "./trial-support.js";
 import { closeoutEvaluationSelection, isCloseoutEvaluation } from "./closeout-evaluation-key.js";
 import { findTaskKnowledgeCandidate } from "./closeout-preview.js";

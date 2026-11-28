@@ -105,18 +105,9 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     assert.match(feedback().textContent!, /已记录的显式反馈 2/);
     assert.match(feedback().textContent!, /尚无反馈（效果未知） 3/);
     const collection = () => container.querySelector('[aria-label="自动整理状态"]')!;
-    assert.match(collection().textContent!, /自动整理已停发/);
-    assert.match(collection().textContent!, /待整理来源 12/);
-    assert.match(collection().textContent!, /连续无产出 2 批/);
-    assert.match(collection().textContent!, /来源已保留/);
-    assert.match(collection().textContent!, /修复.*成功.*显式.*整理/);
-    assert.match(collection().textContent!, /4 个来源.*24 小时/);
-    assert.match(collection().textContent!, /批次.*间隔 24 小时/);
-    assert.match(collection().textContent!, /连续 2 个自动批次无产出即停发/);
-    assert.equal(collection().querySelector("time"), null, "halted collection has no scheduled automatic recovery");
-    assert.equal(collection().querySelectorAll("button").length, 0, "collection status does not offer a recovery action");
-    assert.doesNotMatch(container.textContent!, /恢复按钮|恢复自动整理|立即恢复/);
-    assert.equal(container.querySelectorAll('[role="alert"]').length, 0, "halted status does not add a notification");
+    assert.match(collection().textContent!, /自动整理已下线/);
+    assert.equal(collection().querySelector("time"), null);
+    assert.equal(collection().querySelectorAll("button").length, 0);
     assert.doesNotMatch(container.textContent!, /产物 24|成功率/);
     assert.ok(container.querySelector('a[href="/jobs?project=a&job=job-a"]'));
     assert.ok(container.querySelector('a[href="/projects/a/tasks/canvas-a"]'));
@@ -144,11 +135,6 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     assert.match(container.textContent!, /暂无知识工作/);
     assert.match(feedback().textContent!, /反馈覆盖率 无样本/);
     assert.doesNotMatch(feedback().textContent!, /%/);
-    assert.match(collection().textContent!, /正在积累来源/);
-    assert.match(collection().textContent!, /待整理来源 3/);
-    assert.match(collection().textContent!, /连续无产出 0 批/);
-    assert.doesNotMatch(collection().textContent!, /已停发|来源已保留|待整理来源 12/);
-    assert.equal(collection().querySelector("time")?.getAttribute("datetime"), nextCollection);
     await render("b", 1);
     assert.equal(requests.length, 4, "existing refresh trigger fetches activity once");
     await act(async () => requests[3].reject(new Error("server failure")));
@@ -166,21 +152,6 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
     assert.match(feedback().textContent!, /已记录的显式反馈 0/);
     assert.match(feedback().textContent!, /尚无反馈（效果未知） 503/);
     assert.equal(container.querySelector('[role="alert"]'), null, "a late failure from an earlier refresh cannot replace current data");
-    for (const [state, label, nextAt] of [
-      ["idle", "暂无待整理来源", null], ["busy", "已有知识工作待执行或整理中", null],
-      ["cooldown", "自动整理冷却中", nextCollection], ["ready", "已达到收集条件，等待调度", nextCollection],
-    ] as const) {
-      const requestIndex: number = requests.length;
-      await render("b", requestIndex);
-      await act(async () => requests[requestIndex].resolve({ ...page(`work-${state}`), collection: {
-        state, pending_sources: state === "idle" ? 0 : 4, consecutive_failures: state === "cooldown" ? 1 : 0,
-        next_collection_at: nextAt,
-      } }));
-      assert.match(collection().textContent!, new RegExp(label));
-      assert.equal(collection().querySelector("time")?.getAttribute("datetime") ?? null, nextAt);
-      assert.doesNotMatch(collection().textContent!, /自动整理已停发|来源已保留/);
-      assert.equal(requests.length, requestIndex + 1, "each refresh loads once without background requests");
-    }
   } finally {
     await act(async () => root.unmount());
     projectKnowledgeApi.activity = originalActivity;
@@ -192,86 +163,6 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
   }
 });
 
-
-test("history preview reads on demand, drops closed responses, and renders suggestions as plain text", async () => {
-  const { JSDOM } = await import("jsdom");
-  const { act, createElement: h } = await import("react");
-  const { createRoot } = await import("react-dom/client");
-  const { MemoryRouter } = await import("react-router-dom");
-  const { ProjectKnowledgeBackfill } = await import("./pages/ProjectKnowledgeBackfill");
-  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
-  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
-    Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true,
-    localStorage: { getItem: (key: string) => key === "deepsonar_api_token" ? "fixture-token" : null } };
-  const oldGlobals = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
-  for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ path: string; init?: RequestInit; respond: (data: unknown) => void }> = [];
-  globalThis.fetch = (input, init) => new Promise(resolve => {
-    calls.push({ path: String(input), init, respond: data => resolve(new Response(JSON.stringify(data))) });
-  });
-  const container = dom.window.document.getElementById("root")!;
-  const root = createRoot(container);
-  const render = (projectId: string) => act(async () => root.render(h(MemoryRouter, null,
-    h(ProjectKnowledgeBackfill, { key: projectId, projectId }))));
-  const click = async (label: string) => {
-    const control = [...container.querySelectorAll("button")].find(button => button.textContent === label);
-    assert.ok(control, label);
-    await act(async () => control.click());
-  };
-  const candidate = { kind: "skill", title: "示例建议", scope: "同项目", content: '<img src="/external" />',
-    evidence_refs: [{ kind: "fact", ref: "fact-1" }] };
-  try {
-    await render("project/a");
-    assert.equal(calls.length, 0);
-    await click("查看历史任务沉淀");
-    assert.equal(calls[0].path, "/api/projects/project%2Fa/knowledge/backfill?limit=10&offset=0");
-    await act(async () => calls[0].respond({ next_offset: 10, items: [
-      { job_id: "legacy", closeout_status: "legacy_preview", closeout_root_ref: null, status: "eligible" },
-      { job_id: "job", closeout_status: "suggestions_available", closeout_root_ref: "root/a", status: "eligible" },
-    ] }));
-    assert.match(container.textContent!, /只有历史来源预览.*有可供整理的来源/);
-    assert.equal(calls.length, 1);
-    await click("查看建议");
-    assert.equal(calls[1].path, "/api/projects/project%2Fa/knowledge/closeout/root%2Fa?limit=10&offset=0");
-    await click("收起建议");
-    assert.equal(calls[1].init?.signal?.aborted, true);
-    await act(async () => calls[1].respond({ status: "suggestions_available", next_offset: null, items: [candidate] }));
-    assert.doesNotMatch(container.textContent!, /示例建议/);
-    await click("查看建议");
-    await act(async () => calls[2].respond({ status: "restricted", next_offset: null, items: [candidate],
-      evaluation_source_unavailable: true }));
-    assert.match(container.textContent!, /当前无法查看建议内容/);
-    assert.match(container.textContent!, /已有建议送评，原证据或修订版本已不可用/);
-    assert.doesNotMatch(container.textContent!, /示例建议|fact-1/);
-    await click("收起建议");
-    await click("查看建议");
-    await act(async () => calls[3].respond({ status: "suggestions_available", next_offset: null, items: [candidate] }));
-    assert.match(container.textContent!, /示例建议/);
-    assert.doesNotMatch(container.textContent!, /已有建议送评，原证据或修订版本已不可用/);
-    assert.ok(container.textContent!.includes(candidate.content));
-    assert.equal(container.querySelector("img"), null);
-    await click("下一页历史");
-    assert.equal(calls[4].path, "/api/projects/project%2Fa/knowledge/backfill?limit=10&offset=10");
-    await render("project-b");
-    assert.equal(calls[4].init?.signal?.aborted, true);
-    assert.doesNotMatch(container.textContent!, /示例建议|只有历史来源预览/);
-    for (const { init } of calls) {
-      assert.equal(init?.method, "GET");
-      assert.equal(init?.cache, "no-store");
-      assert.equal(init?.body, undefined);
-      assert.deepEqual(init?.headers, { Authorization: "Bearer fixture-token" });
-    }
-  } finally {
-    await act(async () => root.unmount());
-    globalThis.fetch = originalFetch;
-    for (const [key, descriptor] of oldGlobals) {
-      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-      else Reflect.deleteProperty(globalThis, key);
-    }
-    dom.window.close();
-  }
-});
 
 test("#1256 卡片评价行按契约语义显示：不适用、未评价与有评价三态", async () => {
   const { feedbackLine } = await import("./project-knowledge-card.js");

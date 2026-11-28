@@ -12,7 +12,6 @@ import { readKnowledgeBlob, registerKnowledgeBlob, writeKnowledgeBlob } from "./
 import { KNOWLEDGE_FIXED_CASES } from "./case-policy.js";
 import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-support.js";
 import { KNOWLEDGE_CASE_KINDS } from "@deepsonar/shared-types";
-import { collectProjectKnowledgeSources } from "./collector.js";
 
 const H = "a".repeat(64);
 const allowed = ["request_project_knowledge", "get_knowledge_receipt"];
@@ -239,7 +238,7 @@ test("independent reviewer atomically activates evaluated draft", async () => {
   });
 });
 
-test("feedback on a real usage is recorded, later joins project collection and rejects another Job usage", async () => {
+test("feedback on a real usage is recorded and another Job usage is rejected", async () => {
   await withKnowledgeDatabase(async (db) => {
     const folder = await mkdtemp(join(tmpdir(), "knowledge-feedback-"));
     setSharedAssetBlobStoreForTests(new LocalBlobStore(folder));
@@ -267,30 +266,8 @@ test("feedback on a real usage is recorded, later joins project collection and r
       assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
       const [saved] = await db`SELECT feedback_json FROM project_knowledge_usages WHERE id=${usage}`;
       assert.equal(saved?.feedback_json.next_action, "revise");
-      await db`UPDATE jobs SET status='succeeded' WHERE id=${job.jobId}`;
-      await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${job.attemptId}`;
-      await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
-        VALUES('system','scheduler','project_knowledge.source_registered',${job.projectId},'job',${job.jobId},'ok',
-          now()-interval '25 hours')`;
-      assert.equal(await collectProjectKnowledgeSources(db, H), 1);
-      const [work] = await db`SELECT id,input_manifest_json FROM project_knowledge_work WHERE project_id=${job.projectId}`;
-      const manifest = work!.input_manifest_json as import("@deepsonar/shared-types").KnowledgeInputManifestEntry[];
-      const entry = manifest.find(entry => entry.input_ref === `feedback:${usage}`);
-      assert.ok(entry, "new maker must receive the actual feedback, not only a trigger hash");
-      const frozen = await readKnowledgeBlob(db, entry.blob_hash) as Record<string, unknown>;
-      assert.equal(frozen.usage_ref, usage);
-      assert.equal(frozen.selector, "global:fixture");
-      assert.equal(frozen.content_hash, H);
-      assert.equal(frozen.version_ref, null);
-      assert.equal(frozen.outcome, "failure");
-      assert.equal(frozen.next_action, "revise");
-      assert.deepEqual(frozen.evidence_refs, input.evidence_refs);
-      const maker = await seedKnowledgeJob(db, job.projectId, ["read_knowledge_input"]);
-      await db`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage,input_manifest_json)
-        VALUES(${maker.jobId},${job.projectId},${String(work!.id)},'maker',${db.json(manifest as never)})`;
-      const read = await app.invoke({ ...context, jobId: maker.jobId, canvasId: maker.canvasId,
-        operationId: "read_knowledge_input", input: { work_ref: String(work!.id), input_ref: entry.input_ref, expected_hash: entry.content_hash } });
-      assert.match(String(read.content_fragment), /needs better method/);
+      // #1219 第四阶段第 3 步：项目批量整理（来源登记 + collector）已退役，
+      // 这里只保留「反馈被记录、跨 Job 用量被拒绝」的可验证部分。
     } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
   });
 });

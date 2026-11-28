@@ -3,7 +3,7 @@
 > 状态：**已采纳**；本轮目标契约，最终 SHA 的 GitHub Actions 验收另计，不表示已部署。
 > 决策日期：2026-11-16
 > 同步日期：2026-11-16
-> 来源：用户明确授权修复自动项目整理；[collector](../../../apps/scheduler/src/domains/project-knowledge/collector.ts)、[knowledge-wake](../../../apps/scheduler/src/knowledge-wake.ts)、[activity](../../../apps/scheduler/src/domains/project-knowledge/activity.ts)。
+> 来源：用户明确授权修复自动项目整理；`collector`、[knowledge-wake](../../../apps/scheduler/src/knowledge-wake.ts)、[activity](../../../apps/scheduler/src/domains/project-knowledge/activity.ts)。
 > 关联需求：FR-KNOW-001、NFR-UX-001。
 
 ## 背景

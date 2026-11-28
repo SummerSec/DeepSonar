@@ -77,9 +77,11 @@ test("task suggestions are private, attributable, idempotent and readable withou
       assert.deepEqual(list.json().items.map((row: { result_json: unknown }) => row.result_json), [receipt]);
       assert.deepEqual(detail.json().result_json, receipt);
       scopes = ["projects:read", "tasks:read"];
+      // #1219 第四阶段第 3 步：/knowledge/backfill 已删除；该路径现在落在
+      // 版本详情路由（:itemId 需要 uuid），因此按参数校验返回 400，且不再有旧预览体。
       const old = await app.inject({ url: `${path}/backfill` });
-      assert.equal(old.statusCode, 200);
-      assert.equal(old.json().items[0].closeout_status, "legacy_preview");
+      assert.equal(old.statusCode, 400, old.body);
+      assert.equal(Object.hasOwn(old.json(), "items"), false);
       const [{ count }] = await db`SELECT count(*)::int AS count FROM project_knowledge_work`;
       assert.equal(count, 0);
       assert.equal((await db`SELECT id FROM canvas_nodes WHERE node_type='knowledge_closeout'`).length, 0);

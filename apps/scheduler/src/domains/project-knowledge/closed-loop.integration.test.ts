@@ -10,8 +10,6 @@ import { registerProjectKnowledgeRoutes } from "./routes.js";
 import { KNOWLEDGE_CASE_KINDS, type KnowledgeJobAssignment } from "@deepsonar/shared-types";
 import { createKnowledgeRuntime } from "./runtime.js";
 import { createKnowledgeWorkScheduler } from "./work.js";
-import { collectProjectKnowledgeSources } from "./collector.js";
-import { registerKnowledgeSourceAfterTerminal } from "./automatic.js";
 import { freezeProjectKnowledgeCatalog } from "./catalog-snapshot.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, sha256 } from "./types.js";
@@ -100,10 +98,17 @@ test(evaluationOnly ? `closeout ${kind} settles behavior and stays private witho
     const factId = randomUUID();
     await db`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,verification_status,body_json)
       VALUES(${factId},${origin.canvasId},${origin.jobId},'fact','raw input','succeeded','unverified','{"input":"raw fixture"}'::jsonb)`;
+    const originRuntime = createKnowledgeRuntime({ db, governanceHash: GOVERNANCE });
+    // #1219 第四阶段第 3 步：批量整理（来源登记 + collector）已退役，非收尾路径
+    // 改为在业务 Job 内显式 request_project_knowledge 建立知识工作。
+    if (!evaluationOnly) {
+      const sourceRef = { kind: "fact", ref: factId,
+        content_hash: sha256(canonical({ kind: "fact", id: factId, body: { input: "raw fixture" }, verification_status: "unverified" })) };
+      await invoke(db, originRuntime, origin.jobId, "request_project_knowledge",
+        { source_refs: [sourceRef], reason: "closeout fixture registration" });
+    }
     await db`UPDATE jobs SET status='succeeded' WHERE id=${origin.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${origin.attemptId}`;
-    await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
-      VALUES('system','scheduler','project_knowledge.source_registered',${origin.projectId},'job',${origin.jobId},'ok',now()-interval '25 hours')`;
     let closeoutKey: string | undefined;
     if (evaluationOnly) {
       const rootId = randomUUID(), eventId = randomUUID();
@@ -132,11 +137,9 @@ test(evaluationOnly ? `closeout ${kind} settles behavior and stays private witho
         assert.equal(response.statusCode, 202, response.body);
       } finally { await app.close(); }
       closeoutKey = closeoutEvaluationKey(rootId, fingerprint);
-      assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
-    } else {
-      await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, origin.jobId, "succeeded"));
-      assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
     }
+    assert.equal((await db`SELECT count(*)::int AS n FROM project_knowledge_work WHERE project_id=${origin.projectId}`)[0]!.n, 1,
+      "两条路径都只应产生一条知识工作");
     const [work] = await db`SELECT id,input_manifest_json FROM project_knowledge_work WHERE project_id=${origin.projectId}`;
     const workId = String(work!.id);
     const first = (work!.input_manifest_json as Array<{ input_ref: string; content_hash: string }>)[0]!;
@@ -257,21 +260,6 @@ test(evaluationOnly ? `closeout ${kind} settles behavior and stays private witho
     assert.equal((usage!.feedback_json as { outcome: string }).outcome, "success");
     await db`UPDATE jobs SET status='succeeded' WHERE id=${consumer.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${consumer.attemptId}`;
-    await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, consumer.jobId, "succeeded"));
-    for (let index = 0; index < 3; index++) {
-      const extra = await seedKnowledgeJob(db, origin.projectId, ["request_project_knowledge"]);
-      await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
-        VALUES(${extra.canvasId},${extra.jobId},'fact','batch companion','succeeded','unverified','{}')`;
-      await db`UPDATE jobs SET status='succeeded' WHERE id=${extra.jobId}`;
-      await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${extra.attemptId}`;
-      await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, extra.jobId, "succeeded"));
-    }
-    await db`UPDATE project_knowledge_work SET created_at=now()-interval '25 hours' WHERE id=${workId}`;
-    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
-    const [batch] = await db`SELECT input_manifest_json FROM project_knowledge_work WHERE id<>${workId}`;
-    const feedbackInputs = batch!.input_manifest_json as Array<{ input_ref: string }>;
-    assert.ok(feedbackInputs.some(entry => entry.input_ref === `feedback:${String(read.usage_ref)}`));
-    assert.ok(feedbackInputs.some(entry => entry.input_ref === `baseline:${String(proposed.candidate_version_ref)}`));
-    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 2);
+    // #1219 第四阶段第 3 步：collector 批量整理已退役，反馈不再自动并入批量工作。
   });
 });

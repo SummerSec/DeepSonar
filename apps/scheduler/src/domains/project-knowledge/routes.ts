@@ -12,7 +12,6 @@ import type { KnowledgeDb } from "./types.js";
 import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
 import { actorMayReadGovernanceSources, resolveSourceOwners } from "./source-scope.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
-import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
 import { registerTaskKnowledgeCloseoutRoutes } from "./closeout-routes.js";
 import { registerKnowledgeActivityRoutes } from "./activity-routes.js";
 import { registerHumanKnowledgeRoutes } from "./human-routes.js";
@@ -255,7 +254,6 @@ export function registerProjectKnowledgeRoutes(
   app: FastifyInstance,
   deps: { db?: Db; recordAudit?: typeof audit } = {},
 ): void {
-  registerAutomaticKnowledgeRoutes(app, deps);
   registerTaskKnowledgeCloseoutRoutes(app, deps);
   registerKnowledgeActivityRoutes(app, deps);
   const db = deps.db ?? sql;
