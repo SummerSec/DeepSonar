@@ -396,6 +396,9 @@ export function createSqlJobLifecycleApplication(
             -- 「能否确认是工具超时」必须由可信标记时间证明；坏值/缺时间不得写成
             -- 「已确认工具超时」（#1306 评审）。
             AND ${trustedMarkerAt} IS NOT NULL
+            -- 刚写入的标记不能立刻算成「工具超时」：标记自身也要超过预算，
+            -- 否则一次心跳/新工具启动就会被误记成确认超时（评审 r6）。
+            AND ${trustedMarkerAt} + ${inflightBudget} < now()
             AND ${lastActivity} + ${inflightBudget} < now()
           RETURNING id, sandbox_id`;
         for (const row of inflightStalled) {
