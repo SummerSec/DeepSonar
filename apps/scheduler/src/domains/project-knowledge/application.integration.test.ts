@@ -546,8 +546,8 @@ test("#1219 知识按适用软件版本过滤：有可信环境时自动匹配�
       const partialById = new Map(partial.map((row) => [row.item_id, row.applicability]));
       assert.equal(partialById.get(oh.item_id), "unknown",
         "只有软件、没有可信版本时，版本声明条目必须仍是未知，不能被调用参数确认");
-      assert.equal(partialById.get(android.item_id), undefined,
-        "另一软件的声明与可信软件冲突，默认推荐必须排除");
+      assert.equal(partialById.get(android.item_id), "unknown",
+        "没有可信版本时，其它软件的版本声明同样只能是未知，不能判成不适用");
       assert.equal(partialById.get(generic.item_id), undefined,
         "通用条目正常返回（不标 unknown）");
       // 3) 没有可信环境时间：有版本约束的条目仍可查，但必须标成 applicability=unknown。
