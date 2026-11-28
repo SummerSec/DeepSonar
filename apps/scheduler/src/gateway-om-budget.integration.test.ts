@@ -348,7 +348,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
       WHERE id = ${credentialId}`;
 
-    await t.test("#1260 真实 400KB 体积快照下并发咨询的并发冒烟（不是体积成本证明）", async () => {
+    await t.test("#1260 真实 400KB 快照下并发咨询：服务端最慢耗时 < 15s（不是客户端超时证明）", async () => {
       const job = await createJob();
       const token = await issue(job.jobId, "main");
       // 现场 ~440KB 的冻结快照是这个量级；填充必须低压缩率，否则 PostgreSQL 压缩后
@@ -377,15 +377,15 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       const p95 = durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)]!;
       const max = durations[durations.length - 1]!;
       assert.deepEqual(failures.slice(0, 3), [], `并发咨询出现非 200：${failures.length} 条`);
-      // 客户端（Pi 扩展）对 /_allowance 用的是 15 秒超时：超过它就是「首个模型请求前
-      // 失败」的那条现场症状，所以这里显式按 15s 断言最慢一次，而不是只看 P95。
-      const clientTimeoutMs = 15_000;
-      assert.ok(max < clientTimeoutMs,
-        `${workers} 并发 × ${rounds} 轮下最慢一次 allowance=${max}ms，已触及客户端 ${clientTimeoutMs}ms 超时`);
+      // 参考量级：Pi 扩展对 /_allowance 用的是 15 秒超时，超过它就会出现「首个模型
+      // 请求前失败」。这里断言的是**服务端最慢耗时** < 15s，不是客户端超时本身。
+      const referenceBudgetMs = 15_000;
+      assert.ok(max < referenceBudgetMs,
+        `${workers} 并发 × ${rounds} 轮下服务端最慢一次 allowance=${max}ms，已接近或超过 ${referenceBudgetMs}ms 参考预算`);
       assert.ok(p95 < 3_000, `${workers} 并发 × ${rounds} 轮的 allowance P95=${p95}ms，max=${max}ms`);
-      // 边界：这条只证明「合成 400KB 快照 + 并发」下没有单次超过客户端超时；
-      // app.inject 没有真实网络与真实客户端超时，现场 P95 仍需在报告实例上复测，
-      // 因此不作为「体积成本已消除」的证据。
+      // 边界（评审）：app.inject 只发 40 次同 Job、同 token 的服务端请求，不触发 Pi
+      // 客户端，也不覆盖结算等待/重试耗掉整段预算的情形；因此即使本用例通过，也不能
+      // 据此关闭 #1260 —— 真实客户端与多 Job 同条件 HTTP 回归另行验收。
     });
 
     await t.test("#1260 allowance 不排队等 jobs 行锁", async () => {
