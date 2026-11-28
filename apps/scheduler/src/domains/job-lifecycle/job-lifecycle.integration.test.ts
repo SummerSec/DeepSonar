@@ -272,6 +272,17 @@ if (!testDatabaseUrl) {
       });
       await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${dirtyAtAudit}`;
       await createAttempt(sql, dirtyAtAudit, { agent_cli: "claude-code" });
+      // 特殊时间值同样不能当作可信时间：infinity 恒过预算比较，now 每次重新解释。
+      const infinityAtAudit = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "infinity" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${infinityAtAudit}`;
+      await createAttempt(sql, infinityAtAudit, { agent_cli: "claude-code" });
+      const relativeAtAudit = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "now" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${relativeAtAudit}`;
+      await createAttempt(sql, relativeAtAudit, { agent_cli: "claude-code" });
       const independentAudit = await insertRunning("deepsonar-audit");
       // Reaper 通过 settleAttemptTerminal 收口：必须先有 active Attempt，否则 reason 无处落库。
       await createAttempt(sql, hungToolAudit, { agent_cli: "claude-code" });
@@ -294,6 +305,9 @@ if (!testDatabaseUrl) {
         "脏 runtime_activity.at 不得让整批清理事务回滚（独立应收口任务必须被收口）");
       const [dirtyRow] = await sql`SELECT status FROM jobs WHERE id = ${dirtyAtAudit}`;
       assert.equal(dirtyRow.status, "failed", "脏 at 值按无可信信号处理，走普通停滞收口");
+      const specialRows = await sql`SELECT id, status FROM jobs WHERE id IN (${infinityAtAudit}, ${relativeAtAudit})`;
+      assert.deepEqual(specialRows.map((row) => row.status), ["failed", "failed"],
+        "infinity / now 等非有限或相对时间不得让陈旧信号无限豁免");
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");
       // #1304：in-flight 信号自带年龄上限。信号（用 started_at 兜底）已超预算就不再

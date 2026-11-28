@@ -357,7 +357,11 @@ export function createSqlJobLifecycleApplication(
                 NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
                 AND COALESCE(
                   CASE
-                    WHEN pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
+                    -- 只接受绝对 ISO 时间：infinity/-infinity/now 之类特殊值能通过
+                    -- pg_input_is_valid，但都不是「写入当时的固定时间」，会让同一条旧
+                    -- 信号在有效租约下无限豁免（#1304 评审）。
+                    WHEN payload_json #>> '{runtime_activity,at}' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]'
+                      AND pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
                       THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
                   END,
                   started_at
