@@ -136,6 +136,17 @@ export function formatDispatcherFailureMessage(error: unknown): string {
 }
 
 /** Transient OpenSandbox provision failures (startup, hostfwd/proxy upload) eligible for one automatic retry. */
+/**
+ * #1309：确定「沙箱根本没起来」的启动失败子集。只认 create API 明确报告的启动失败
+ * （sidecar/容器启动失败），不包含超时、断开、拿不到响应等无法证明未落地的情形。
+ */
+export function isDefiniteSandboxStartFailure(error: unknown): boolean {
+  const record = error && typeof error === "object" ? error as { message?: unknown; code?: unknown } : null;
+  const text = [record?.message, record?.code, typeof error === "string" ? error : ""]
+    .filter((value): value is string => typeof value === "string").join(" ");
+  return /SANDBOX_START_FAILED|CONTAINER_START_FAILED|Egress sidecar (?:container failed to start|did not become ready)/i.test(text);
+}
+
 export function isRetryableProvisionFailure(error: unknown): boolean {
   if (error instanceof RuntimeImageNotReadyError) return false;
   // 设备未授权不可重试；设备/ broker 暂不可用可以再试一次（设备租约已在失败路径释放）。
@@ -858,12 +869,22 @@ export async function retryProvisioningJob(
     const current = await getActiveAttempt(tx, jobId, true);
     if (!owner || owner.canvas_id !== (locator?.canvas_id ?? null) || owner.latest_attempt_id !== attempt.id
       || !current || typeof current.id !== "string" || current.id !== attempt.id || current.cancel_requested !== false) return false;
-    // Error text/missing handle cannot authorize replay. Only no effect or an
-    // explicit host never_started settlement is admissible under this owner lock.
+    // Error text/missing handle cannot authorize replay. Only two proven states are
+    // admissible under this owner lock:
+    //   - host settled `never_started` with no external effect, or
+    //   - reconcile already proved the provision effect never landed (`outcome=not_applied`).
+    // #1309：sidecar 启动失败的 job 先按 unknown 失败（正确），reconcile 随后把它结算成
+    // not_applied，但闸门只认 never_started，这份「已证明未落地」没有消费者，Job 被丢弃。
     const [blocked] = await tx`SELECT id FROM job_attempt_effects WHERE attempt_id = ${current.id}
       AND NOT (effect_kind = 'provision' AND status = 'settled'
-         AND COALESCE(settlement_json @> '{"result":"never_started","external_effect":false}'::jsonb, false)) LIMIT 1`;
-    if (blocked) return false;
+         AND COALESCE(
+           settlement_json @> '{"result":"never_started","external_effect":false}'::jsonb
+           OR settlement_json @> '{"outcome":"not_applied"}'::jsonb,
+           false)) LIMIT 1`;
+    if (blocked) {
+      console.warn(`[dispatcher] provision_retry_denied reason=state_not_admissible job=${jobId}`);
+      return false;
+    }
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
@@ -1216,7 +1237,11 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         await sql.begin(async (txRaw) => {
           const tx = txRaw as unknown as typeof sql;
           await lockCurrentProvisioningAttempt(tx, jobId, attemptId!, "provision.effect_pending");
-          if (provisionAttempted || lateProvisionExternalUncertain) {
+          // 迟到 create 已产出沙箱 → 必须 unknown。
+          // 已调用 provision 但错误明确是「沙箱启动失败」且没有 handle → 容器没起来，
+          // 可结算为 never_started；其余（超时/断开/无响应）继续 unknown（#1309 P1）。
+          if (lateProvisionExternalUncertain
+            || (provisionAttempted && !isDefiniteSandboxStartFailure(error))) {
             await markEffectUnknown(tx, attemptId!, provisionEffectId!, error);
           } else {
             await settleUnstartedProvisionEffect(tx, attemptId!, provisionEffectId!, error);
@@ -1328,7 +1353,9 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     // #1032 P1-3：终态失败以平台稳定错误码开头，不再以 CLI 进程退出文案收尾。
     if (classified.reason === CREDENTIAL_IN_BUSINESS_DATA_REASON) msg = classified.message;
     if (classified.reason === EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON) msg = classified.message;
-    if (!provisionAttempted && !handle && attemptId && activeAttempt &&
+    // #1309：provision 已发起但被证未落地（never_started）时也必须进入重试分支，
+    // 最终是否重派仍由 retryProvisioningJob 的效果状态准入决定。
+    if (!handle && attemptId && activeAttempt &&
       (isRetryableProvisionFailure(e) || e instanceof OpenSandboxCreateAdmissionExpiredError)) {
       const reason = e instanceof OpenSandboxCreateAdmissionExpiredError ? "provision_admission_deferred" : "provision_retry";
       const retried = await retryProvisioningJob(jobId, activeAttempt, msg, reason).catch((retryError) => {
