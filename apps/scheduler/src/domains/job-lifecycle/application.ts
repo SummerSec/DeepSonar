@@ -351,10 +351,17 @@ export function createSqlJobLifecycleApplication(
         // 节流吞掉，97.7% 的 Job 因此被永久判成「有工具在飞」，普通停滞收口 14 天 0 次。
         // 同时要求信号自身未超预算：进程消失导致 completed 永远不来时，过期信号不再
         // 豁免，Job 退化到普通停滞收口（更保守）。
+        // 时间字段可能来自历史脏数据：用 pg_input_is_valid 校验后再转换，坏值视为
+        // 「没有可信时间」退回 started_at，绝不让整个清理事务因一条坏行回滚。
         const inflightTool = tx`(
                 NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
-                AND COALESCE((payload_json #>> '{runtime_activity,at}')::timestamptz, started_at)
-                  + ${inflightBudget} > now()
+                AND COALESCE(
+                  CASE
+                    WHEN pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
+                      THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
+                  END,
+                  started_at
+                ) + ${inflightBudget} > now()
               )`;
         // 先收口超出 in-flight 预算的挂死工具（独立稳定原因），再走普通停滞判定；
         // 已 failed 的行不会在第二条 UPDATE 里再次匹配 status='running'。
