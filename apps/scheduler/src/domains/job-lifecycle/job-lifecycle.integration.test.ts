@@ -266,7 +266,7 @@ if (!testDatabaseUrl) {
       // #1306 评审：工具超时「原因归类」必须由可信标记时间证明，坏值/缺时间不能写成
       // 已确认的工具超时；这条有效租约的行虽然有可信但早已过预算的标记，仍然属于在飞。
       const hungToolAudit = await insertRunning("deepsonar-audit", {
-        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "2026-01-01T00:00:00.000Z" } },
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: new Date(Date.now() - 3900_000).toISOString() } },
       });
       await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${hungToolAudit}`;
       // #1304 评审：历史脏数据里的 runtime_activity.at 可能是不可解析的值。它只能让
@@ -370,6 +370,28 @@ if (!testDatabaseUrl) {
           FROM job_attempts WHERE job_id = ${jobId} ORDER BY attempt_no DESC LIMIT 1`;
         assert.equal(attempt.reason, "reaper_stall",
           "超过工具预算的坏值/缺失时间也不得被写成已确认的工具超时");
+      }
+      // 评审 r5：标记必须可归属本次执行。启动前的旧标记与未来时间都不能证明本次工具在跑，
+      // 也不得阻止普通清理，更不能写成「已确认工具超时」。
+      const preStartMarker = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: "2026-01-01T00:00:00.000Z" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${preStartMarker}`;
+      await createAttempt(sql, preStartMarker, { agent_cli: "claude-code" });
+      const futureMarker = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: new Date(Date.now() + 3600_000).toISOString() } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${futureMarker}`;
+      await createAttempt(sql, futureMarker, { agent_cli: "claude-code" });
+      const unattributable = await app.reapStalledExecution(900);
+      const unattributableIds = new Set(unattributable.map((row) => row.id));
+      assert.ok(unattributableIds.has(preStartMarker) && unattributableIds.has(futureMarker),
+        "启动前 / 未来时间的标记必须按普通停滞收口，不能挡住清理");
+      for (const jobId of [preStartMarker, futureMarker]) {
+        const [attempt] = await sql`SELECT outcome_json->>'reason' AS reason
+          FROM job_attempts WHERE job_id = ${jobId} ORDER BY attempt_no DESC LIMIT 1`;
+        assert.equal(attempt.reason, "reaper_stall",
+          "不可归属本次执行的标记不得写成已确认的工具超时");
       }
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");

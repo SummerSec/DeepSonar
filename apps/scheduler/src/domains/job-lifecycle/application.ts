@@ -359,10 +359,14 @@ export function createSqlJobLifecycleApplication(
               )`;
         // 可信标记时间：只认绝对 ISO 时间并校验；坏值（缺失、'now'、'infinity'）算
         // 「没有可信时间」，不退回 started_at，也不得把工具挂死当成「已在飞」。
+        // 可信 = 可解析 + 可归属本次执行：必须落在 [started_at, now()] 之间。
+        // 任务启动前的旧标记不能证明本次工具在跑；未来时间也不得阻止普通清理。
         const trustedMarkerAt = tx`(
                 CASE
                   WHEN payload_json #>> '{runtime_activity,at}' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]'
                     AND pg_input_is_valid(payload_json #>> '{runtime_activity,at}', 'timestamptz')
+                    AND (payload_json #>> '{runtime_activity,at}')::timestamptz >= started_at
+                    AND (payload_json #>> '{runtime_activity,at}')::timestamptz <= now()
                     THEN (payload_json #>> '{runtime_activity,at}')::timestamptz
                 END
               )`;
