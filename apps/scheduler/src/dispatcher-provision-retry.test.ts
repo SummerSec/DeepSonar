@@ -181,4 +181,7 @@ test("#1309 边界回归：本地 not_applied 与错误文本都不得触发自�
   // 4) 唯一准入仍是宿主端 never_started；拒绝时留下可检索日志。
   assert.match(source, /settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb/);
   assert.match(source, /provision_retry_denied reason=state_not_admissible/);
+  // #1309：sidecar 启动失败要有可检索日志，且不得把原始错误文本写进日志行。
+  assert.match(source, /provision_failed job=\$\{jobId\} sidecar_start=/);
+  assert.doesNotMatch(source, /provision_failed[^`]*\$\{error/);
 });

@@ -1221,6 +1221,12 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         await sql.begin(async (txRaw) => {
           const tx = txRaw as unknown as typeof sql;
           await lockCurrentProvisioningAttempt(tx, jobId, attemptId!, "provision.effect_pending");
+          // #1309：已发起创建后的失败要留一条可检索日志（只写代码定义的布尔/枚举，
+          // 不写原始错误文本），让 sidecar 启动失败这类现场能被直接定位。
+          const sidecarStartFailure = /SANDBOX_START_FAILED|CONTAINER_START_FAILED|Egress sidecar/u.test(
+            String((error as { message?: unknown } | null)?.message ?? error));
+          console.warn(`[dispatcher] provision_failed job=${jobId} sidecar_start=${sidecarStartFailure}`
+            + ` settled=${provisionAttempted || lateProvisionExternalUncertain ? "unknown" : "never_started"}`);
           if (provisionAttempted || lateProvisionExternalUncertain) {
             await markEffectUnknown(tx, attemptId!, provisionEffectId!, error);
           } else {
