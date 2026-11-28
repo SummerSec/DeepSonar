@@ -22,6 +22,7 @@ const hubSource = readFileSync(new URL("./domains/hub-orchestration/application.
 const transferImportSource = readFileSync(new URL("./transfer/import.ts", import.meta.url), "utf8");
 const dispatcherSource = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
 const executorSource = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+const toolCallSource = readFileSync(new URL("./domains/job-lifecycle/tool-call-activity.ts", import.meta.url), "utf8");
 const rerunSource = readFileSync(new URL("./domains/job-control/rerun.ts", import.meta.url), "utf8");
 
 test("Chrome runtime policy accepts egress, rejects false, and leaves non-Chrome unchanged", () => {
@@ -219,8 +220,11 @@ test("dispatcher does not fall back to deleted projects.canvas_id", () => {
 
 test("real executor maps tool.call boundaries into stall-visible activity", () => {
   assert.match(executorSource, /recordToolCallActivity/);
-  assert.match(executorSource, /toolCallActivityPatch/);
-  assert.match(executorSource, /toolCallProgressMessage/);
+  assert.match(executorSource, /createToolCallActivityRecorder/);
+  // #1304：payload 的 runtime_activity 与事件配对逻辑收敛到 recorder 模块。
+  assert.match(toolCallSource, /toolCallActivityPatch/);
+  assert.match(toolCallSource, /toolCallProgressMessage/);
+  assert.match(toolCallSource, /started\.has\(key\)/, "completed must pair with its started event");
   const started = executorSource.indexOf('if (type === "tool.call.started")');
   const completed = executorSource.indexOf('} else if (type === "tool.call.completed")');
   const startedRecord = executorSource.indexOf('recordToolCallActivity("started"', started);
