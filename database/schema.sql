@@ -3089,9 +3089,6 @@ ALTER TABLE project_knowledge_receipts ADD FOREIGN KEY(project_id,job_id) REFERE
 ALTER TABLE project_knowledge_receipts ADD FOREIGN KEY(job_id,attempt_id) REFERENCES job_attempts(job_id,id);
 ALTER TABLE project_knowledge_usages ADD FOREIGN KEY(project_id,job_id) REFERENCES jobs(project_id,id);
 ALTER TABLE project_knowledge_usages ADD FOREIGN KEY(job_id,attempt_id) REFERENCES job_attempts(job_id,id);
-
-COMMIT;
-
 -- #1260 P1-2 阶段 1：终态 Job 的冻结快照另存一份（双写，读路径暂不变）。
 CREATE TABLE job_snapshots (
   job_id uuid PRIMARY KEY REFERENCES jobs (id) ON DELETE CASCADE,
@@ -3101,3 +3098,5 @@ CREATE TABLE job_snapshots (
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT job_snapshots_sha256_check CHECK (sha256 ~ '^[a-f0-9]{64}$')
 );
+
+COMMIT;
