@@ -280,14 +280,21 @@ test("#1032 trusted readers reject arbitrary paths and missing file sources", as
 });
 
 /** #1311：私有文件协议的 5 种失败必须各自可辨识，且不泄漏文件名与凭据。 */
-function fakeHost(chunks: Array<Record<string, unknown>>): RuntimeHost {
-  const process = {
-    async *[Symbol.asyncIterator]() { for (const chunk of chunks) yield chunk; },
-    write: async () => {},
-    kill: async () => {},
-  };
+function fakeHost(chunks: Array<Record<string, unknown>>, failAfterFirst = false): RuntimeHost {
+  const fail: Array<Record<string, unknown>> = [
+    { type: "stderr", chunk: "boom" },
+    { type: "exit", exitCode: 3 },
+  ];
+  let runs = 0;
   // SAFETY: 只用到 runAsync 一个方法，测试替身无需实现 RuntimeHost 的其余能力。
-  return { runAsync: async () => process } as unknown as RuntimeHost;
+  return { runAsync: async () => {
+    const use = failAfterFirst && runs++ > 0 ? fail : chunks;
+    return {
+      async *[Symbol.asyncIterator]() { for (const chunk of use) yield chunk; },
+      write: async () => {},
+      kill: async () => {},
+    };
+  } } as unknown as RuntimeHost;
 }
 
 test("#1311 五类失败只暴露代码定义的 reason/operation 与数字或布尔量", async () => {
@@ -312,7 +319,7 @@ test("#1311 五类失败只暴露代码定义的 reason/operation 与数字或�
 test("#1311 三个后续阶段同样不带自由文本", async () => {
   const secret = "synthetic-control-token";
   const created = await materializePrivateJobFiles(
-    fakeHost([{ type: "stdout", chunk: "ok\n" }, { type: "exit", exitCode: 0 }]), { "control-token": secret });
+    fakeHost([{ type: "stdout", chunk: "ok\n" }, { type: "exit", exitCode: 0 }], true), { "control-token": secret });
   for (const [label, invoke] of [
     ["check", () => created.check()],
     ["cleanup", () => created.cleanup()],
