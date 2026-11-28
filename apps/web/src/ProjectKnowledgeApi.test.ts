@@ -249,7 +249,7 @@ test("history preview reads on demand, drops closed responses, and renders sugge
       { job_id: "job", closeout_status: "suggestions_available", closeout_root_ref: "root/a", status: "collected" },
     ] }));
     // #1219 第 3 步后只回放历史结论：仅登记的旧来源明确写「不再整理」，已采集的写「已采集并整理」。
-    assert.match(container.textContent!, /旧批量整理已下线.*已采集并整理/);
+    assert.match(container.textContent!, /旧批量整理已下线.*已采集（当时已入队整理）/);
     assert.doesNotMatch(container.textContent!, /有可供整理的来源/);
     assert.equal(calls.length, 1);
     await click("查看建议");

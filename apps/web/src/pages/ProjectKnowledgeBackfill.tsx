@@ -13,7 +13,9 @@ const reasons: Record<string, string> = {
 };
 /** 只回放历史结论：旧批量整理已下线，登记过但未处理的来源不会再被整理。 */
 export function historyConclusion(row: { status: string; reason?: string; closeout_status?: string }): string {
-  if (row.status === "collected") return "已采集并整理";
+  // 旧 collector 在「创建待处理 work」的同一事务里写 source_collected，当时还没整理，
+  // 后续 work 也可能失败；只读历史不查 work 终态，因此只能说「已采集」（#1219 评审）。
+  if (row.status === "collected") return "已采集（当时已入队整理）";
   if (row.status === "registered_retired") return "旧批量整理已下线：这条来源不会再被整理（历史登记仍可查）";
   if (row.status === "skipped") return reasons[row.reason ?? ""] ?? "当时未整理（无可用来源）";
   return "历史记录";
