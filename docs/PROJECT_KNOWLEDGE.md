@@ -112,7 +112,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 项目“知识”页在目录前显示紧凑的积累/复用汇总与最近工作进展，工作详情和跳过原因按需展开，受阻原因使用中文并链接现有 Job/Canvas；目录、历史版本、来源、评测/审查、usage/反馈和精确授权沿用原入口。刷新复用现有页面触发，不新增定时轮询，项目与刷新身份隔离迟到响应。分页 API 以项目管理权限读取；草稿仅管理面可见，不能据此获得跨项目候选访问权。组件见 [ProjectKnowledgeActivity.tsx](../apps/web/src/pages/ProjectKnowledgeActivity.tsx)。
 
-本轮在同一页展示 `collection` 的积累、冷却、执行中或连续无产出停发及下次可准入时间；停发说明成功的显式整理可恢复，不新增恢复按钮、配置或通知。下次时间是调度资格提示，不承诺届时一定创建或执行 Job。
+活动页**不再返回** `collection` 字段（自动批量整理已下线），只显示静态说明：来源整理改为任务内显式 `request_project_knowledge`，历史采集审计仍可查。下面关于 `collection` 的小节是历史契约，保留作对照，不再生效。
 
 六张领域表为 work、items、versions、proposals、evaluations、receipts；assignments、grants、usages 是权限和执行基础记录。项目/Job/Attempt 复合外键防止伪造 provenance，receipt 和 evaluation 只追加。Skill bundle 仅允许 `SKILL.md` 与安全路径下的文本 references，总量 128 KiB / 20 文件。
 
@@ -176,7 +176,7 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 **哪些来源不再自动收集**（需要明确列举）：未显式投稿的任务，即使它有 Fact、Evidence 或已接受的用后反馈，也不再自动进入旧采集链；只有显式 Memory 投稿（`submit_task_knowledge_suggestion`）会入库，Skill 仍走显式送评。切换前已登记的来源与在途 `project_knowledge_work` 继续按原样收尾（唤醒与采集代码保留），历史审计、证据与已发布版本保持可查。
 
-因此现在没有新的来源会进入旧采集链：`project_knowledge_work` 的自动准备行不再产生，采集与唤醒代码暂时保留（等在列表与审计里确认无消费方后，再按 #1219 第四阶段第三步删除，届时会移除 `GET /projects/:id/knowledge/backfill`，属破坏性变更）。
+因此现在没有新的来源会进入旧采集链：`project_knowledge_work` 的自动准备行不再产生。第四阶段第三步已删除采集/领取链，但保留 `GET /projects/:id/knowledge/backfill` 作为**只读历史入口**（不再判定资格或触发整理），因此这里不再有「届时移除该路由」的计划。
 
 历史 `source_registered` / `source_collected` 审计与既有 `project_knowledge_work` 记录保持只读，不改写。
 ### 人类维护入口（#1256，2026-11-26）
@@ -229,7 +229,7 @@ Memory 类任务沉淀不再只停在画布节点上。同一次提交在写回�
 
 ## 来源登记与项目批量整理（已退役）
 
-> #1219 第四阶段第 3 步（2026-11-27）：业务 Job 终态登记来源、`collector`、`collector-sources`、`collection-policy`、`source-retry` 与 `GET /projects/:id/knowledge/backfill` 已整链删除，活动页 `collection` 字段同步下线。历史 `project_knowledge.source_registered` / `source_collected` / `source_collection_skipped` 审计仍可查，已建的 `project_knowledge_work` 仍按既有唤醒与准入推进；不再有新的自动来源登记，也不会再自动发起批量整理。
+> #1219 第四阶段第 3 步（2026-11-27）：业务 Job 终态登记来源、`collector`、`collector-sources`、`collection-policy`、`source-retry` 已整链删除，活动页 `collection` 字段同步下线。`GET /projects/:id/knowledge/backfill` 保留，但语义改为**只读历史**：只回看旧的来源登记/采集/跳过审计与旧收尾状态，不判定资格、不触发整理、不写入审计；历史 `project_knowledge.source_registered` / `source_collected` / `source_collection_skipped` 审计仍可查，已建的 `project_knowledge_work` 仍按既有唤醒与准入推进；不再有新的自动来源登记，也不会再自动发起批量整理。
 
 现在知识沉淀只有两条入口：任务内 `submit_task_knowledge_suggestion`（Memory 直接入库，Skill 走显式评测）与治理流程的显式 `request_project_knowledge`。ADR 0023 / 0024 记录的批量收集规则作为历史决策保留，不再生效。
 
