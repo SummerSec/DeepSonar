@@ -377,9 +377,15 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       const p95 = durations[Math.min(durations.length - 1, Math.ceil(durations.length * 0.95) - 1)]!;
       const max = durations[durations.length - 1]!;
       assert.deepEqual(failures.slice(0, 3), [], `并发咨询出现非 200：${failures.length} 条`);
-      // 只证明并发下入口不报错、退化为个位数毫秒级排队；app.inject 没有真实客户端的
-      // 15 秒超时，也没有旧路径同条件对照，因此不作为「体积成本已消除」的证据。
+      // 客户端（Pi 扩展）对 /_allowance 用的是 15 秒超时：超过它就是「首个模型请求前
+      // 失败」的那条现场症状，所以这里显式按 15s 断言最慢一次，而不是只看 P95。
+      const clientTimeoutMs = 15_000;
+      assert.ok(max < clientTimeoutMs,
+        `${workers} 并发 × ${rounds} 轮下最慢一次 allowance=${max}ms，已触及客户端 ${clientTimeoutMs}ms 超时`);
       assert.ok(p95 < 3_000, `${workers} 并发 × ${rounds} 轮的 allowance P95=${p95}ms，max=${max}ms`);
+      // 边界：这条只证明「合成 400KB 快照 + 并发」下没有单次超过客户端超时；
+      // app.inject 没有真实网络与真实客户端超时，现场 P95 仍需在报告实例上复测，
+      // 因此不作为「体积成本已消除」的证据。
     });
 
     await t.test("#1260 allowance 不排队等 jobs 行锁", async () => {
