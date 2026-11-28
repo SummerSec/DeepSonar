@@ -37,13 +37,16 @@ export function evaluateApplicability(
   if (declared.length === 0) return "applicable";
   const software = (context.software ?? "").trim();
   const version = (context.version ?? "").trim();
-  if (!version) return "unknown";
-  // 逐条声明判定，再按「任一适用→适用；否则任一无从判断→未知；否则不适用」聚合，
-  // 这样「版本对了但不知道软件」不会被误当成不适用。
+  // 逐条声明判定，再按「任一适用→适用；否则任一无从判断→未知；否则不适用」聚合。
+  // 软件冲突必须先判：已知目标是 OpenHarmony、条目声明 sw:android:* 时，
+  // 即使缺版本上下文也是**明确不适用**，不能让 Android 专用知识出现在结果里。
   const verdicts = declared.map((entry): Applicability => {
+    if (entry.software && software && entry.software !== software) return "inapplicable";
+    if (!version) return "unknown";
     if (entry.version !== version) return "inapplicable";
+    // 版本对上了但不知道目标软件时仍是未知，不能冒充「已验证适用」。
     if (!entry.software || !software) return software ? "applicable" : "unknown";
-    return entry.software === software ? "applicable" : "inapplicable";
+    return "applicable";
   });
   if (verdicts.includes("applicable")) return "applicable";
   if (verdicts.includes("unknown")) return "unknown";

@@ -31,3 +31,11 @@ test("#1219 历史写法 sw:<version> 只约束版本，但仍需软件上下文
 test("#1219 只变模型不改变适用性（模型不在匹配键里）", () => {
   assert.equal(evaluateApplicability(["sw:openharmony:16.0"], { software: "openharmony", version: "16.0" }), "applicable");
 });
+
+test("#1219 已知目标软件不同即不适用，不必等版本上下文", () => {
+  // 评审反例：目标是 OpenHarmony（缺版本），Android 专用知识仍出现。
+  assert.equal(evaluateApplicability(["sw:android:16.0"], { software: "openharmony" }), "inapplicable");
+  assert.equal(evaluateApplicability(["sw:android:16.0"], { software: "openharmony", version: "16.0" }), "inapplicable");
+  // 历史写法只约束版本：软件不明时仍是未知，而不是不适用。
+  assert.equal(evaluateApplicability(["sw:16.0"], { software: "openharmony" }), "unknown");
+});
