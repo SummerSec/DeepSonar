@@ -257,8 +257,10 @@ if (!testDatabaseUrl) {
         payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
       });
       const silentChromeNoTool = await insertRunning("deepsonar-chrome-audit");
+      // #1306 评审 r4：延长等待需要可信时间。这条要证明「预算内仍在飞」，
+      // 因此必须带新鲜可信 at；缺 at 的行不再享有延长（见后面 1000s 对照）。
       const longToolAudit = await insertRunning("deepsonar-audit", {
-        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started", at: new Date(Date.now() - 5 * 60_000).toISOString() } },
       });
       // #1086/#1304：in-flight 豁免有上限，且信号自身超过预算即失效；把 started_at 推到 1h 预算之外。
       // #1306 评审：工具超时「原因归类」必须由可信标记时间证明，坏值/缺时间不能写成
