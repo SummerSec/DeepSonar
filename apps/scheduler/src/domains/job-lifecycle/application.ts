@@ -34,6 +34,21 @@ export type {
   JobTransitionRow,
   ProvisionReconcileResult,
 } from "./ports.js";
+import { hashJobSnapshot } from "../platform-api/tokens.js";
+
+/** #1260：Job 到这些状态时冻结快照已不可变，可安全另存一份。 */
+const TERMINAL_JOB_STATUSES = new Set(["succeeded", "failed", "timeout", "cancelled", "orphan"]);
+
+/** #1260：终态 Job 的冻结快照另存一份。只在终态路径调用，读路径不变。 */
+export async function archiveTerminalSnapshot(db: JobLifecycleDatabase, jobId: string): Promise<void> {
+  const [row] = await db`SELECT agent_snapshot_json FROM jobs WHERE id = ${jobId}`;
+  if (!row) return;
+  const snapshot = (row as { agent_snapshot_json?: unknown }).agent_snapshot_json ?? {};
+  await db`INSERT INTO job_snapshots (job_id, snapshot, sha256, size_bytes)
+    VALUES (${jobId}, ${db.json(snapshot as never)}, ${hashJobSnapshot(snapshot)},
+      ${Buffer.byteLength(JSON.stringify(snapshot))})
+    ON CONFLICT (job_id) DO NOTHING`;
+}
 
 /**
  * Application 方法保持为窄 CAS 操作。事务由调用方拥有并把标记客户端传入，
@@ -125,8 +140,18 @@ export function createSqlJobLifecycleApplication(
       const [row] = await db`
         UPDATE jobs SET ${db(sets)}
         WHERE id = ${jobId} AND status = ANY(${allowedFrom})
-        RETURNING id, status`;
-      return row ? (row as JobTransitionRow) : null;
+        RETURNING id, status, agent_snapshot_json`;
+      if (!row) return null;
+      // #1260 P1-2 阶段 1：Job 进入终态时把冻结快照双写到 job_snapshots。
+      // 读路径不变（仍读 jobs.agent_snapshot_json），因此行为零变化。
+      if (TERMINAL_JOB_STATUSES.has(String(row.status))) {
+        const snapshot = row.agent_snapshot_json;
+        await db`INSERT INTO job_snapshots (job_id, snapshot, sha256, size_bytes)
+          VALUES (${String(row.id)}, ${db.json((snapshot ?? {}) as never)}, ${hashJobSnapshot(snapshot)},
+            ${Buffer.byteLength(JSON.stringify(snapshot ?? {}))})
+          ON CONFLICT (job_id) DO NOTHING`;
+      }
+      return row as JobTransitionRow;
     },
 
     /** Dispatcher claim：pending -> claimed，并保留领取时间。 */
@@ -221,6 +246,7 @@ export function createSqlJobLifecycleApplication(
         UPDATE jobs SET status = 'failed', finished_at = now(), error = ${persistedError}
         WHERE id = ${jobId} AND status IN ('claimed','provisioning','running')
         RETURNING id, type`;
+      if (row) await archiveTerminalSnapshot(db, String(row.id));
       return row ? (row as JobLifecycleRow) : null;
     },
 
@@ -512,7 +538,10 @@ export function createSqlJobLifecycleApplication(
             error = ${error}, lease_expires_at = NULL, heartbeat_at = NULL
           WHERE id = ${jobId} AND status IN ('pending','claimed','provisioning','running','waiting_human')
           RETURNING id, status, sandbox_id, project_id, type, canvas_id`;
-        if (row) await settleAttemptTerminal(tx, jobId, "cancelled", { reason: error }, error);
+        if (row) {
+          await settleAttemptTerminal(tx, jobId, "cancelled", { reason: error }, error);
+          await archiveTerminalSnapshot(tx, jobId);
+        }
         return row ? (row as JobLifecycleRow) : null;
       });
       if (row) await interruptProvision(jobId);
