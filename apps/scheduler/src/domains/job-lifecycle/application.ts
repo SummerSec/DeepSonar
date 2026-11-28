@@ -125,8 +125,18 @@ export function createSqlJobLifecycleApplication(
       const [row] = await db`
         UPDATE jobs SET ${db(sets)}
         WHERE id = ${jobId} AND status = ANY(${allowedFrom})
-        RETURNING id, status`;
-      return row ? (row as JobTransitionRow) : null;
+        RETURNING id, status, agent_snapshot_json`;
+      if (!row) return null;
+      // #1260 P1-2 阶段 1：Job 进入终态时把冻结快照双写到 job_snapshots。
+      // 读路径不变（仍读 jobs.agent_snapshot_json），因此行为零变化。
+      if (TERMINAL_JOB_STATUSES.has(String(row.status))) {
+        const snapshot = row.agent_snapshot_json;
+        await db`INSERT INTO job_snapshots (job_id, snapshot, sha256, size_bytes)
+          VALUES (${String(row.id)}, ${db.json((snapshot ?? {}) as never)}, ${hashJobSnapshot(snapshot)},
+            ${Buffer.byteLength(JSON.stringify(snapshot ?? {}))})
+          ON CONFLICT (job_id) DO NOTHING`;
+      }
+      return row as JobTransitionRow;
     },
 
     /** Dispatcher claim：pending -> claimed，并保留领取时间。 */
