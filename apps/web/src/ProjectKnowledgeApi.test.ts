@@ -245,10 +245,12 @@ test("history preview reads on demand, drops closed responses, and renders sugge
     await click("查看历史任务沉淀");
     assert.equal(calls[0].path, "/api/projects/project%2Fa/knowledge/backfill?limit=10&offset=0");
     await act(async () => calls[0].respond({ next_offset: 10, items: [
-      { job_id: "legacy", closeout_status: "legacy_preview", closeout_root_ref: null, status: "eligible" },
-      { job_id: "job", closeout_status: "suggestions_available", closeout_root_ref: "root/a", status: "eligible" },
+      { job_id: "legacy", closeout_status: "legacy_preview", closeout_root_ref: null, status: "registered_retired" },
+      { job_id: "job", closeout_status: "suggestions_available", closeout_root_ref: "root/a", status: "collected" },
     ] }));
-    assert.match(container.textContent!, /只有历史来源预览.*有可供整理的来源/);
+    // #1219 第 3 步后只回放历史结论：仅登记的旧来源明确写「不再整理」，已采集的写「已采集并整理」。
+    assert.match(container.textContent!, /旧批量整理已下线.*已采集并整理/);
+    assert.doesNotMatch(container.textContent!, /有可供整理的来源/);
     assert.equal(calls.length, 1);
     await click("查看建议");
     assert.equal(calls[1].path, "/api/projects/project%2Fa/knowledge/closeout/root%2Fa?limit=10&offset=0");

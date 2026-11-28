@@ -11,6 +11,14 @@ const reasons: Record<string, string> = {
   unsettled_effects: "仍有执行结果待核实",
   no_sources: "未发现可用来源",
 };
+/** 只回放历史结论：旧批量整理已下线，登记过但未处理的来源不会再被整理。 */
+export function historyConclusion(row: { status: string; reason?: string; closeout_status?: string }): string {
+  if (row.status === "collected") return "已采集并整理";
+  if (row.status === "registered_retired") return "旧批量整理已下线：这条来源不会再被整理（历史登记仍可查）";
+  if (row.status === "skipped") return reasons[row.reason ?? ""] ?? "当时未整理（无可用来源）";
+  return "历史记录";
+}
+
 const button = "rounded-lg border border-white/10 px-3 py-1.5 text-xs text-zinc-300 hover:bg-white/[.06] focus-visible:outline focus-visible:outline-acc-400";
 
 export function ProjectKnowledgeBackfill({ projectId }: { projectId: string }) {
@@ -54,8 +62,7 @@ function BackfillList({ projectId }: { projectId: string }) {
           </Link>
           {row.finished_at && <time dateTime={row.finished_at}>{new Date(row.finished_at).toLocaleString("zh-CN")}</time>}
           <span>{knowledgeCloseoutStatusLabel(row.closeout_status)}</span>
-          {row.closeout_status === "legacy_preview" && <span>{row.status === "eligible" ? "有可供整理的来源"
-            : reasons[row.reason ?? ""] ?? "暂无可用来源"}</span>}
+          <span>{historyConclusion(row)}</span>
           {row.closeout_root_ref && <button type="button" className={button} aria-expanded={selectedJob === row.job_id}
             onClick={() => setSelectedJob(selectedJob === row.job_id ? null : row.job_id)}>
             {selectedJob === row.job_id ? "收起建议" : "查看建议"}

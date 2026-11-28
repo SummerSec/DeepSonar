@@ -92,7 +92,8 @@ export interface KnowledgeBackfillRow {
   canvas_id?: string | null;
   job_status: string;
   finished_at: string | null;
-  status: "eligible" | "skipped";
+  /** 历史结论：已采集 / 当时跳过 / 仅登记（旧批量整理已下线） / 无登记。 */
+  status: "collected" | "skipped" | "registered_retired";
   reason?: string;
   closeout_status: KnowledgeCloseoutStatus | "legacy_preview";
   closeout_root_ref: string | null;
@@ -100,7 +101,7 @@ export interface KnowledgeBackfillRow {
     registered_at: string | null;
     collected_at: string | null;
     skipped_at: string | null;
-    collection: "collected" | "skipped" | "registered" | "none";
+    collection: "collected" | "skipped" | "retired" | "none";
   };
 }
 

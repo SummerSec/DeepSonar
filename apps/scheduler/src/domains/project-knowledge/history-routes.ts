@@ -10,6 +10,7 @@ import {
   SOURCE_REGISTERED_ACTION,
   SOURCE_SKIPPED_ACTION,
 } from "./knowledge-actions.js";
+import { knownSkipReasonCode } from "./activity.js";
 
 const Id = z.string().uuid();
 const Page = z.object({ limit: z.coerce.number().int().min(1).max(20).default(10),
@@ -45,12 +46,15 @@ export function registerKnowledgeHistoryRoutes(app: FastifyInstance, deps: { db?
           WHERE n.canvas_id=jobs.canvas_id AND n.node_type='knowledge_closeout' LIMIT 1) closeout ON true
         LEFT JOIN LATERAL (SELECT a.at FROM audit_logs a
           WHERE a.project_id=${projectId} AND a.resource_id=jobs.id::text AND a.action=${SOURCE_REGISTERED_ACTION}
+            AND a.resource_type='job' AND a.result='ok' AND a.actor_type='system' AND a.actor_id='scheduler'
           ORDER BY a.at DESC, a.id DESC LIMIT 1) registered ON true
         LEFT JOIN LATERAL (SELECT a.at FROM audit_logs a
           WHERE a.project_id=${projectId} AND a.resource_id=jobs.id::text AND a.action=${SOURCE_COLLECTED_ACTION}
+            AND a.resource_type='job' AND a.result='ok' AND a.actor_type='system' AND a.actor_id='scheduler'
           ORDER BY a.at DESC, a.id DESC LIMIT 1) collected ON true
         LEFT JOIN LATERAL (SELECT a.at, a.after_json->>'reason' AS reason FROM audit_logs a
           WHERE a.project_id=${projectId} AND a.resource_id=jobs.id::text AND a.action=${SOURCE_SKIPPED_ACTION}
+            AND a.resource_type='job' AND a.result='ok' AND a.actor_type='system' AND a.actor_id='scheduler'
           ORDER BY a.at DESC, a.id DESC LIMIT 1) skipped ON true
         WHERE jobs.project_id=${projectId}
         AND jobs.status IN ('succeeded','failed','timeout','cancelled','orphan','waiting_human')
@@ -59,14 +63,19 @@ export function registerKnowledgeHistoryRoutes(app: FastifyInstance, deps: { db?
         ORDER BY jobs.created_at DESC,jobs.id DESC LIMIT ${page.limit + 1} OFFSET ${page.offset}`;
       const items = jobs.slice(0, page.limit).map((job) => {
         const registered = job.registered_at !== null;
-        const reason = typeof job.skip_reason === "string" ? job.skip_reason : registered ? undefined : "no_sources";
+        // 只回放历史结论，不再暗示「待整理」：登记过但从未采集/跳过的旧来源，
+        // 结论就是「旧批量整理已下线」，不会再有后续动作。
+        const status = job.collected_at ? "collected" : job.skipped_at ? "skipped"
+          : registered ? "registered_retired" : "skipped";
+        const reason = knownSkipReasonCode(job.skip_reason)
+          ?? (registered || job.skipped_at ? undefined : "no_sources");
         return {
           job_id: String(job.job_id), canvas_id: job.canvas_id, job_status: String(job.status),
-          finished_at: job.finished_at, status: registered ? "eligible" : "skipped", reason,
+          finished_at: job.finished_at, status, reason,
           closeout_status: job.closeout_status, closeout_root_ref: job.closeout_root_ref,
           history: {
             registered_at: job.registered_at, collected_at: job.collected_at, skipped_at: job.skipped_at,
-            collection: job.collected_at ? "collected" : job.skipped_at ? "skipped" : registered ? "registered" : "none",
+            collection: job.collected_at ? "collected" : job.skipped_at ? "skipped" : registered ? "retired" : "none",
           },
         };
       });

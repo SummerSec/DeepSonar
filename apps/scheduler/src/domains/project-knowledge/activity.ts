@@ -27,6 +27,12 @@ const safeSkipReasons = new Set([
   "source_attempt_changed", "source_governor_revoked",
 ]);
 
+// 历史跳过原因是模型/来源侧文本，只有 scheduler 自己的标准代码可以出现在响应里；
+// 旧历史入口与此共用同一套过滤（#1219 第 3 步评审）。
+export function knownSkipReasonCode(value: unknown): string | null {
+  return typeof value === "string" && safeSkipReasons.has(value) ? value : null;
+}
+
 interface ActivityWork {
   id: string;
   state: string;

@@ -93,7 +93,23 @@ test("task suggestions are private, attributable, idempotent and readable withou
       assert.equal(typeof historyFacts.registered_at, "string", "登记时间必须可查");
       assert.equal(historyFacts.collected_at, null);
       assert.equal(historyFacts.skipped_at, null);
-      assert.equal(historyFacts.collection, "registered");
+      assert.equal(historyFacts.collection, "retired");
+      assert.equal(historyRow!.status, "registered_retired",
+        "仅登记未处理的旧来源必须给出「旧批量整理已下线」的明确结论，不能永久显示待整理");
+      // 任意历史原因文本都不得从接口返回；只有标准代码可读。
+      await db`INSERT INTO audit_logs (actor_type, actor_id, action, project_id, resource_type, resource_id, after_json)
+        SELECT 'system', 'scheduler', 'project_knowledge.source_collection_skipped', ${owner.projectId},
+          'job', id::text, ${db.json({ reason: "prompt 里的任意文本 SYNTHETIC-LEAK" } as never)} FROM jobs WHERE id=${owner.jobId}`;
+      const filtered = await app.inject({ url: `${path}/backfill` });
+      assert.equal(filtered.statusCode, 200, filtered.body);
+      assert.doesNotMatch(filtered.body, /SYNTHETIC-LEAK/, "原始跳过原因不得进入只读历史响应");
+      // 已排队的知识工作仍须有去处：待处理 work 依旧拿到唤醒时间。
+      const { readNextKnowledgeWake } = await import("../../knowledge-wake.js");
+      await db`INSERT INTO project_knowledge_work (project_id, trigger_key, state, stage, governance_hash, next_attempt_at)
+        VALUES (${owner.projectId}, ${"knowledge:collect:history-" + owner.jobId}, 'pending', 'maker', ${"e".repeat(64)}, now())`;
+      const wake = await readNextKnowledgeWake(db as never);
+      assert.ok(wake instanceof Date && Number.isFinite(wake.getTime()),
+        "排队中的知识工作仍必须有唤醒时间，历史入口不改变这一事实");
       assert.equal((await db`SELECT count(*)::int AS count FROM audit_logs`)[0]!.count, auditBefore,
         "只读历史查询不得写入审计或触发整理");
       const [{ count }] = await db`SELECT count(*)::int AS count FROM project_knowledge_work`;
