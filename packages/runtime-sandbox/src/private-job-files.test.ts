@@ -290,27 +290,44 @@ function fakeHost(chunks: Array<Record<string, unknown>>): RuntimeHost {
   return { runAsync: async () => process } as unknown as RuntimeHost;
 }
 
-test("#1311 exit 非零失败带 reason 与退出码", async () => {
-  const host = fakeHost([{ type: "exit", exitCode: 3 }, { type: "stderr", chunk: "Traceback: boom" }]);
-  await assert.rejects(materializePrivateJobFiles(host, { "control-token": "synthetic-control-token" }),
-    (error: Error) => /^PRIVATE_JOB_FILES_REJECTED reason=exit_nonzero operation=create/u.test(error.message)
-      && /"exit":3/u.test(error.message));
+test("#1311 五类失败只暴露代码定义的 reason/operation 与数字或布尔量", async () => {
+  const secret = "synthetic-control-token";
+  const cases: Array<[Array<Record<string, unknown>>, RegExp, string]> = [
+    [[{ type: "stderr", chunk: `Traceback ValueError: ${secret}` }, { type: "exit", exitCode: 3 }],
+      /^PRIVATE_JOB_FILES_REJECTED reason=exit_nonzero operation=create detail=exit=3,stderr_present=true$/u, "exit_nonzero"],
+    [[{ type: "stderr", chunk: `${secret} 不可写` }, { type: "stdout", chunk: "nope\n" }, { type: "exit", exitCode: 0 }],
+      /^PRIVATE_JOB_FILES_REJECTED reason=protocol_unexpected operation=create detail=exited=true,stderr_present=true$/u, "protocol_unexpected"],
+  ];
+  for (const [chunks, shape, label] of cases) {
+    await assert.rejects(materializePrivateJobFiles(fakeHost(chunks), { "control-token": secret }),
+      (error: Error) => {
+        assert.match(error.message, shape, label);
+        assert.ok(!error.message.includes(secret), `${label} 不得带出凭据原文`);
+        assert.ok(!/Traceback|不可写/u.test(error.message), `${label} 不得带出自由文本`);
+        return true;
+      });
+  }
 });
 
-test("#1311 输出协议不符带 reason 且 stderr 尾部已脱敏", async () => {
-  const host = fakeHost([
-    { type: "stderr", chunk: "PRIVATE_JOB_FILES_REJECTED ValueError: synthetic-control-token 不可写" },
-    { type: "stdout", chunk: "nope\n" },
-    { type: "exit", exitCode: 0 },
-  ]);
-  await assert.rejects(materializePrivateJobFiles(host, { "control-token": "synthetic-control-token" }),
-    (error: Error) => /reason=protocol_unexpected operation=create/u.test(error.message)
-      && !error.message.includes("synthetic-control-token")
-      && error.message.includes("[redacted]"));
+test("#1311 三个后续阶段同样不带自由文本", async () => {
+  const secret = "synthetic-control-token";
+  const created = await materializePrivateJobFiles(
+    fakeHost([{ type: "stdout", chunk: "ok\n" }, { type: "exit", exitCode: 0 }]), { "control-token": secret });
+  for (const [label, invoke] of [
+    ["check", () => created.check()],
+    ["cleanup", () => created.cleanup()],
+  ] as const) {
+    await assert.rejects(invoke,
+      (error: Error) => {
+        assert.match(error.message, /^PRIVATE_JOB_FILES_REJECTED reason=/u);
+        assert.ok(!error.message.includes(secret), `${label} 不得带出凭据原文`);
+        return true;
+      });
+  }
 });
 
 test("#1311 非法文件名只报个数，不把名字写进错误", async () => {
   await assert.rejects(materializePrivateJobFiles(fakeHost([]), { "secret-name-xyz": "value" }),
-    (error: Error) => /reason=invalid_names operation=create/u.test(error.message)
+    (error: Error) => /reason=invalid_names operation=create detail=count=1$/u.test(error.message)
       && !error.message.includes("secret-name-xyz"));
 });

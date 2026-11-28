@@ -148,9 +148,9 @@ def main():
 try:
     os.umask(0o077)
     main()
-except Exception as error:
-    # 只写异常类型与消息，绝不打印任何文件内容（#1311）。
-    print(f"PRIVATE_JOB_FILES_REJECTED {type(error).__name__}: {error}", file=sys.stderr)
+except Exception:
+    # 只打印常量码：异常文本可能带上文件内容或凭据，不得进入日志/事件（#1311 评审）。
+    print("PRIVATE_JOB_FILES_REJECTED", file=sys.stderr)
     sys.exit(1)
 `;
 
@@ -178,14 +178,21 @@ export function privateCredentialEnvironment(
   return result;
 }
 
-/** 私有文件协议的稳定错误码；后缀区分 5 种互不相同的失败（#1311）。 */
+/**
+ * 私有文件协议的稳定错误码；后缀只放代码定义的 reason / operation 与数字或布尔量
+ * （退出码、长度、是否收到 stderr），绝不写原始 stderr、异常文本或文件名（#1311 评审）：
+ * 按完整文件值替换挡不住片段化或结构化凭据，截断也不是脱敏。
+ */
 function privateFilesRejected(
   reason: "exit_nonzero" | "stdout_too_long" | "protocol_unexpected" | "timeout" | "invalid_names",
   operation: "create" | "check" | "cleanup" | "pi-auth",
-  detail?: Record<string, unknown>,
+  detail?: { exit?: number | null; length?: number; exited?: boolean; stderr_present?: boolean; timeout_ms?: number; count?: number },
 ): Error {
-  const suffix = detail ? ` detail=${JSON.stringify(detail).slice(0, 200)}` : "";
-  return new Error(`PRIVATE_JOB_FILES_REJECTED reason=${reason} operation=${operation}${suffix}`);
+  const parts = Object.entries(detail ?? {})
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`);
+  return new Error(`PRIVATE_JOB_FILES_REJECTED reason=${reason} operation=${operation}`
+    + (parts.length ? ` detail=${parts.join(",")}` : ""));
 }
 
 async function runPrivateFileProtocol(
@@ -196,18 +203,12 @@ async function runPrivateFileProtocol(
 ): Promise<void> {
   const command = `python3 -c ${shellQuote(PRIVATE_JOB_FILES_SCRIPT)} /workspace ${operation} ${identity}`;
   const process = await host.runAsync(command, { pty: false, diagnosticSecrets: Object.values(files) });
-  const secrets = Object.values(files).filter(value => value.length > 0);
-  // stderr 可能带上文件内容或凭据，先脱敏再截断，绝不原样透出（#1311）。
-  const scrub = (text: string): string => {
-    let value = text;
-    for (const secret of secrets) value = value.split(secret).join("[redacted]");
-    return value.replace(/\s+/gu, " ").trim().slice(0, 200);
-  };
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // 只记「有没有收到 stderr」，不保留任何文本（#1311 评审）。
+  let stderrSeen = false;
   try {
     const completion = (async () => {
       let output = "";
-      let stderrTail = "";
       let exited = false;
       const consume = (async () => {
         for await (const chunk of process) {
@@ -215,7 +216,7 @@ async function runPrivateFileProtocol(
             exited = true;
             if (chunk.exitCode !== 0) {
               throw privateFilesRejected("exit_nonzero", operation,
-                { exit: chunk.exitCode, stderr: scrub(stderrTail) });
+                { exit: chunk.exitCode, stderr_present: stderrSeen });
             }
           } else if (chunk.type === "stdout") {
             output += chunk.chunk;
@@ -223,12 +224,12 @@ async function runPrivateFileProtocol(
               throw privateFilesRejected("stdout_too_long", operation, { length: output.length });
             }
           } else if (chunk.type === "stderr") {
-            stderrTail = (stderrTail + chunk.chunk).slice(-512);
+            stderrSeen = true;
           }
         }
         if (!exited || output !== "ok\n") {
           throw privateFilesRejected("protocol_unexpected", operation,
-            { exited, stderr: scrub(stderrTail) });
+            { exited, stderr_present: stderrSeen });
         }
       })();
       await Promise.all([consume, process.write(`${JSON.stringify(files)}\n`)]);
@@ -241,8 +242,8 @@ async function runPrivateFileProtocol(
     await process.kill().catch(() => {});
     // 已带 reason 的直接上抛（保留分支归因），其余兜底为协议异常。
     if (error instanceof Error && error.message.startsWith("PRIVATE_JOB_FILES_REJECTED reason=")) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    throw privateFilesRejected("protocol_unexpected", operation, { exited: false, stderr: scrub(message) });
+    throw privateFilesRejected("protocol_unexpected", operation,
+      { exited: false, stderr_present: stderrSeen });
   } finally {
     if (timer) clearTimeout(timer);
   }
