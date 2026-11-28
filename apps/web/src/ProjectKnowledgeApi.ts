@@ -93,7 +93,7 @@ export interface KnowledgeBackfillRow {
   job_status: string;
   finished_at: string | null;
   /** 历史结论：已采集 / 当时跳过 / 仅登记（旧批量整理已下线） / 无登记。 */
-  status: "collected" | "skipped" | "registered_retired";
+  status: "collected" | "skipped" | "registered_retired" | "no_history";
   reason?: string;
   closeout_status: KnowledgeCloseoutStatus | "legacy_preview";
   closeout_root_ref: string | null;

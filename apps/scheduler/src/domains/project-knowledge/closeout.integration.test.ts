@@ -129,6 +129,34 @@ test("task suggestions are private, attributable, idempotent and readable withou
       assert.equal((await db`SELECT count(*)::int AS count FROM audit_logs
         WHERE action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`)[0]!.count,
         collectBefore, "只读历史查询不得触发采集或跳过审计");
+      // 评审 r5：三类记录必须分开——没有旧回执 / 真写过 no_sources / 重试耗尽。
+      const seedHistoryJob = async () => {
+        const [row] = await db`INSERT INTO jobs (project_id, canvas_id, type, status, finished_at)
+          VALUES (${owner.projectId}, ${owner.canvasId}, 'explore', 'succeeded', now()) RETURNING id`;
+        return String(row.id);
+      };
+      const noReceiptJob = await seedHistoryJob();
+      const noSourcesJob = await seedHistoryJob();
+      const retryExhaustedJob = await seedHistoryJob();
+      const seedSkip = async (target: string, reason: string, result: string) => {
+        await db`INSERT INTO audit_logs (project_id, actor_type, actor_id, action, resource_type, resource_id, result, after_json)
+          VALUES (${owner.projectId}, 'system', 'scheduler', 'project_knowledge.source_collection_skipped', 'job', ${target},
+            ${result}, ${db.json({ reason } as never)})`;
+      };
+      await seedSkip(noSourcesJob, "no_sources", "ok");
+      await seedSkip(retryExhaustedJob, "source_collection_retry_exhausted", "error");
+      const threeBody = await app.inject({ url: `${path}/backfill?limit=20` });
+      assert.equal(threeBody.statusCode, 200, threeBody.body);
+      type HistoryRow = { job_id: string; status: string; reason?: string; history: { collection: string } };
+      const threeRows = new Map<string, HistoryRow>(
+        threeBody.json<{ items: HistoryRow[] }>().items.map((row) => [row.job_id, row]));
+      assert.equal(threeRows.get(noReceiptJob)?.history.collection, "none",
+        "没有旧回执不得伪造成 skipped/no_sources");
+      assert.equal(threeRows.get(noReceiptJob)?.status, "no_history");
+      assert.equal(threeRows.get(noSourcesJob)?.reason, "no_sources", "真的写过 no_sources 才回该原因");
+      assert.equal(threeRows.get(retryExhaustedJob)?.reason, "source_collection_retry_exhausted",
+        "重试耗尽必须与「没有来源」分开");
+
       const [{ count }] = await db`SELECT count(*)::int AS count FROM project_knowledge_work`;
       assert.equal(count, 0);
       assert.equal((await db`SELECT id FROM canvas_nodes WHERE node_type='knowledge_closeout'`).length, 0);

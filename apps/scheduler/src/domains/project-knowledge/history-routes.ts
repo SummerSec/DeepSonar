@@ -68,10 +68,12 @@ export function registerKnowledgeHistoryRoutes(app: FastifyInstance, deps: { db?
         const registered = job.registered_at !== null;
         // 只回放历史结论，不再暗示「待整理」：登记过但从未采集/跳过的旧来源，
         // 结论就是「旧批量整理已下线」，不会再有后续动作。
+        // 评审 r5：没有旧采集回执不等于「当时没有可用来源」——新提交链可能用过，
+        // 也可能是历史缺档。没有回执就如实报 no_history + collection=none，
+        // 只有审计里真的写过 no_sources 才回该原因。
         const status = job.collected_at ? "collected" : job.skipped_at ? "skipped"
-          : registered ? "registered_retired" : "skipped";
-        const reason = knownSkipReasonCode(job.skip_reason)
-          ?? (registered || job.skipped_at ? undefined : "no_sources");
+          : registered ? "registered_retired" : "no_history";
+        const reason = knownSkipReasonCode(job.skip_reason) ?? undefined;
         return {
           job_id: String(job.job_id), canvas_id: job.canvas_id, job_status: String(job.status),
           finished_at: job.finished_at, status, reason,
