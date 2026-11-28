@@ -303,20 +303,29 @@ if (!testDatabaseUrl) {
       // 脏 at 值：不抛错，退回 started_at 判定，同期独立任务照常收口。
       assert.equal(stalledIds.has(independentAudit), true,
         "脏 runtime_activity.at 不得让整批清理事务回滚（独立应收口任务必须被收口）");
-      const [dirtyRow] = await sql`SELECT status FROM jobs WHERE id = ${dirtyAtAudit}`;
-      assert.equal(dirtyRow.status, "failed", "脏 at 值按无可信信号处理，走普通停滞收口");
-      const specialRows = await sql`SELECT id, status FROM jobs WHERE id IN (${infinityAtAudit}, ${relativeAtAudit})`;
-      assert.deepEqual(specialRows.map((row) => row.status), ["failed", "failed"],
-        "infinity / now 等非有限或相对时间不得让陈旧信号无限豁免");
+      // 有工具信号但时间不可信：仍然属于「工具有始无终」，必须记成工具超时，
+      // 不能和真的没有产出的 Job 混成一个原因（#1304 follow-up）。
+      const oddAtReasons = await sql`SELECT a.outcome_json->>'reason' AS reason, count(*)::int AS count
+        FROM jobs JOIN job_attempts a ON a.job_id = jobs.id
+        WHERE jobs.id IN (${dirtyAtAudit}, ${infinityAtAudit}, ${relativeAtAudit}) AND a.status = 'failed'
+        GROUP BY 1`;
+      assert.deepEqual(oddAtReasons.map((row) => [row.reason, Number(row.count)]),
+        [["reaper_inflight_tool_stalled", 3]],
+        "脏/特殊 at 值时仍必须落到工具超时原因，而不是普通停滞");
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");
-      // #1304：in-flight 信号自带年龄上限。信号（用 started_at 兜底）已超预算就不再
-      // 豁免，退化到普通停滞收口——比无限豁免更保守，也避免事件被吞后永久挂住。
-      assert.match(String(hungRow.error), /产出停滞/);
+      // 工具超时与普通停滞必须是两个可区分的原因：这条有信号，落工具超时。
+      assert.match(String(hungRow.error), /in-flight tool 超出预算/);
+      assert.match(String(hungRow.error), /tool=Bash/);
       const [hungAttempt] = await sql`SELECT status, outcome_json->>'reason' AS reason
         FROM job_attempts WHERE job_id = ${hungToolAudit} ORDER BY attempt_no DESC LIMIT 1`;
       assert.deepEqual({ status: hungAttempt.status, reason: hungAttempt.reason },
-        { status: "failed", reason: "reaper_stall" });
+        { status: "failed", reason: "reaper_inflight_tool_stalled" });
+      // 真的没有工具信号的 Job 才是普通停滞。
+      const [independentAttempt] = await sql`SELECT outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${independentAudit} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.equal(independentAttempt.reason, "reaper_stall",
+        "没有任何工具信号的 Job 才能记成普通停滞");
 
       assert.equal(stalledIds.has(disabledChrome), false,
         "runtime_knobs.stall_sec=0 的 chrome Job 保持关闭，不被 per-image floor 重新启用");

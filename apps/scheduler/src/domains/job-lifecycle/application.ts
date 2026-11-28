@@ -367,8 +367,14 @@ export function createSqlJobLifecycleApplication(
                   started_at
                 ) + ${inflightBudget} > now()
               )`;
-        // 先收口超出 in-flight 预算的挂死工具（独立稳定原因），再走普通停滞判定；
-        // 已 failed 的行不会在第二条 UPDATE 里再次匹配 status='running'。
+        // 信号是否存在（不看年龄）：用于把「工具一直没结束」与「完全没产出」分开计数。
+        const inflightSignal = tx`(
+                NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
+              )`;
+        // 先收口挂死工具（独立稳定原因），再走普通停滞判定；已 failed 的行不会在
+        // 第二条 UPDATE 里再次匹配 status='running'。
+        // #1304 跟进：判据从「信号未过预算」改成「信号存在」。信号过期或不可信只说明
+        // 我们不知道它何时停止，仍然是「工具有始无终」，不能被记成普通停滞。
         const inflightStalled = await tx`
           UPDATE jobs SET status = 'failed', finished_at = now(),
                           error = COALESCE(NULLIF(error, ''), '')
@@ -380,7 +386,7 @@ export function createSqlJobLifecycleApplication(
             AND started_at IS NOT NULL
             AND ${configuredSec}::int > 0
             AND ${leaseLive}
-            AND ${inflightTool}
+            AND ${inflightSignal}
             AND ${lastActivity} + ${inflightBudget} < now()
           RETURNING id, sandbox_id`;
         for (const row of inflightStalled) {
@@ -395,6 +401,8 @@ export function createSqlJobLifecycleApplication(
             AND ${configuredSec}::int > 0
             AND ${lastActivity} + ${floorSec}::int * interval '1 second' < now()
             AND NOT (${leaseLive} AND ${inflightTool})
+            -- 有工具信号的 Job 只走上面的工具超时收口，不允许被记成「产出停滞」。
+            AND NOT ${inflightSignal}
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
