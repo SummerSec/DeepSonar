@@ -494,13 +494,12 @@ test("merge checks every base generation before changing either identity", async
   });
 });
 
-test("#1219 知识按适用软件版本过滤：声明 sw:<version> 的只在该版本命中", async () => {
+test("#1219 知识按适用软件版本过滤：有可信环境时自动匹配，未知时不冒充适用", async () => {
   await withKnowledgeDatabase(async (db) => {
     const folder = await mkdtemp(join(tmpdir(), "knowledge-software-version-"));
     setSharedAssetBlobStoreForTests(new LocalBlobStore(folder));
     try {
       const maker = await seedKnowledgeJob(db, undefined, []);
-      const reader = await seedKnowledgeJob(db, maker.projectId, ["search_project_knowledge"]);
       const seed = async (key: string, title: string, keywords: string[], body: string) => {
         const content = { kind: "memory", logical_key: key, title, keywords, content: body };
         const blob = await writeKnowledgeBlob(db as never, content);
@@ -513,23 +512,42 @@ test("#1219 知识按适用软件版本过滤：声明 sw:<version> 的只在该
         return { item_id: String(item!.id), owner_project_id: maker.projectId, version_id: String(version!.id),
           version: 1, kind: "memory" as const, hash: blob.hash, title, logical_key: key, keywords };
       };
-      const scoped = await seed("fixture/scoped", "Android 16 巡检经验", ["巡检", "sw:16.0"], "只在 16.0 适用");
-      const generic = await seed("fixture/generic", "通用巡检经验", ["巡检"], "所有版本通用");
-      const entries = [scoped, generic];
-      await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["search_project_knowledge"],
-        project_knowledge_catalog: { entries, hash: sha256(canonical(entries)) } })} WHERE id=${reader.jobId}`;
+      const oh = await seed("fixture/oh", "OpenHarmony 16 巡检经验", ["巡检", "sw:openharmony:16.0"], "只在 OpenHarmony 16.0 适用");
+      const android = await seed("fixture/android", "Android 16 巡检经验", ["巡检", "sw:android:16.0"], "只在 Android 16.0 适用");
+      const generic = await seed("fixture/generic", "通用巡检经验", ["巡检"], "所有环境通用");
+      const entries = [oh, android, generic];
+      const reader = await seedKnowledgeJob(db, maker.projectId, ["search_project_knowledge"]);
+      const snapshot = (environment?: Record<string, string>) => db.json({ platform_tools: ["search_project_knowledge"],
+        project_knowledge_catalog: { entries, hash: sha256(canonical(entries)) },
+        ...(environment ? { environment } : {}) });
       const app = createProjectKnowledgeApplication({ db, governanceHash: H });
-      const context = { jobId: reader.jobId, projectId: reader.projectId, canvasId: reader.canvasId,
-        operationId: "search_project_knowledge", input: { query: "巡检", software_version: "16.0" },
-        eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null };
-      const matched = await app.invoke(context);
-      assert.deepEqual((matched.items as Array<{ item_id: string }>).map((row) => row.item_id).sort(),
-        [scoped.item_id, generic.item_id].sort(), "版本匹配时两条都应返回");
-      const other = await app.invoke({ ...context, input: { query: "巡检", software_version: "15.0" } });
-      assert.deepEqual((other.items as Array<{ item_id: string }>).map((row) => row.item_id), [generic.item_id],
-        "声明了 sw:16.0 的条目不得在 15.0 下返回");
-      const noVersion = await app.invoke({ ...context, input: { query: "巡检" } });
-      assert.equal((noVersion.items as unknown[]).length, 2, "未指定版本时保持旧行为，不按版本过滤");
+      const search = async (input: Record<string, unknown>) => {
+        const [job] = await db`SELECT canvas_id FROM jobs WHERE id=${reader.jobId}`;
+        const result = await app.invoke({ jobId: reader.jobId, projectId: reader.projectId, canvasId: String(job!.canvas_id),
+          operationId: "search_project_knowledge", input: { query: "巡检", ...input },
+          eventId: randomUUID(), tokenId: randomUUID(), idempotencyKey: null });
+        return result.items as Array<{ item_id: string; applicability?: string }>;
+      };
+      // 1) 冻结了可信环境（OpenHarmony 16.0）：只返回该软件该版本 + 通用，另一个软件同版本必须排除。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony", version: "16.0" })} WHERE id=${reader.jobId}`;
+      assert.deepEqual((await search({})).map((row) => row.item_id).sort(), [oh.item_id, generic.item_id].sort(),
+        "有可信环境时默认搜索必须自动匹配，且不得推荐另一软件的同版本条目");
+      // 2) 同一项目里两个都叫 16.0 的软件能区分开。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "android", version: "16.0" })} WHERE id=${reader.jobId}`;
+      assert.deepEqual((await search({})).map((row) => row.item_id).sort(), [android.item_id, generic.item_id].sort(),
+        "不同软件的同版本号必须靠软件标识区分");
+      // 3) 没有可信环境时间：有版本约束的条目仍可查，但必须标成 applicability=unknown。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot()} WHERE id=${reader.jobId}`;
+      const unknown = await search({});
+      assert.deepEqual(unknown.map((row) => row.item_id).sort(), [oh.item_id, android.item_id, generic.item_id].sort(),
+        "未知环境时不得静默隐藏，必须仍可查");
+      assert.deepEqual(unknown.filter((row) => row.applicability === "unknown").map((row) => row.item_id).sort(),
+        [oh.item_id, android.item_id].sort(), "有版本约束的条目在未知环境下必须标成 applicability=unknown");
+      // 4) 只变模型不改变适用性（模型不在匹配键里）。
+      await db`UPDATE jobs SET agent_snapshot_json=${snapshot({ software: "openharmony", version: "16.0" })}
+        || ${db.json({ model: "another-model" })} WHERE id=${reader.jobId}`;
+      assert.deepEqual((await search({})).map((row) => row.item_id).sort(), [oh.item_id, generic.item_id].sort(),
+        "换模型不得改变知识适用性");
     } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
   });
 });

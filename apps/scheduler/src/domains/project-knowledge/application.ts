@@ -1,4 +1,4 @@
-import { appliesToSoftwareVersion } from "./software-version.js";
+import { evaluateApplicability, type ApplicabilityContext } from "./software-version.js";
 import { CLOSEOUT_EVALUATION_PREFIX } from "./closeout-evaluation-key.js";
 import { actorMayReadGovernanceSources, resolveSourceOwners } from "./source-scope.js";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
@@ -27,6 +27,23 @@ export { KnowledgeOperationError, readKnowledgeVersionContent };
 export { recordKnowledgeUsage } from "./usage.js";
 
 export interface KnowledgeApplicationInput { db: KnowledgeDb; governanceHash: string; now?: () => Date }
+/**
+ * #1219：从 Job 冻结快照里读可信的目标环境（软件 + 版本）。
+ * 只认结构化的 `environment` / `target_environment`，格式不对就当没有上下文；
+ * 未知时不猜、不把「有版本约束的条目」当成适用。
+ */
+export function snapshotEnvironment(snapshot: Record<string, unknown>): ApplicabilityContext {
+  for (const key of ["environment", "target_environment"] as const) {
+    const value = snapshot[key];
+    if (!value || typeof value !== "object") continue;
+    const record = value as Record<string, unknown>;
+    const software = typeof record.software === "string" ? record.software.trim() : "";
+    const version = typeof record.version === "string" ? record.version.trim() : "";
+    if (software || version) return { ...(software ? { software } : {}), ...(version ? { version } : {}) };
+  }
+  return {};
+}
+
 type CatalogEntry = { item_id: string; owner_project_id: string; version_id: string; version: number; kind: "memory" | "skill"; hash: string; grant_id?: string; title?: string; logical_key?: string; keywords?: string[] };
 
 async function actorFor(db: KnowledgeDb, context: PlatformRuntimeHandlerContext, mutation: boolean): Promise<KnowledgeActor> {
@@ -112,12 +129,17 @@ async function readOnly(db: KnowledgeDb, actor: KnowledgeActor, operation: Knowl
     const keywords = (input.keywords ?? []) as string[];
     // #1219：按适用软件版本过滤。条目用 `sw:<version>` 关键字声明适用范围；声明了的
     // 只在版本匹配时返回，未声明的对所有版本通用。省略 software_version 时不筛版本。
-    const softwareVersion = typeof input.software_version === "string" ? input.software_version.trim() : "";
-    const appliesTo = (entry: CatalogEntry): boolean => appliesToSoftwareVersion(entry.keywords, softwareVersion);
+    // 可信上下文优先取自本 Job 冻结快照里的目标环境；Agent 传的 software_version
+    // 只能覆盖版本，不能凭空造出软件标识（避免自己声明「适用」）。
+    const environment = snapshotEnvironment(actor.snapshot);
+    const requested = typeof input.software_version === "string" ? input.software_version.trim() : "";
+    const context: ApplicabilityContext = { ...environment, ...(requested ? { version: requested } : {}) };
+    const applicabilityOf = (entry: CatalogEntry) => evaluateApplicability(entry.keywords, context);
+    const appliesTo = (entry: CatalogEntry): boolean => applicabilityOf(entry) !== "inapplicable";
     const filtered = visible.filter((entry) => (!input.kind || entry.kind === input.kind) && appliesTo(entry)
       && (!query || `${entry.title ?? ""} ${entry.logical_key ?? ""} ${(entry.keywords ?? []).join(" ")}`.toLocaleLowerCase().includes(query))
       && keywords.every((term) => (entry.keywords ?? []).includes(term)));
-    const binding = sha256(canonical({ job: actor.jobId, catalog: catalog.hash, query, kind: input.kind ?? null, keywords, softwareVersion }));
+    const binding = sha256(canonical({ job: actor.jobId, catalog: catalog.hash, query, kind: input.kind ?? null, keywords, context }));
     const sign = (offset: number) => createHmac("sha256", cursorSecret).update(`${binding}:${offset}`).digest("hex");
     let start = 0;
     if (input.cursor) {
@@ -128,7 +150,8 @@ async function readOnly(db: KnowledgeDb, actor: KnowledgeActor, operation: Knowl
       } catch { return reject("KNOWLEDGE_CURSOR_INVALID", "Invalid knowledge cursor"); }
     }
     if (!Number.isSafeInteger(start) || start < 0) return reject("KNOWLEDGE_CURSOR_INVALID", "Invalid knowledge cursor");
-    const page = filtered.slice(start, start + Number(input.limit ?? 10));
+    const page = filtered.slice(start, start + Number(input.limit ?? 10)).map((entry) =>
+      applicabilityOf(entry) === "unknown" ? { ...entry, applicability: "unknown" as const } : entry);
     const next = start + page.length;
     return { items: page, next_cursor: next < filtered.length ? Buffer.from(JSON.stringify([next, sign(next)])).toString("base64url") : null, catalog_hash: catalog.hash };
   }
