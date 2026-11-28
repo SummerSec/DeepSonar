@@ -131,8 +131,8 @@ test("task suggestions are private, attributable, idempotent and readable withou
         collectBefore, "只读历史查询不得触发采集或跳过审计");
       // 评审 r5：三类记录必须分开——没有旧回执 / 真写过 no_sources / 重试耗尽。
       const seedHistoryJob = async () => {
-        const [row] = await db`INSERT INTO jobs (project_id, canvas_id, type, status, finished_at)
-          VALUES (${owner.projectId}, ${owner.canvasId}, 'explore', 'succeeded', now()) RETURNING id`;
+        const [row] = await db`INSERT INTO jobs (project_id, canvas_id, type, status, finished_at, agent_snapshot_json)
+          VALUES (${owner.projectId}, ${owner.canvasId}, 'explore', 'succeeded', now(), '{}'::jsonb) RETURNING id`;
         return String(row.id);
       };
       const noReceiptJob = await seedHistoryJob();

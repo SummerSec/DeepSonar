@@ -420,8 +420,8 @@ test("#1219 旧 project 批次：切换后明确结束，不重复派发", async
       VALUES(${source.projectId},${source.jobId},${source.canvasId},${pendingKey},${db.json(ledgerEntry as never)},${GOVERNANCE},
         'fixture', 'pending', now() - interval '1 second') RETURNING id`;
     // 在途旧批次挂在一个真实执行上：留给该执行自己收尾，不得再次派发。
-    const [liveJob] = await db`INSERT INTO jobs (project_id,canvas_id,type,status)
-      VALUES(${inflightSource.projectId},${inflightSource.canvasId},'explore','running') RETURNING id`;
+    const [liveJob] = await db`INSERT INTO jobs (project_id,canvas_id,type,status,agent_snapshot_json)
+      VALUES(${inflightSource.projectId},${inflightSource.canvasId},'explore','running','{}'::jsonb) RETURNING id`;
     const [inflight] = await db`INSERT INTO project_knowledge_work
       (project_id,origin_job_id,canvas_id,trigger_key,input_manifest_json,governance_hash,reason,state,active_job_id,claim_expires_at)
       VALUES(${inflightSource.projectId},${inflightSource.jobId},${inflightSource.canvasId},${inflightKey},
